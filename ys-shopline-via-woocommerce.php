@@ -20,8 +20,14 @@ defined( 'ABSPATH' ) || exit;
 define( 'YS_SHOPLINE_VERSION', '2.0.0' );
 define( 'YS_SHOPLINE_PLUGIN_FILE', __FILE__ );
 define( 'YS_SHOPLINE_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
+define( 'YS_SHOPLINE_PLUGIN_PATH', plugin_dir_path( __FILE__ ) );
 define( 'YS_SHOPLINE_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
 define( 'YS_SHOPLINE_PLUGIN_BASENAME', plugin_basename( __FILE__ ) );
+
+// Load Composer autoloader for new architecture
+if ( file_exists( YS_SHOPLINE_PLUGIN_DIR . 'vendor/autoload.php' ) ) {
+    require_once YS_SHOPLINE_PLUGIN_DIR . 'vendor/autoload.php';
+}
 
 /**
  * Main plugin class.
@@ -119,11 +125,11 @@ final class YS_Shopline_Payment {
                 true
             );
 
-            // Cart and Checkout Blocks - not compatible yet
+            // Cart and Checkout Blocks - now compatible via new architecture
             \Automattic\WooCommerce\Utilities\FeaturesUtil::declare_compatibility(
                 'cart_checkout_blocks',
                 YS_SHOPLINE_PLUGIN_FILE,
-                false
+                true
             );
         }
     }
@@ -144,7 +150,7 @@ final class YS_Shopline_Payment {
         // Load text domain
         load_plugin_textdomain( 'ys-shopline-via-woocommerce', false, dirname( YS_SHOPLINE_PLUGIN_BASENAME ) . '/languages' );
 
-        // Initialize webhook handler
+        // Initialize webhook handler (legacy)
         new YS_Shopline_Webhook_Handler();
 
         // Initialize subscription handler if WooCommerce Subscriptions is active
@@ -154,6 +160,9 @@ final class YS_Shopline_Payment {
 
         // Register AJAX handlers
         $this->register_ajax_handlers();
+
+        // Initialize new architecture components (PSR-4)
+        $this->init_new_architecture();
     }
 
     /**
@@ -166,6 +175,31 @@ final class YS_Shopline_Payment {
         require_once YS_SHOPLINE_PLUGIN_DIR . 'includes/admin/class-ys-shopline-settings.php';
         $settings[] = new YS_Shopline_Settings();
         return $settings;
+    }
+
+    /**
+     * Initialize new architecture components (PSR-4 autoloaded)
+     */
+    private function init_new_architecture(): void {
+        // Check if autoloader is available
+        if ( ! class_exists( 'YangSheep\\ShoplinePayment\\Gateways\\YSRedirectGateway' ) ) {
+            return;
+        }
+
+        // Initialize new gateways
+        \YangSheep\ShoplinePayment\Gateways\YSRedirectGateway::init();
+
+        // Initialize customer management (My Account - 管理儲存卡)
+        \YangSheep\ShoplinePayment\Customer\YSMyAccountEndpoint::init();
+
+        // Initialize new webhook handler (REST API)
+        \YangSheep\ShoplinePayment\Handlers\YSWebhookHandler::init();
+
+        // Initialize status manager
+        \YangSheep\ShoplinePayment\Handlers\YSStatusManager::init();
+
+        // Initialize WooCommerce Blocks support
+        \YangSheep\ShoplinePayment\Blocks\YSBlocksSupport::init();
     }
 
     /**

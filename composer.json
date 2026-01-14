@@ -1,0 +1,23 @@
+{
+    "name": "yangsheep/ys-shopline-payment",
+    "description": "Shopline Payment Gateway for WooCommerce",
+    "type": "wordpress-plugin",
+    "license": "GPL-2.0-or-later",
+    "authors": [
+        {
+            "name": "YANGSHEEP DESIGN",
+            "homepage": "https://yangsheep.com.tw"
+        }
+    ],
+    "autoload": {
+        "psr-4": {
+            "YangSheep\\ShoplinePayment\\": "src/"
+        }
+    },
+    "require": {
+        "php": ">=8.0"
+    },
+    "config": {
+        "optimize-autoloader": true
+    }
+}
