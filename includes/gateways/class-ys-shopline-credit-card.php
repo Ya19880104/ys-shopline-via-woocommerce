@@ -88,16 +88,33 @@ class YS_Shopline_Credit_Card extends YS_Shopline_Gateway_Base {
         $config = parent::get_sdk_config();
 
         // Add installment configuration
-        $config['paymentInstrument'] = array(
-            'bindCard' => array(
-                'enable'   => true,
-                'protocol' => array(
-                    'switchVisible'       => true,
-                    'defaultSwitchStatus' => true,
-                    'mustAccept'          => false,
+        // SDK 使用 installmentCounts 參數（字串或數字陣列）
+        $installments = $this->get_option( 'installments', array() );
+        $min_amount   = (float) $this->get_option( 'min_installment_amount', 3000 );
+        $cart_total   = WC()->cart ? WC()->cart->get_total( 'edit' ) : 0;
+
+        if ( ! empty( $installments ) && $cart_total >= $min_amount ) {
+            // 轉換為字串陣列（SDK 接受字串或數字）
+            $config['installmentCounts'] = array_values( $installments );
+        }
+
+        // Add bind card configuration
+        // 只有已登入用戶且有 customerToken 時才啟用儲存卡片功能
+        // 訪客不支援儲存卡片（SDK 會報錯 customerToken is empty）
+        $has_customer_token = isset( $config['customerToken'] ) && ! empty( $config['customerToken'] );
+
+        if ( $has_customer_token ) {
+            $config['paymentInstrument'] = array(
+                'bindCard' => array(
+                    'enable'   => true,
+                    'protocol' => array(
+                        'switchVisible'       => true,
+                        'defaultSwitchStatus' => false,
+                        'mustAccept'          => false,
+                    ),
                 ),
-            ),
-        );
+            );
+        }
 
         return $config;
     }

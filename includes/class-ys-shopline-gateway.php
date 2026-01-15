@@ -364,20 +364,25 @@ class YS_Shopline_Gateway extends WC_Payment_Gateway {
         if ( isset( $_GET['ys_shopline_pay'] ) && isset( $_GET['order_id'] ) && isset( $_GET['key'] ) ) {
              $order_id = absint( $_GET['order_id'] );
              $key      = sanitize_text_field( $_GET['key'] );
-             
+
              $order = wc_get_order( $order_id );
-             
+
              if ( ! $order || $order->get_order_key() !== $key ) {
                  wp_die( 'Invalid Order.' );
              }
-             
+
+             // 只處理屬於這個閘道的訂單
+             if ( $order->get_payment_method() !== $this->id ) {
+                 return; // 讓其他閘道處理
+             }
+
              $next_action = $order->get_meta( '_ys_shopline_next_action' );
-             
+
              if ( ! $next_action ) {
                  wp_safe_redirect( $this->get_return_url( $order ) );
                  exit;
              }
-             
+
              // Render simple HTML page
              $this->render_pay_page( $next_action, $this->get_return_url( $order ) );
              exit;

@@ -74,6 +74,11 @@ jQuery(function ($) {
     var sdkLoaded = false;
 
     /**
+     * SDK initialization in progress (prevent duplicate calls)
+     */
+    var sdkInitializing = {};
+
+    /**
      * Main Shopline Checkout Handler
      */
     var ShoplineCheckout = {
@@ -164,9 +169,6 @@ jQuery(function ($) {
          * Handle checkout update (cart changes, etc.)
          */
         onUpdatedCheckout: function () {
-            // Clear cached instances on checkout update
-            paymentInstances = {};
-
             // 重新綁定事件（表單可能被替換）
             this.bindCheckoutEvents();
 
@@ -177,7 +179,12 @@ jQuery(function ($) {
 
             if (gatewayId) {
                 activeGateway = gatewayId;
-                this.initSDK(gatewayId);
+
+                // 只有在沒有已存在的實例且沒有正在初始化時才重新初始化
+                // 注意：購物車金額變更時需要重新初始化 SDK
+                if (!paymentInstances[gatewayId] && !sdkInitializing[gatewayId]) {
+                    this.initSDK(gatewayId);
+                }
             }
         },
 
@@ -197,16 +204,37 @@ jQuery(function ($) {
 
             // Prevent duplicate initialization
             if (paymentInstances[gatewayId]) {
-                console.log('SDK already initialized for:', gatewayId);
+                console.log('[YS Shopline] SDK already initialized for:', gatewayId);
                 return;
             }
+
+            // Prevent concurrent initialization
+            if (sdkInitializing[gatewayId]) {
+                console.log('[YS Shopline] SDK initialization already in progress for:', gatewayId);
+                return;
+            }
+
+            // Mark as initializing
+            sdkInitializing[gatewayId] = true;
 
             var $container = $('#' + config.containerId);
 
             // If container doesn't exist, skip
             if (!$container.length) {
+                sdkInitializing[gatewayId] = false;
                 return;
             }
+
+            // Check if container already has SDK content or is being initialized
+            // This prevents double initialization from rapid event firing
+            if ($container.data('sdk-initializing') || $container.data('sdk-initialized')) {
+                console.log('[YS Shopline] Container already has SDK or is initializing for:', gatewayId);
+                sdkInitializing[gatewayId] = false;
+                return;
+            }
+
+            // Mark container as initializing
+            $container.data('sdk-initializing', true);
 
             // Show loading state
             $container.html('<div class="ys-shopline-loading" style="text-align: center; padding: 20px;"><span class="spinner is-active" style="float: none;"></span></div>');
@@ -224,6 +252,8 @@ jQuery(function ($) {
                     if (response.success) {
                         self.renderPayment(gatewayId, response.data);
                     } else {
+                        sdkInitializing[gatewayId] = false;
+                        $container.data('sdk-initializing', false);
                         var errorMsg = (response.data && response.data.message)
                             ? response.data.message
                             : ys_shopline_params.i18n.config_error || 'Configuration error';
@@ -231,6 +261,8 @@ jQuery(function ($) {
                     }
                 },
                 error: function (jqXHR, textStatus) {
+                    sdkInitializing[gatewayId] = false;
+                    $container.data('sdk-initializing', false);
                     var errorMsg = ys_shopline_params.i18n.connection_error || 'Connection error';
                     self.showError($container, errorMsg + ': ' + textStatus);
                 }
@@ -250,6 +282,8 @@ jQuery(function ($) {
 
             // Check SDK loaded
             if (!sdkLoaded && typeof ShoplinePayments === 'undefined') {
+                sdkInitializing[gatewayId] = false;
+                $container.data('sdk-initializing', false);
                 self.showError($container, ys_shopline_params.i18n.sdk_not_loaded || 'Payment SDK not loaded');
                 return;
             }
@@ -258,6 +292,8 @@ jQuery(function ($) {
 
             // Validate config
             if (!serverConfig.clientKey || !serverConfig.merchantId) {
+                sdkInitializing[gatewayId] = false;
+                $container.data('sdk-initializing', false);
                 self.showError($container, ys_shopline_params.i18n.missing_config || 'Missing configuration');
                 return;
             }
@@ -267,7 +303,7 @@ jQuery(function ($) {
 
             try {
                 // Build SDK options
-                // Note: SHOPLINE SDK may use 'accessMode' or auto-detect from clientKey prefix (pk_sandbox_ vs pk_live_)
+                // Note: env 參數控制環境 (sandbox/production)
                 var options = {
                     clientKey: serverConfig.clientKey,
                     merchantId: serverConfig.merchantId,
@@ -275,8 +311,7 @@ jQuery(function ($) {
                     currency: serverConfig.currency || 'TWD',
                     amount: serverConfig.amount || 0,
                     element: '#' + gatewayConfig.containerId,
-                    env: serverConfig.env || 'production',
-                    accessMode: serverConfig.env === 'sandbox' ? 'sandbox' : 'production'
+                    env: serverConfig.env || 'production'
                 };
 
                 // Add customer token if available (for saved cards)
@@ -285,7 +320,14 @@ jQuery(function ($) {
                 }
 
                 // Configure card binding for credit card gateways
-                if (gatewayConfig.supportsBindCard) {
+                // 只有在有 customerToken 時才啟用儲存卡片功能
+                // 後端已經根據登入狀態決定是否傳 paymentInstrument
+                if (serverConfig.paymentInstrument) {
+                    // 使用後端傳來的配置
+                    options.paymentInstrument = serverConfig.paymentInstrument;
+                    console.log('[YS Shopline] Using server paymentInstrument config:', serverConfig.paymentInstrument);
+                } else if (gatewayConfig.supportsBindCard && serverConfig.customerToken) {
+                    // 如果後端沒傳但有 customerToken，使用預設配置
                     var forceSave = gatewayConfig.forceSaveCard || serverConfig.forceSaveCard || false;
 
                     options.paymentInstrument = {
@@ -302,12 +344,12 @@ jQuery(function ($) {
                         }
                     };
                 }
+                // 沒有 customerToken 時不設定 paymentInstrument（訪客不能儲存卡片）
 
                 // Configure installment for supported gateways
-                if (gatewayConfig.supportsInstallment && serverConfig.installments) {
-                    options.installment = {
-                        options: serverConfig.installments
-                    };
+                // SDK 文件使用 installmentCounts 參數（可以是字串或數字陣列）
+                if (gatewayConfig.supportsInstallment && serverConfig.installmentCounts) {
+                    options.installmentCounts = serverConfig.installmentCounts;
                 }
 
                 // Apply any additional server-side options
@@ -315,16 +357,19 @@ jQuery(function ($) {
                     options = $.extend(true, options, serverConfig.sdkOptions);
                 }
 
+                // 儲存是否啟用綁卡功能（供後續 isBindCardEnabled 使用）
+                $container.data('bind-card-enabled', !!options.paymentInstrument);
+
                 // Debug: Log SDK options (without sensitive data)
                 console.log('Shopline SDK Init:', {
                     merchantId: options.merchantId ? options.merchantId.substring(0, 8) + '...' : '(empty)',
                     clientKey: options.clientKey ? options.clientKey.substring(0, 12) + '...' : '(empty)',
                     paymentMethod: options.paymentMethod,
                     env: options.env,
-                    accessMode: options.accessMode,
                     amount: options.amount,
                     currency: options.currency,
-                    element: options.element
+                    element: options.element,
+                    hasBindCard: !!options.paymentInstrument
                 });
 
                 // Initialize SDK
@@ -335,6 +380,8 @@ jQuery(function ($) {
 
                 if (result.error) {
                     console.error('Shopline SDK Error:', result.error);
+                    sdkInitializing[gatewayId] = false;
+                    $container.data('sdk-initializing', false);
 
                     // Provide helpful error messages based on error code
                     var errorMessage = result.error.message || 'Unknown error';
@@ -348,8 +395,11 @@ jQuery(function ($) {
                     return;
                 }
 
-                // Store payment instance
+                // Store payment instance and clear initializing flag
                 paymentInstances[gatewayId] = result.payment;
+                sdkInitializing[gatewayId] = false;
+                $container.data('sdk-initializing', false);
+                $container.data('sdk-initialized', true);
                 console.log('[YS Shopline] Payment instance stored for:', gatewayId);
                 console.log('[YS Shopline] Payment instance has createPayment:', typeof result.payment?.createPayment);
 
@@ -386,8 +436,27 @@ jQuery(function ($) {
 
             } catch (e) {
                 console.error('Shopline SDK Exception:', e);
+                sdkInitializing[gatewayId] = false;
+                $container.data('sdk-initializing', false);
                 self.showError($container, e.message || 'SDK initialization failed');
             }
+        },
+
+        /**
+         * Validate Taiwan phone number format (09XXXXXXXX)
+         *
+         * @param {string} phone Phone number
+         * @return {boolean} Whether the phone is valid
+         */
+        validateTaiwanPhone: function (phone) {
+            if (!phone) {
+                return false;
+            }
+            // 移除所有非數字字元
+            var cleaned = phone.replace(/\D/g, '');
+            // 台灣手機格式：09 開頭，共 10 碼
+            var pattern = /^09\d{8}$/;
+            return pattern.test(cleaned);
         },
 
         /**
@@ -401,6 +470,28 @@ jQuery(function ($) {
             var $form = $('form.checkout');
 
             console.log('[YS Shopline] placeOrder called for:', gatewayId);
+
+            // 驗證帳單電話格式（台灣手機 09XXXXXXXX）
+            var billingPhone = $('#billing_phone').val();
+            var shippingPhone = $('#shipping_phone').val();
+            var countryField = $('#billing_country').val();
+
+            // 只有台灣需要驗證手機格式
+            if (countryField === 'TW') {
+                var phoneToValidate = billingPhone || shippingPhone;
+
+                if (!phoneToValidate) {
+                    self.showFormError('請填寫帳單電話號碼，Shopline 付款需要此資訊。');
+                    $('#billing_phone').focus();
+                    return false;
+                }
+
+                if (!self.validateTaiwanPhone(phoneToValidate)) {
+                    self.showFormError('請輸入正確的台灣手機號碼格式（09XXXXXXXX，共 10 碼）。');
+                    $('#billing_phone').focus();
+                    return false;
+                }
+            }
 
             // Check if paySession already exists (means SDK already processed)
             var existingPaySession = $form.find('input[name="ys_shopline_pay_session"]').val();
@@ -455,12 +546,20 @@ jQuery(function ($) {
                 }
 
                 // Success - add paySession to form
+                // paySession 可能是物件或字串，確保傳遞正確格式
+                var paySessionValue = result.paySession;
+                if (typeof paySessionValue === 'object') {
+                    paySessionValue = JSON.stringify(paySessionValue);
+                }
+                console.log('[YS Shopline] paySession type:', typeof result.paySession);
+                console.log('[YS Shopline] paySession value:', paySessionValue);
+
                 $form.find('input[name="ys_shopline_pay_session"]').remove();
                 $form.append(
                     $('<input>').attr({
                         type: 'hidden',
                         name: 'ys_shopline_pay_session',
-                        value: result.paySession
+                        value: paySessionValue
                     })
                 );
 
@@ -488,27 +587,33 @@ jQuery(function ($) {
                     );
                 }
 
-                // Add save card preference
-                // SDK 可能返回 saveCard, bindCard, 或 savePaymentInstrument
-                var saveCardValue = false;
-                if (typeof result.saveCard !== 'undefined') {
-                    saveCardValue = result.saveCard;
-                } else if (typeof result.bindCard !== 'undefined') {
-                    saveCardValue = result.bindCard;
-                } else if (typeof result.savePaymentInstrument !== 'undefined') {
-                    saveCardValue = result.savePaymentInstrument;
-                }
+                // Add bind card enabled flag
+                // 重要：SDK createPayment() 只返回 { paySession, error }
+                // paySession 已經包含了用戶的所有選擇（包括是否儲存卡片）
+                // 後端需要知道 SDK 是否啟用了綁卡功能，以決定 paymentBehavior
+                //
+                // 根據 SHOPLINE 文件：
+                // - 如果 SDK 有啟用 bindCard，且用戶勾選了儲存卡片，paySession 會包含這個資訊
+                // - 後端應該設定 paymentBehavior = CardBindPayment + savePaymentInstrument = true
+                // - SDK 和 API 會根據 paySession 中的用戶選擇來決定是否實際儲存卡片
+                //
+                // 所以我們只需要告訴後端「SDK 有啟用綁卡功能」
+                var bindCardEnabled = self.isBindCardEnabled(gatewayId);
 
-                console.log('saveCard value:', saveCardValue);
+                console.log('[YS Shopline] createPayment result:', result);
+                console.log('[YS Shopline] bindCardEnabled:', bindCardEnabled);
 
-                $form.find('input[name="ys_shopline_save_card"]').remove();
+                $form.find('input[name="ys_shopline_bind_card_enabled"]').remove();
                 $form.append(
                     $('<input>').attr({
                         type: 'hidden',
-                        name: 'ys_shopline_save_card',
-                        value: saveCardValue ? '1' : '0'
+                        name: 'ys_shopline_bind_card_enabled',
+                        value: bindCardEnabled ? '1' : '0'
                     })
                 );
+
+                // 收集並添加裝置資訊（3DS/風控所需）
+                self.appendClientInfo($form);
 
                 console.log('[YS Shopline] paySession saved, submitting to WooCommerce via AJAX...');
 
@@ -533,6 +638,7 @@ jQuery(function ($) {
          */
         submitCheckoutAjax: function ($form) {
             var self = this;
+            var gatewayId = this.getSelectedGateway();
 
             // 確認 wc_checkout_params 存在
             if (typeof wc_checkout_params === 'undefined') {
@@ -560,8 +666,12 @@ jQuery(function ($) {
                     $('.woocommerce-NoticeGroup-checkout, .woocommerce-error, .woocommerce-message').remove();
 
                     if (response.result === 'success') {
-                        // 成功 - 跳轉到指定 URL
-                        if (response.redirect) {
+                        // 檢查是否有 nextAction 需要處理（3DS/Confirm）
+                        if (response.nextAction) {
+                            console.log('[YS Shopline] Got nextAction, processing with SDK...');
+                            self.processNextAction(gatewayId, response.nextAction, response.returnUrl);
+                        } else if (response.redirect) {
+                            // 直接跳轉（無需額外驗證）
                             console.log('[YS Shopline] Redirecting to:', response.redirect);
                             window.location.href = response.redirect;
                         }
@@ -594,6 +704,77 @@ jQuery(function ($) {
                     self.showFormError('網路錯誤，請檢查連線後重試。');
                 }
             });
+        },
+
+        /**
+         * Process nextAction with SDK (3DS/Confirm)
+         * 使用同一個 payment 實例來處理 nextAction
+         *
+         * 重要：根據 SHOPLINE SDK 文件：
+         * - payment.pay(nextAction) 成功後 SDK 會自動跳轉到 returnUrl
+         * - 錯誤時回傳 error 物件
+         * - 3DS 驗證時 SDK 會自動處理跳轉到驗證頁面，完成後跳轉到 returnUrl
+         *
+         * @param {string} gatewayId Gateway ID
+         * @param {Object} nextAction Next action data from API
+         * @param {string} returnUrl Return URL after success (SDK 會自動使用)
+         */
+        processNextAction: async function (gatewayId, nextAction, returnUrl) {
+            var self = this;
+            var $form = $('form.checkout');
+            var paymentInstance = paymentInstances[gatewayId];
+
+            console.log('[YS Shopline] processNextAction called', {
+                gatewayId: gatewayId,
+                hasInstance: !!paymentInstance,
+                nextActionType: nextAction.type || 'unknown',
+                nextActionKeys: nextAction ? Object.keys(nextAction) : [],
+                nextAction: nextAction // 完整輸出 nextAction 內容
+            });
+
+            if (!paymentInstance) {
+                console.error('[YS Shopline] No payment instance for nextAction processing');
+                $form.removeClass('processing').unblock();
+                self.showFormError('付款處理失敗，請重新整理頁面後重試。');
+                return;
+            }
+
+            try {
+                console.log('[YS Shopline] Calling payment.pay() with nextAction...');
+                console.log('[YS Shopline] SDK will auto-redirect to returnUrl on success');
+
+                var payResult = await paymentInstance.pay(nextAction);
+
+                console.log('[YS Shopline] pay() returned:', payResult);
+
+                // 根據 SDK 文件：
+                // - 成功時 payResult 為 undefined，SDK 自動跳轉到 returnUrl
+                // - 失敗時 payResult.error 有錯誤資訊
+                // - 3DS 時 SDK 會自動處理，完成後跳轉到 returnUrl
+                //
+                // 如果執行到這裡且沒有 error，表示 SDK 沒有自動跳轉
+                // 這可能是 SDK 版本或設定問題，作為備援手動跳轉
+                if (payResult && payResult.error) {
+                    console.error('[YS Shopline] pay() error:', payResult.error);
+                    $form.removeClass('processing').unblock();
+                    self.showFormError('付款失敗：' + (payResult.error.message || '未知錯誤'));
+                } else {
+                    // SDK 應該已經自動跳轉，但如果沒有（某些情況下）
+                    // 等待一下看 SDK 是否會跳轉
+                    console.log('[YS Shopline] pay() completed without error, waiting for SDK redirect...');
+
+                    // 給 SDK 時間自動跳轉（可能是非同步）
+                    setTimeout(function() {
+                        // 如果還在這頁，表示 SDK 沒有自動跳轉，手動跳轉
+                        console.log('[YS Shopline] SDK did not redirect, manually redirecting to:', returnUrl);
+                        window.location.href = returnUrl;
+                    }, 2000);
+                }
+            } catch (e) {
+                console.error('[YS Shopline] pay() exception:', e);
+                $form.removeClass('processing').unblock();
+                self.showFormError('付款處理發生錯誤：' + (e.message || '未知錯誤'));
+            }
         },
 
         /**
@@ -663,6 +844,90 @@ jQuery(function ($) {
         },
 
         /**
+         * Append client device info to form for 3DS/risk assessment.
+         *
+         * 這些資訊對信用卡 3DS 驗證非常重要，缺漏可能導致 API 錯誤。
+         *
+         * @param {jQuery} $form Checkout form
+         */
+        appendClientInfo: function ($form) {
+            // 移除舊的裝置資訊
+            $form.find('input[name^="ys_shopline_screen"]').remove();
+            $form.find('input[name^="ys_shopline_color"]').remove();
+            $form.find('input[name^="ys_shopline_timezone"]').remove();
+            $form.find('input[name^="ys_shopline_java"]').remove();
+            $form.find('input[name^="ys_shopline_browser"]').remove();
+
+            // 收集裝置資訊
+            var clientInfo = {
+                'ys_shopline_screen_width': String(window.screen.width || ''),
+                'ys_shopline_screen_height': String(window.screen.height || ''),
+                'ys_shopline_color_depth': String(window.screen.colorDepth || ''),
+                'ys_shopline_timezone_offset': String(new Date().getTimezoneOffset() || ''),
+                'ys_shopline_java_enabled': String(navigator.javaEnabled ? navigator.javaEnabled() : false),
+                'ys_shopline_browser_language': navigator.language || navigator.userLanguage || ''
+            };
+
+            // 添加到表單
+            $.each(clientInfo, function (name, value) {
+                if (value) {
+                    $form.append(
+                        $('<input>').attr({
+                            type: 'hidden',
+                            name: name,
+                            value: value
+                        })
+                    );
+                }
+            });
+
+            console.log('[YS Shopline] Client info collected:', clientInfo);
+        },
+
+        /**
+         * Check if bind card is enabled for this gateway.
+         *
+         * 根據 SHOPLINE 文件，SDK createPayment() 返回的 paySession
+         * 已經包含了用戶的所有選擇，包括是否勾選儲存卡片。
+         *
+         * 後端只需要知道 SDK 是否啟用了綁卡功能：
+         * - 如果啟用，後端使用 CardBindPayment + savePaymentInstrument=true
+         * - 如果未啟用，後端使用 Regular
+         *
+         * API 會根據 paySession 中的用戶選擇來決定是否實際儲存卡片。
+         *
+         * @param {string} gatewayId Gateway ID
+         * @return {boolean} Whether bind card is enabled
+         */
+        isBindCardEnabled: function (gatewayId) {
+            var gatewayConfig = GATEWAY_CONFIG[gatewayId];
+
+            // 如果 gateway 不支援綁卡
+            if (!gatewayConfig || !gatewayConfig.supportsBindCard) {
+                console.log('[YS Shopline] isBindCardEnabled: supportsBindCard=false');
+                return false;
+            }
+
+            // 如果 gateway 強制儲存卡片（如訂閱）
+            if (gatewayConfig.forceSaveCard) {
+                console.log('[YS Shopline] isBindCardEnabled: forceSaveCard=true');
+                return true;
+            }
+
+            // 檢查 SDK 初始化時是否啟用了綁卡功能
+            // 這個值在 renderPayment 時根據 serverConfig 設定
+            var $container = $('#' + gatewayConfig.containerId);
+            if ($container.length) {
+                var bindCardEnabled = $container.data('bind-card-enabled');
+                console.log('[YS Shopline] isBindCardEnabled: from container data:', bindCardEnabled);
+                return !!bindCardEnabled;
+            }
+
+            console.log('[YS Shopline] isBindCardEnabled: container not found, default false');
+            return false;
+        },
+
+        /**
          * Get payment instance for gateway
          *
          * @param {string} gatewayId Gateway ID
@@ -688,9 +953,24 @@ jQuery(function ($) {
          * @param {string} gatewayId Gateway ID
          */
         refreshGateway: function (gatewayId) {
+            var config = GATEWAY_CONFIG[gatewayId];
+
             if (paymentInstances[gatewayId]) {
                 delete paymentInstances[gatewayId];
             }
+            if (sdkInitializing[gatewayId]) {
+                delete sdkInitializing[gatewayId];
+            }
+
+            // Clear container data flags
+            if (config) {
+                var $container = $('#' + config.containerId);
+                if ($container.length) {
+                    $container.data('sdk-initializing', false);
+                    $container.data('sdk-initialized', false);
+                }
+            }
+
             this.initSDK(gatewayId);
         }
     };

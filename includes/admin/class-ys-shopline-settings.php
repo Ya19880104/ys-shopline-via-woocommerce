@@ -113,7 +113,22 @@ class YS_Shopline_Settings extends WC_Settings_Page {
      * @return array
      */
     private function get_api_settings() {
+        // 檢查帳單電話欄位是否啟用
+        $phone_notice = $this->get_phone_field_notice();
+
         return array(
+            // 重要提示區塊
+            array(
+                'title' => __( '⚠️ 重要設定提醒', 'ys-shopline-via-woocommerce' ),
+                'type'  => 'title',
+                'desc'  => $phone_notice,
+                'id'    => 'ys_shopline_important_notice',
+            ),
+            array(
+                'type' => 'sectionend',
+                'id'   => 'ys_shopline_important_notice',
+            ),
+
             // Sandbox API settings
             array(
                 'title' => __( '測試環境 API 設定', 'ys-shopline-via-woocommerce' ),
@@ -488,5 +503,49 @@ class YS_Shopline_Settings extends WC_Settings_Page {
             });
         </script>
         <?php
+    }
+
+    /**
+     * Get phone field notice HTML.
+     *
+     * Checks if billing phone field is enabled and returns appropriate notice.
+     *
+     * @return string
+     */
+    private function get_phone_field_notice() {
+        // 取得帳單電話欄位設定
+        $checkout_fields = WC()->checkout() ? WC()->checkout()->get_checkout_fields() : array();
+        $phone_enabled   = isset( $checkout_fields['billing']['billing_phone'] );
+
+        // 建立設定連結
+        $customizer_url = admin_url( 'admin.php?page=wc-settings&tab=account' );
+
+        $notices = array();
+
+        // 電話欄位提示
+        if ( $phone_enabled ) {
+            $notices[] = sprintf(
+                '<span style="color: #46b450;">✓</span> %s',
+                __( '帳單電話欄位已啟用', 'ys-shopline-via-woocommerce' )
+            );
+        } else {
+            $notices[] = sprintf(
+                '<span style="color: #dc3232; font-weight: bold;">✗ %s</span><br>%s <a href="%s" target="_blank">%s</a>',
+                __( '帳單電話欄位未啟用！', 'ys-shopline-via-woocommerce' ),
+                __( 'SHOPLINE Payment 需要顧客電話進行付款驗證。請前往', 'ys-shopline-via-woocommerce' ),
+                esc_url( $customizer_url ),
+                __( 'WooCommerce 帳號設定 →', 'ys-shopline-via-woocommerce' )
+            );
+        }
+
+        // 電話格式說明
+        $notices[] = sprintf(
+            '<span style="color: #0073aa;">ℹ</span> %s',
+            __( '台灣手機號碼格式：09XXXXXXXX（共 10 碼），系統會自動加入國碼 +886', 'ys-shopline-via-woocommerce' )
+        );
+
+        return '<div class="ys-shopline-notice-box" style="background: #f8f9fa; border-left: 4px solid #cc99c2; padding: 12px 15px; margin: 10px 0;">'
+            . implode( '<br><br>', $notices )
+            . '</div>';
     }
 }

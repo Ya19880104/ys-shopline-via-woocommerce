@@ -25,7 +25,13 @@ class YS_Shopline_Webhook_Handler {
      * Handle incoming webhook.
      */
     public function handle_webhook() {
+        YS_Shopline_Logger::info( 'Webhook endpoint hit', array(
+            'method'     => isset( $_SERVER['REQUEST_METHOD'] ) ? $_SERVER['REQUEST_METHOD'] : 'unknown',
+            'user_agent' => isset( $_SERVER['HTTP_USER_AGENT'] ) ? $_SERVER['HTTP_USER_AGENT'] : 'unknown',
+        ) );
+
         if ( 'POST' !== $_SERVER['REQUEST_METHOD'] ) {
+            YS_Shopline_Logger::error( 'Invalid request method', array( 'method' => $_SERVER['REQUEST_METHOD'] ) );
             wp_die( 'Invalid request method', 'Shopline Webhook', array( 'response' => 405 ) );
         }
 
@@ -66,6 +72,11 @@ class YS_Shopline_Webhook_Handler {
         $sign_key  = $test_mode
             ? get_option( 'ys_shopline_sandbox_sign_key', '' )
             : get_option( 'ys_shopline_sign_key', '' );
+
+        YS_Shopline_Logger::debug( 'Webhook signature verification', array(
+            'test_mode'    => $test_mode ? 'yes' : 'no',
+            'has_sign_key' => ! empty( $sign_key ) ? 'yes' : 'no',
+        ) );
 
         if ( empty( $sign_key ) ) {
             YS_Shopline_Logger::warning( 'No sign key configured, skipping verification' );

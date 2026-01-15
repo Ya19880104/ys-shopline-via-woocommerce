@@ -234,11 +234,11 @@ final class YSShoplineClient {
      * @return YSCustomerDTO
      * @throws \Exception 如果建立失敗
      *
-     * @see https://docs.shoplinepayments.com/api/customer-paymentInstrument/customer/create/
+     * @see https://docs.shoplinepayments.com/api/customer/create/
      */
     public function create_customer( int $user_id ): YSCustomerDTO {
         $data     = YSCustomerDTO::create_request_from_user( $user_id );
-        $response = $this->requester->post( '/customer-paymentInstrument/customer/create', $data );
+        $response = $this->requester->post( '/customer/create', $data );
 
         return YSCustomerDTO::from_response( $response );
     }
@@ -250,11 +250,11 @@ final class YSShoplineClient {
      * @return array<string, mixed>
      * @throws \Exception 如果取得失敗
      *
-     * @see https://docs.shoplinepayments.com/api/customer-paymentInstrument/customer/getToken/
+     * @see https://docs.shoplinepayments.com/api/customer/token/
      */
     public function get_customer_token( string $customer_id ): array {
-        return $this->requester->post( '/customer-paymentInstrument/customer/getToken', [
-            'paymentCustomerId' => $customer_id,
+        return $this->requester->post( '/customer/token', [
+            'customerId' => $customer_id,
         ] );
     }
 
@@ -270,7 +270,7 @@ final class YSShoplineClient {
      * @return array<int, YSPaymentInstrumentDTO>
      * @throws \Exception 如果查詢失敗
      *
-     * @see https://docs.shoplinepayments.com/api/customer-paymentInstrument/paymentInstrument/query/
+     * @see https://docs.shoplinepayments.com/api/customer/paymentInstrument/query/
      */
     public function query_payment_instruments( string $customer_id, array $filters = [] ): array {
         $data = [
@@ -281,7 +281,7 @@ final class YSShoplineClient {
             $data['paymentInstrument'] = $filters;
         }
 
-        $response = $this->requester->post( '/customer-paymentInstrument/paymentInstrument/query', $data );
+        $response = $this->requester->post( '/customer/paymentInstrument/query', $data );
 
         $instruments = $response['paymentInstruments'] ?? [];
 
@@ -296,10 +296,10 @@ final class YSShoplineClient {
      * @return array<string, mixed>
      * @throws \Exception 如果解綁失敗
      *
-     * @see https://docs.shoplinepayments.com/api/customer-paymentInstrument/paymentInstrument/unbind/
+     * @see https://docs.shoplinepayments.com/api/customer/paymentInstrument/unbind/
      */
     public function unbind_payment_instrument( string $customer_id, string $instrument_id ): array {
-        return $this->requester->post( '/customer-paymentInstrument/paymentInstrument/unbind', [
+        return $this->requester->post( '/customer/paymentInstrument/unbind', [
             'customerId'          => $customer_id,
             'paymentInstrumentId' => $instrument_id,
         ] );

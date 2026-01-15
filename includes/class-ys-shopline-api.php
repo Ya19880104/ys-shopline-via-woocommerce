@@ -88,10 +88,18 @@ class YS_Shopline_API {
             $args['body'] = wp_json_encode( $data );
         }
 
+        // 記錄簡要資訊
         YS_Shopline_Logger::debug( "API Request to $url", array(
             'method'     => $method,
             'request_id' => $request_id,
-            'data'       => $data,
+        ) );
+
+        // 記錄完整請求資料（用於除錯 1999 錯誤）
+        YS_Shopline_Logger::debug( 'API Request full data', array(
+            'endpoint'             => $endpoint,
+            'data_json'            => wp_json_encode( $data ),
+            'paySession_type'      => isset( $data['paySession'] ) ? gettype( $data['paySession'] ) : 'not_set',
+            'paySession_is_json'   => isset( $data['paySession'] ) ? ( json_decode( $data['paySession'] ) !== null ? 'yes' : 'no' ) : 'not_set',
         ) );
 
         $response = wp_remote_request( $url, $args );
@@ -111,14 +119,53 @@ class YS_Shopline_API {
 
         $decoded_body = json_decode( $body, true );
 
-        if ( $code >= 400 ) {
-            $error_message = isset( $decoded_body['message'] ) ? $decoded_body['message'] : "API request failed with code $code";
+        // SHOPLINE 有時會在 400 錯誤中仍然返回有效的交易資訊
+        // 如果有 tradeOrderId 或 nextAction，視為成功（部分成功）
+        $has_trade_info = isset( $decoded_body['tradeOrderId'] ) || isset( $decoded_body['nextAction'] );
+
+        if ( $code >= 400 && ! $has_trade_info ) {
+            // SHOPLINE API 使用 'msg' 而非 'message'
+            $error_message = isset( $decoded_body['msg'] ) ? $decoded_body['msg'] : ( isset( $decoded_body['message'] ) ? $decoded_body['message'] : "API request failed with code $code" );
             $error_code    = isset( $decoded_body['code'] ) ? $decoded_body['code'] : 'api_error';
 
-            YS_Shopline_Logger::error( "API Error: $error_message (Code: $error_code)" );
+            // 1999 是 SHOPLINE 內部伺服器錯誤，提供更多資訊給用戶
+            if ( '1999' === $error_code ) {
+                $error_message = __( 'SHOPLINE 伺服器錯誤 (1999)。請稍後重試或聯繫客服。', 'ys-shopline-via-woocommerce' );
+                YS_Shopline_Logger::error( 'SHOPLINE Server Error 1999 - 可能需要聯繫 SHOPLINE 技術支援', array(
+                    'http_code'  => $code,
+                    'request_id' => $request_id,
+                    'endpoint'   => $endpoint,
+                    'response'   => $decoded_body,
+                    'hint'       => '這通常是 SHOPLINE 內部處理錯誤，可能與 3DS 驗證流程有關',
+                ) );
+            } else {
+                YS_Shopline_Logger::error( "API Error: $error_message (Code: $error_code)", array(
+                    'http_code' => $code,
+                    'response'  => $decoded_body,
+                ) );
+            }
 
             return new WP_Error( $error_code, $error_message );
         }
+
+        // 即使是 400 錯誤，如果有交易資訊，記錄警告但繼續處理
+        if ( $code >= 400 && $has_trade_info ) {
+            YS_Shopline_Logger::warning( 'API returned error code but has trade info', array(
+                'http_code'    => $code,
+                'error_code'   => isset( $decoded_body['code'] ) ? $decoded_body['code'] : 'none',
+                'error_msg'    => isset( $decoded_body['msg'] ) ? $decoded_body['msg'] : 'none',
+                'tradeOrderId' => isset( $decoded_body['tradeOrderId'] ) ? $decoded_body['tradeOrderId'] : 'none',
+                'has_nextAction' => isset( $decoded_body['nextAction'] ) ? 'yes' : 'no',
+            ) );
+        }
+
+        // 檢查是否有 nextAction（即使 HTTP 200，也要記錄成功資訊）
+        YS_Shopline_Logger::debug( 'API Success', array(
+            'http_code'      => $code,
+            'has_nextAction' => isset( $decoded_body['nextAction'] ) ? 'yes' : 'no',
+            'status'         => isset( $decoded_body['status'] ) ? $decoded_body['status'] : 'unknown',
+            'tradeOrderId'   => isset( $decoded_body['tradeOrderId'] ) ? $decoded_body['tradeOrderId'] : 'none',
+        ) );
 
         return $decoded_body;
     }
@@ -195,53 +242,60 @@ class YS_Shopline_API {
     /**
      * Create customer.
      *
+     * 新版 API 端點：/api/v1/customer/create
+     * 回應欄位為 customerId（不是 paymentCustomerId）
+     *
      * @param array $data Customer data.
      * @return array|WP_Error
      */
     public function create_customer( $data ) {
-        return $this->request( '/customer-paymentInstrument/customer/create', $data );
+        return $this->request( '/customer/create', $data );
     }
 
     /**
      * Get customer token.
      *
-     * @param string $payment_customer_id Payment customer ID.
+     * 新版 API 端點：/api/v1/customer/token
+     * 請求欄位為 customerId（不是 paymentCustomerId）
+     *
+     * @param string $customer_id Customer ID.
      * @return array|WP_Error
      */
-    public function get_customer_token( $payment_customer_id ) {
-        return $this->request( '/customer-paymentInstrument/customer/getToken', array( 'paymentCustomerId' => $payment_customer_id ) );
+    public function get_customer_token( $customer_id ) {
+        return $this->request( '/customer/token', array( 'customerId' => $customer_id ) );
     }
 
     /**
      * Get payment instruments for customer.
      *
-     * @param string $payment_customer_id Payment customer ID.
+     * API 端點：/api/v1/customer/paymentInstrument/query
+     *
+     * @param string $customer_id Customer ID.
+     * @param array  $filters     Optional filters (instrumentStatusList, etc.).
      * @return array|WP_Error
      */
-    public function get_payment_instruments( $payment_customer_id ) {
-        return $this->request( '/customer-paymentInstrument/paymentInstrument/list', array( 'paymentCustomerId' => $payment_customer_id ) );
+    public function get_payment_instruments( $customer_id, $filters = array() ) {
+        $data = array( 'customerId' => $customer_id );
+
+        if ( ! empty( $filters ) ) {
+            $data['paymentInstrument'] = $filters;
+        }
+
+        return $this->request( '/customer/paymentInstrument/query', $data );
     }
 
     /**
-     * Delete payment instrument.
+     * Unbind (delete) payment instrument.
      *
+     * API 端點：/api/v1/customer/paymentInstrument/unbind
+     *
+     * @param string $customer_id           Customer ID.
      * @param string $payment_instrument_id Payment instrument ID.
      * @return array|WP_Error
      */
-    public function delete_payment_instrument( $payment_instrument_id ) {
-        return $this->request( '/customer-paymentInstrument/paymentInstrument/delete', array( 'paymentInstrumentId' => $payment_instrument_id ) );
-    }
-
-    /**
-     * Set default payment instrument.
-     *
-     * @param string $payment_customer_id   Payment customer ID.
-     * @param string $payment_instrument_id Payment instrument ID.
-     * @return array|WP_Error
-     */
-    public function set_default_payment_instrument( $payment_customer_id, $payment_instrument_id ) {
-        return $this->request( '/customer-paymentInstrument/paymentInstrument/setDefault', array(
-            'paymentCustomerId'   => $payment_customer_id,
+    public function delete_payment_instrument( $customer_id, $payment_instrument_id ) {
+        return $this->request( '/customer/paymentInstrument/unbind', array(
+            'customerId'          => $customer_id,
             'paymentInstrumentId' => $payment_instrument_id,
         ) );
     }

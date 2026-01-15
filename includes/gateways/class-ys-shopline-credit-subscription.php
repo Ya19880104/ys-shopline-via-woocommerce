@@ -65,11 +65,21 @@ class YS_Shopline_Credit_Subscription extends YS_Shopline_Gateway_Base {
     public function get_sdk_config() {
         $config = parent::get_sdk_config();
 
+        // 訂閱付款必須有 customerToken
+        // 如果沒有，SDK 會無法儲存卡片
+        $has_customer_token = isset( $config['customerToken'] ) && ! empty( $config['customerToken'] );
+
+        if ( ! $has_customer_token ) {
+            YS_Shopline_Logger::warning( 'Subscription gateway: No customerToken available', array(
+                'user_id' => get_current_user_id(),
+            ) );
+        }
+
         // Force save card for subscriptions
         $config['forceSaveCard'] = true;
         $config['paymentInstrument'] = array(
             'bindCard' => array(
-                'enable'   => true,
+                'enable'   => $has_customer_token, // 只有有 token 時才啟用
                 'protocol' => array(
                     'switchVisible'       => false, // Hide toggle, always save
                     'defaultSwitchStatus' => true,
