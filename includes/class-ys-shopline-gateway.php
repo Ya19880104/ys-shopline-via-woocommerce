@@ -226,36 +226,36 @@ class YS_Shopline_Gateway extends WC_Payment_Gateway {
      * Get Shopline Customer ID.
      */
     public function get_shopline_customer_id( $user_id ) {
-        $customer_id = get_user_meta( $user_id, '_shopline_payment_customer_id', true );
-        
+        $customer_id = get_user_meta( $user_id, '_ys_shopline_payment_customer_id', true );
+
         if ( $customer_id ) {
             return $customer_id;
         }
-        
+
         $user = get_userdata( $user_id );
         if ( ! $user ) {
             return false;
         }
-        
+
         $data = array(
             'referenceCustomerId' => (string) $user_id,
             'email' => $user->user_email,
             'name' => $user->display_name ?: $user->user_login, // Fallback
             'phone' => get_user_meta( $user_id, 'billing_phone', true ) ?: '',
         );
-        
+
         $response = $this->api->create_customer( $data );
-        
+
         if ( is_wp_error( $response ) ) {
             YS_Shopline_Logger::error( 'Failed to create customer: ' . $response->get_error_message() );
             return false;
         }
-        
+
         if ( isset( $response['paymentCustomerId'] ) ) {
-             update_user_meta( $user_id, '_shopline_payment_customer_id', $response['paymentCustomerId'] );
+             update_user_meta( $user_id, '_ys_shopline_payment_customer_id', $response['paymentCustomerId'] );
              return $response['paymentCustomerId'];
         }
-        
+
         return false;
     }
 
@@ -328,8 +328,8 @@ class YS_Shopline_Gateway extends WC_Payment_Gateway {
 
         if ( isset( $response['nextAction'] ) ) {
             // Flow continues to frontend handling
-             $order->update_meta_data( '_shopline_next_action', $response['nextAction'] );
-             $order->update_meta_data( '_shopline_trade_order_id', $response['tradeOrderId'] );
+             $order->update_meta_data( '_ys_shopline_next_action', $response['nextAction'] );
+             $order->update_meta_data( '_ys_shopline_trade_order_id', $response['tradeOrderId'] );
              $order->save();
              
              // Mark as pending payment
