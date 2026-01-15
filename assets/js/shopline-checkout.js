@@ -84,9 +84,12 @@ jQuery(function ($) {
         init: function () {
             var self = this;
 
+            console.log('[YS Shopline] Checkout handler initializing...');
+
             // Check SDK availability
             if (typeof ShoplinePayments !== 'undefined') {
                 sdkLoaded = true;
+                console.log('[YS Shopline] SDK already loaded');
             }
 
             // Bind events
@@ -101,30 +104,73 @@ jQuery(function ($) {
             // Bind form submission for all Shopline gateways using event delegation
             $.each(GATEWAY_CONFIG, function (gatewayId) {
                 $(document.body).on('checkout_place_order_' + gatewayId, function () {
-                    console.log('checkout_place_order event triggered for:', gatewayId);
+                    console.log('[YS Shopline] checkout_place_order event triggered for:', gatewayId);
                     return self.placeOrder(gatewayId);
                 });
             });
 
             // Intercept form submission directly for Shopline gateways
-            $(document.body).on('submit', 'form.checkout', function (e) {
+            // 使用更高優先級的事件監聽
+            $('form.checkout, form.woocommerce-checkout').on('submit.ys_shopline', function (e) {
                 var selectedGateway = self.getSelectedGateway();
-                console.log('Form submit, selected gateway:', selectedGateway);
+                console.log('[YS Shopline] Form submit intercepted, selected gateway:', selectedGateway);
 
                 if (selectedGateway) {
                     var $form = $(this);
 
                     // Check if we already have a pay session (means SDK already processed)
                     if ($form.find('input[name="ys_shopline_pay_session"]').val()) {
-                        console.log('Pay session exists, allowing form submission');
+                        console.log('[YS Shopline] Pay session exists, allowing form submission');
                         return true; // Allow normal submission
+                    }
+
+                    // Check if payment instance is ready
+                    if (!paymentInstances[selectedGateway]) {
+                        console.error('[YS Shopline] Payment instance not ready for:', selectedGateway);
+                        console.log('[YS Shopline] Available instances:', Object.keys(paymentInstances));
+                        self.showFormError('付款元件尚未準備就緒，請稍候再試。');
+                        return false;
                     }
 
                     // Prevent default submission and process with SDK
                     e.preventDefault();
                     e.stopPropagation();
+                    e.stopImmediatePropagation();
 
-                    console.log('Intercepting for Shopline payment');
+                    console.log('[YS Shopline] Intercepting for Shopline payment');
+                    self.placeOrder(selectedGateway);
+                    return false;
+                }
+            });
+
+            // 另外監聽結帳按鈕點擊
+            $(document.body).on('click', '#place_order', function(e) {
+                var selectedGateway = self.getSelectedGateway();
+                console.log('[YS Shopline] Place order button clicked, gateway:', selectedGateway);
+
+                if (selectedGateway) {
+                    var $form = $('form.checkout, form.woocommerce-checkout');
+
+                    // Check if we already have a pay session
+                    if ($form.find('input[name="ys_shopline_pay_session"]').val()) {
+                        console.log('[YS Shopline] Pay session exists, allowing click');
+                        return true;
+                    }
+
+                    // Check if payment instance is ready
+                    if (!paymentInstances[selectedGateway]) {
+                        console.error('[YS Shopline] Payment instance not ready');
+                        e.preventDefault();
+                        e.stopPropagation();
+                        self.showFormError('付款元件尚未準備就緒，請稍候再試。');
+                        return false;
+                    }
+
+                    // Prevent and process
+                    e.preventDefault();
+                    e.stopPropagation();
+
+                    console.log('[YS Shopline] Processing payment via button click');
                     self.placeOrder(selectedGateway);
                     return false;
                 }
@@ -132,6 +178,8 @@ jQuery(function ($) {
 
             // Init on load if Shopline gateway already selected
             this.onPaymentMethodChange();
+
+            console.log('[YS Shopline] Checkout handler initialized');
         },
 
         /**
@@ -327,7 +375,8 @@ jQuery(function ($) {
                 // Initialize SDK
                 var result = await ShoplinePayments(options);
 
-                console.log('Shopline SDK Result:', result);
+                console.log('[YS Shopline] SDK Result:', result);
+                console.log('[YS Shopline] SDK Result payment object:', result.payment);
 
                 if (result.error) {
                     console.error('Shopline SDK Error:', result.error);
@@ -346,6 +395,8 @@ jQuery(function ($) {
 
                 // Store payment instance
                 paymentInstances[gatewayId] = result.payment;
+                console.log('[YS Shopline] Payment instance stored for:', gatewayId);
+                console.log('[YS Shopline] Payment instance has createPayment:', typeof result.payment?.createPayment);
 
                 // Remove loading state - SDK should have rendered its content
                 $container.find('.ys-shopline-loading').remove();
