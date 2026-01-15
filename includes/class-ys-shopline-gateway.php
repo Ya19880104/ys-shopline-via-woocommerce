@@ -371,7 +371,7 @@ class YS_Shopline_Gateway extends WC_Payment_Gateway {
                  wp_die( 'Invalid Order.' );
              }
              
-             $next_action = $order->get_meta( '_shopline_next_action' );
+             $next_action = $order->get_meta( '_ys_shopline_next_action' );
              
              if ( ! $next_action ) {
                  wp_safe_redirect( $this->get_return_url( $order ) );

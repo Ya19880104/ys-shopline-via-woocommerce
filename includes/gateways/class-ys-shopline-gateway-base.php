@@ -60,6 +60,177 @@ abstract class YS_Shopline_Gateway_Base extends WC_Payment_Gateway {
         add_action( 'wp_enqueue_scripts', array( $this, 'payment_scripts' ) );
         add_action( 'woocommerce_thankyou_' . $this->id, array( $this, 'thankyou_page' ) );
         add_action( 'woocommerce_email_before_order_table', array( $this, 'email_instructions' ), 10, 3 );
+
+        // Handle 3DS/redirect payment completion
+        add_action( 'template_redirect', array( $this, 'handle_pay_redirect' ) );
+    }
+
+    /**
+     * Handle payment redirect (3DS, etc.)
+     */
+    public function handle_pay_redirect() {
+        // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+        if ( ! isset( $_GET['ys_shopline_pay'] ) || ! isset( $_GET['order_id'] ) || ! isset( $_GET['key'] ) ) {
+            return;
+        }
+
+        // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+        $order_id = absint( $_GET['order_id'] );
+        // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+        $key = sanitize_text_field( wp_unslash( $_GET['key'] ) );
+
+        $order = wc_get_order( $order_id );
+
+        if ( ! $order || $order->get_order_key() !== $key ) {
+            wp_die( esc_html__( 'Invalid Order.', 'ys-shopline-via-woocommerce' ) );
+        }
+
+        // Check if this order belongs to this gateway
+        if ( $order->get_payment_method() !== $this->id ) {
+            return;
+        }
+
+        $next_action = $order->get_meta( '_ys_shopline_next_action' );
+
+        if ( ! $next_action ) {
+            // No next action, redirect to thank you page
+            wp_safe_redirect( $this->get_return_url( $order ) );
+            exit;
+        }
+
+        // Render 3DS/redirect page
+        $this->render_pay_page( $order, $next_action );
+        exit;
+    }
+
+    /**
+     * Render payment redirect page (3DS, etc.)
+     *
+     * @param WC_Order $order Order object.
+     * @param array $next_action Next action data.
+     */
+    protected function render_pay_page( $order, $next_action ) {
+        $return_url = $this->get_return_url( $order );
+
+        // Get credentials
+        if ( $this->testmode ) {
+            $client_key  = get_option( 'ys_shopline_sandbox_client_key', '' );
+            $merchant_id = get_option( 'ys_shopline_sandbox_merchant_id', '' );
+        } else {
+            $client_key  = get_option( 'ys_shopline_client_key', '' );
+            $merchant_id = get_option( 'ys_shopline_merchant_id', '' );
+        }
+
+        $env = $this->testmode ? 'sandbox' : 'production';
+        ?>
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title><?php esc_html_e( 'Processing Payment...', 'ys-shopline-via-woocommerce' ); ?></title>
+            <script src="https://cdn.shoplinepayments.com/sdk/v1/payment-web.js"></script>
+            <style>
+                body {
+                    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+                    display: flex;
+                    justify-content: center;
+                    align-items: center;
+                    min-height: 100vh;
+                    margin: 0;
+                    background: #f5f5f5;
+                }
+                .container {
+                    text-align: center;
+                    padding: 40px;
+                    background: white;
+                    border-radius: 8px;
+                    box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+                    max-width: 500px;
+                    width: 90%;
+                }
+                .spinner {
+                    border: 3px solid #f3f3f3;
+                    border-top: 3px solid #3498db;
+                    border-radius: 50%;
+                    width: 40px;
+                    height: 40px;
+                    animation: spin 1s linear infinite;
+                    margin: 20px auto;
+                }
+                @keyframes spin {
+                    0% { transform: rotate(0deg); }
+                    100% { transform: rotate(360deg); }
+                }
+                .error { color: #e74c3c; margin-top: 20px; }
+                #paymentContainer { margin-top: 20px; }
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <h2><?php esc_html_e( 'Processing Payment', 'ys-shopline-via-woocommerce' ); ?></h2>
+                <div class="spinner"></div>
+                <p><?php esc_html_e( 'Please wait while we process your payment...', 'ys-shopline-via-woocommerce' ); ?></p>
+                <div id="paymentContainer"></div>
+                <div id="errorMessage" class="error" style="display:none;"></div>
+            </div>
+            <script>
+                var nextAction = <?php echo wp_json_encode( $next_action ); ?>;
+                var returnUrl = <?php echo wp_json_encode( $return_url ); ?>;
+                var clientKey = <?php echo wp_json_encode( $client_key ); ?>;
+                var merchantId = <?php echo wp_json_encode( $merchant_id ); ?>;
+                var env = <?php echo wp_json_encode( $env ); ?>;
+
+                async function processPayment() {
+                    try {
+                        console.log('Initializing SDK for 3DS...');
+
+                        var result = await ShoplinePayments({
+                            clientKey: clientKey,
+                            merchantId: merchantId,
+                            paymentMethod: 'CreditCard',
+                            element: '#paymentContainer',
+                            env: env,
+                            accessMode: env
+                        });
+
+                        console.log('SDK initialized:', result);
+
+                        if (result.error) {
+                            showError('SDK Error: ' + result.error.message);
+                            return;
+                        }
+
+                        console.log('Calling payment.pay() with nextAction...');
+                        var payResult = await result.payment.pay(nextAction);
+
+                        console.log('pay() result:', payResult);
+
+                        if (payResult && payResult.error) {
+                            showError('Payment Failed: ' + payResult.error.message);
+                        } else {
+                            // Success - redirect
+                            window.location.href = returnUrl;
+                        }
+
+                    } catch (e) {
+                        console.error('Payment error:', e);
+                        showError('System Error: ' + e.message);
+                    }
+                }
+
+                function showError(message) {
+                    document.querySelector('.spinner').style.display = 'none';
+                    document.getElementById('errorMessage').textContent = message;
+                    document.getElementById('errorMessage').style.display = 'block';
+                }
+
+                // Start processing
+                processPayment();
+            </script>
+        </body>
+        </html>
+        <?php
     }
 
     /**
