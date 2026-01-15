@@ -101,80 +101,8 @@ jQuery(function ($) {
                 self.onUpdatedCheckout();
             });
 
-            // Bind form submission for all Shopline gateways using event delegation
-            $.each(GATEWAY_CONFIG, function (gatewayId) {
-                $(document.body).on('checkout_place_order_' + gatewayId, function () {
-                    console.log('[YS Shopline] checkout_place_order event triggered for:', gatewayId);
-                    return self.placeOrder(gatewayId);
-                });
-            });
-
-            // Intercept form submission directly for Shopline gateways
-            // 使用更高優先級的事件監聽
-            $('form.checkout, form.woocommerce-checkout').on('submit.ys_shopline', function (e) {
-                var selectedGateway = self.getSelectedGateway();
-                console.log('[YS Shopline] Form submit intercepted, selected gateway:', selectedGateway);
-
-                if (selectedGateway) {
-                    var $form = $(this);
-
-                    // Check if we already have a pay session (means SDK already processed)
-                    if ($form.find('input[name="ys_shopline_pay_session"]').val()) {
-                        console.log('[YS Shopline] Pay session exists, allowing form submission');
-                        return true; // Allow normal submission
-                    }
-
-                    // Check if payment instance is ready
-                    if (!paymentInstances[selectedGateway]) {
-                        console.error('[YS Shopline] Payment instance not ready for:', selectedGateway);
-                        console.log('[YS Shopline] Available instances:', Object.keys(paymentInstances));
-                        self.showFormError('付款元件尚未準備就緒，請稍候再試。');
-                        return false;
-                    }
-
-                    // Prevent default submission and process with SDK
-                    e.preventDefault();
-                    e.stopPropagation();
-                    e.stopImmediatePropagation();
-
-                    console.log('[YS Shopline] Intercepting for Shopline payment');
-                    self.placeOrder(selectedGateway);
-                    return false;
-                }
-            });
-
-            // 另外監聽結帳按鈕點擊
-            $(document.body).on('click', '#place_order', function(e) {
-                var selectedGateway = self.getSelectedGateway();
-                console.log('[YS Shopline] Place order button clicked, gateway:', selectedGateway);
-
-                if (selectedGateway) {
-                    var $form = $('form.checkout, form.woocommerce-checkout');
-
-                    // Check if we already have a pay session
-                    if ($form.find('input[name="ys_shopline_pay_session"]').val()) {
-                        console.log('[YS Shopline] Pay session exists, allowing click');
-                        return true;
-                    }
-
-                    // Check if payment instance is ready
-                    if (!paymentInstances[selectedGateway]) {
-                        console.error('[YS Shopline] Payment instance not ready');
-                        e.preventDefault();
-                        e.stopPropagation();
-                        self.showFormError('付款元件尚未準備就緒，請稍候再試。');
-                        return false;
-                    }
-
-                    // Prevent and process
-                    e.preventDefault();
-                    e.stopPropagation();
-
-                    console.log('[YS Shopline] Processing payment via button click');
-                    self.placeOrder(selectedGateway);
-                    return false;
-                }
-            });
+            // Bind checkout events
+            this.bindCheckoutEvents();
 
             // Init on load if Shopline gateway already selected
             this.onPaymentMethodChange();
@@ -198,6 +126,27 @@ jQuery(function ($) {
         },
 
         /**
+         * Bind checkout form events
+         * 使用與 Helcim 相同的綁定方式
+         */
+        bindCheckoutEvents: function () {
+            var self = this;
+
+            // 解除舊的綁定，避免重複
+            $('form.checkout').off('.ys_shopline');
+
+            // Bind form submission for all Shopline gateways
+            $.each(GATEWAY_CONFIG, function (gatewayId) {
+                $('form.checkout').on('checkout_place_order_' + gatewayId + '.ys_shopline', function () {
+                    console.log('[YS Shopline] checkout_place_order event triggered for:', gatewayId);
+                    return self.placeOrder(gatewayId);
+                });
+            });
+
+            console.log('[YS Shopline] Checkout events bound');
+        },
+
+        /**
          * Handle payment method change
          */
         onPaymentMethodChange: function () {
@@ -217,6 +166,12 @@ jQuery(function ($) {
         onUpdatedCheckout: function () {
             // Clear cached instances on checkout update
             paymentInstances = {};
+
+            // 重新綁定事件（表單可能被替換）
+            this.bindCheckoutEvents();
+
+            // 清除舊的 paySession（購物車更新後需要重新建立）
+            $('form.checkout').find('input[name="ys_shopline_pay_session"]').remove();
 
             var gatewayId = this.getSelectedGateway();
 
@@ -443,20 +398,27 @@ jQuery(function ($) {
          */
         placeOrder: function (gatewayId) {
             var self = this;
-            var paymentInstance = paymentInstances[gatewayId];
+            var $form = $('form.checkout');
 
-            console.log('placeOrder called for:', gatewayId);
-            console.log('paymentInstance:', paymentInstance);
+            console.log('[YS Shopline] placeOrder called for:', gatewayId);
+
+            // Check if paySession already exists (means SDK already processed)
+            var existingPaySession = $form.find('input[name="ys_shopline_pay_session"]').val();
+            if (existingPaySession) {
+                console.log('[YS Shopline] paySession exists, allowing WooCommerce to process');
+                return true; // Let WooCommerce handle the submission
+            }
+
+            var paymentInstance = paymentInstances[gatewayId];
+            console.log('[YS Shopline] paymentInstance:', paymentInstance);
 
             if (!paymentInstance) {
                 // Instance not ready, show error
-                console.error('Payment instance not found for:', gatewayId);
+                console.error('[YS Shopline] Payment instance not found for:', gatewayId);
                 var errorMsg = ys_shopline_params.i18n.payment_not_ready || 'Payment not ready. Please wait and try again.';
                 self.showFormError(errorMsg);
                 return false;
             }
-
-            var $form = $('form.checkout');
 
             // Block UI
             $form.addClass('processing').block({
@@ -548,70 +510,14 @@ jQuery(function ($) {
                     })
                 );
 
-                console.log('[YS Shopline] Submitting form to WooCommerce...');
+                console.log('[YS Shopline] paySession saved, re-submitting form to WooCommerce...');
 
-                // Check if wc_checkout_params exists
-                if (typeof wc_checkout_params === 'undefined') {
-                    console.error('[YS Shopline] wc_checkout_params is not defined!');
-                    $form.removeClass('processing').unblock();
-                    self.showFormError('結帳設定錯誤，請重新整理頁面。');
-                    return false;
-                }
+                // Unblock and re-submit - WooCommerce will handle the AJAX
+                $form.removeClass('processing').unblock();
 
-                console.log('[YS Shopline] checkout_url:', wc_checkout_params.checkout_url);
-
-                // Remove the processing class first to allow re-submission
-                $form.removeClass('processing');
-
-                // Trigger WooCommerce checkout via AJAX
-                // We need to manually trigger the WooCommerce checkout process
-                var formData = $form.serialize();
-
-                console.log('[YS Shopline] Form data length:', formData.length);
-                console.log('[YS Shopline] Has ys_shopline_pay_session:', formData.indexOf('ys_shopline_pay_session') !== -1);
-
-                $.ajax({
-                    type: 'POST',
-                    url: wc_checkout_params.checkout_url,
-                    data: formData,
-                    dataType: 'json',
-                    success: function(response) {
-                        console.log('[YS Shopline] WooCommerce checkout response:', response);
-
-                        // Remove any existing notices
-                        $('.woocommerce-error, .woocommerce-message, .woocommerce-info').remove();
-
-                        if (response.result === 'success') {
-                            // Redirect to the specified URL
-                            if (response.redirect) {
-                                console.log('[YS Shopline] Redirecting to:', response.redirect);
-                                window.location.href = response.redirect;
-                            }
-                        } else if (response.result === 'failure') {
-                            // Show error message
-                            $form.removeClass('processing').unblock();
-
-                            if (response.messages) {
-                                // Insert WooCommerce error messages
-                                $form.prepend(response.messages);
-                                $('html, body').animate({
-                                    scrollTop: $form.offset().top - 100
-                                }, 500);
-                            } else {
-                                self.showFormError(response.message || '付款處理失敗，請重試。');
-                            }
-                        } else {
-                            console.warn('[YS Shopline] Unexpected response result:', response.result);
-                            $form.removeClass('processing').unblock();
-                        }
-                    },
-                    error: function(xhr, status, error) {
-                        console.error('[YS Shopline] AJAX error:', status, error);
-                        console.error('[YS Shopline] XHR response:', xhr.responseText);
-                        $form.removeClass('processing').unblock();
-                        self.showFormError('網路錯誤，請檢查連線後重試。');
-                    }
-                });
+                // Re-submit form - this time the checkout_place_order event will return true
+                // because ys_shopline_pay_session is now present
+                $form.submit();
 
             }).catch(function (error) {
                 console.error('Shopline createPayment error:', error);
