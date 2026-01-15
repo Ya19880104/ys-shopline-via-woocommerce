@@ -548,8 +548,52 @@ jQuery(function ($) {
                     })
                 );
 
-                // Submit form to WooCommerce
-                $form.submit();
+                console.log('[YS Shopline] Submitting form to WooCommerce...');
+
+                // Remove the processing class first to allow re-submission
+                $form.removeClass('processing');
+
+                // Trigger WooCommerce checkout via AJAX
+                // We need to manually trigger the WooCommerce checkout process
+                var formData = $form.serialize();
+
+                $.ajax({
+                    type: 'POST',
+                    url: wc_checkout_params.checkout_url,
+                    data: formData,
+                    dataType: 'json',
+                    success: function(response) {
+                        console.log('[YS Shopline] WooCommerce checkout response:', response);
+
+                        // Remove any existing notices
+                        $('.woocommerce-error, .woocommerce-message, .woocommerce-info').remove();
+
+                        if (response.result === 'success') {
+                            // Redirect to the specified URL
+                            if (response.redirect) {
+                                window.location.href = response.redirect;
+                            }
+                        } else if (response.result === 'failure') {
+                            // Show error message
+                            $form.removeClass('processing').unblock();
+
+                            if (response.messages) {
+                                // Insert WooCommerce error messages
+                                $form.prepend(response.messages);
+                                $('html, body').animate({
+                                    scrollTop: $form.offset().top - 100
+                                }, 500);
+                            } else {
+                                self.showFormError(response.message || '付款處理失敗，請重試。');
+                            }
+                        }
+                    },
+                    error: function(xhr, status, error) {
+                        console.error('[YS Shopline] AJAX error:', status, error);
+                        $form.removeClass('processing').unblock();
+                        self.showFormError('網路錯誤，請檢查連線後重試。');
+                    }
+                });
 
             }).catch(function (error) {
                 console.error('Shopline createPayment error:', error);
