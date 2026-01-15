@@ -510,21 +510,10 @@ jQuery(function ($) {
                     })
                 );
 
-                console.log('[YS Shopline] paySession saved, re-submitting form to WooCommerce...');
+                console.log('[YS Shopline] paySession saved, submitting to WooCommerce via AJAX...');
 
-                // Unblock form
-                $form.removeClass('processing').unblock();
-
-                // Re-submit by clicking the submit button
-                // This ensures WooCommerce's checkout.js properly handles the submission
-                var $submitBtn = $form.find('#place_order');
-                if ($submitBtn.length) {
-                    console.log('[YS Shopline] Clicking place_order button...');
-                    $submitBtn.trigger('click');
-                } else {
-                    console.log('[YS Shopline] Submitting form directly...');
-                    $form.submit();
-                }
+                // 直接發送 AJAX 到 WooCommerce checkout endpoint
+                self.submitCheckoutAjax($form);
 
             }).catch(function (error) {
                 console.error('Shopline createPayment error:', error);
@@ -534,6 +523,77 @@ jQuery(function ($) {
 
             // Prevent immediate form submission
             return false;
+        },
+
+        /**
+         * Submit checkout form via AJAX to WooCommerce
+         * 直接發送 AJAX 請求，不依賴 WooCommerce 的事件機制
+         *
+         * @param {jQuery} $form Checkout form
+         */
+        submitCheckoutAjax: function ($form) {
+            var self = this;
+
+            // 確認 wc_checkout_params 存在
+            if (typeof wc_checkout_params === 'undefined') {
+                console.error('[YS Shopline] wc_checkout_params is not defined');
+                $form.removeClass('processing').unblock();
+                self.showFormError('結帳設定錯誤，請重新整理頁面。');
+                return;
+            }
+
+            var checkoutUrl = wc_checkout_params.checkout_url;
+            var formData = $form.serialize();
+
+            console.log('[YS Shopline] Sending AJAX to:', checkoutUrl);
+            console.log('[YS Shopline] Form data includes paySession:', formData.indexOf('ys_shopline_pay_session') !== -1);
+
+            $.ajax({
+                type: 'POST',
+                url: checkoutUrl,
+                data: formData,
+                dataType: 'json',
+                success: function (response) {
+                    console.log('[YS Shopline] WooCommerce response:', response);
+
+                    // 移除現有訊息
+                    $('.woocommerce-NoticeGroup-checkout, .woocommerce-error, .woocommerce-message').remove();
+
+                    if (response.result === 'success') {
+                        // 成功 - 跳轉到指定 URL
+                        if (response.redirect) {
+                            console.log('[YS Shopline] Redirecting to:', response.redirect);
+                            window.location.href = response.redirect;
+                        }
+                    } else if (response.result === 'failure') {
+                        // 失敗 - 顯示錯誤訊息
+                        $form.removeClass('processing').unblock();
+
+                        if (response.messages) {
+                            // 插入 WooCommerce 錯誤訊息
+                            $form.prepend('<div class="woocommerce-NoticeGroup woocommerce-NoticeGroup-checkout">' + response.messages + '</div>');
+                            $('html, body').animate({
+                                scrollTop: $form.offset().top - 100
+                            }, 500);
+                        } else {
+                            self.showFormError(response.message || '付款處理失敗，請重試。');
+                        }
+
+                        // 觸發 WC 事件
+                        $(document.body).trigger('checkout_error', [response.messages]);
+                    } else {
+                        console.warn('[YS Shopline] Unexpected response:', response);
+                        $form.removeClass('processing').unblock();
+                        self.showFormError('發生未預期的錯誤，請重試。');
+                    }
+                },
+                error: function (xhr, status, error) {
+                    console.error('[YS Shopline] AJAX error:', status, error);
+                    console.error('[YS Shopline] Response:', xhr.responseText);
+                    $form.removeClass('processing').unblock();
+                    self.showFormError('網路錯誤，請檢查連線後重試。');
+                }
+            });
         },
 
         /**
