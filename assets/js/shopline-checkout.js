@@ -550,12 +550,25 @@ jQuery(function ($) {
 
                 console.log('[YS Shopline] Submitting form to WooCommerce...');
 
+                // Check if wc_checkout_params exists
+                if (typeof wc_checkout_params === 'undefined') {
+                    console.error('[YS Shopline] wc_checkout_params is not defined!');
+                    $form.removeClass('processing').unblock();
+                    self.showFormError('結帳設定錯誤，請重新整理頁面。');
+                    return false;
+                }
+
+                console.log('[YS Shopline] checkout_url:', wc_checkout_params.checkout_url);
+
                 // Remove the processing class first to allow re-submission
                 $form.removeClass('processing');
 
                 // Trigger WooCommerce checkout via AJAX
                 // We need to manually trigger the WooCommerce checkout process
                 var formData = $form.serialize();
+
+                console.log('[YS Shopline] Form data length:', formData.length);
+                console.log('[YS Shopline] Has ys_shopline_pay_session:', formData.indexOf('ys_shopline_pay_session') !== -1);
 
                 $.ajax({
                     type: 'POST',
@@ -571,6 +584,7 @@ jQuery(function ($) {
                         if (response.result === 'success') {
                             // Redirect to the specified URL
                             if (response.redirect) {
+                                console.log('[YS Shopline] Redirecting to:', response.redirect);
                                 window.location.href = response.redirect;
                             }
                         } else if (response.result === 'failure') {
@@ -586,10 +600,14 @@ jQuery(function ($) {
                             } else {
                                 self.showFormError(response.message || '付款處理失敗，請重試。');
                             }
+                        } else {
+                            console.warn('[YS Shopline] Unexpected response result:', response.result);
+                            $form.removeClass('processing').unblock();
                         }
                     },
                     error: function(xhr, status, error) {
                         console.error('[YS Shopline] AJAX error:', status, error);
+                        console.error('[YS Shopline] XHR response:', xhr.responseText);
                         $form.removeClass('processing').unblock();
                         self.showFormError('網路錯誤，請檢查連線後重試。');
                     }
