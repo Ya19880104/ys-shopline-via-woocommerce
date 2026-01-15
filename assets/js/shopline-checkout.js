@@ -289,9 +289,12 @@ jQuery(function ($) {
                         bindCard: {
                             enable: true,
                             protocol: {
+                                // 強制儲存時隱藏開關，否則顯示讓用戶選擇
                                 switchVisible: !forceSave,
-                                defaultSwitchStatus: forceSave || (serverConfig.defaultSaveCard === true),
-                                mustAccept: true
+                                // 強制儲存時預設開啟，否則預設關閉
+                                defaultSwitchStatus: forceSave,
+                                // 不強制要求同意儲存，允許不勾選也能交易
+                                mustAccept: false
                             }
                         }
                     };
@@ -418,11 +421,23 @@ jQuery(function ($) {
             // Create payment via SDK
             paymentInstance.createPayment().then(function (result) {
                 console.log('createPayment result:', result);
+                console.log('createPayment result keys:', result ? Object.keys(result) : 'null');
+                console.log('createPayment paySession:', result ? result.paySession : 'undefined');
+
                 if (result.error) {
                     // Payment creation failed
                     var msg = result.error.message || ys_shopline_params.i18n.payment_failed || 'Payment failed';
+                    console.error('createPayment error:', result.error);
                     $form.removeClass('processing').unblock();
                     self.showFormError(msg);
+                    return false;
+                }
+
+                // Check if paySession exists
+                if (!result.paySession) {
+                    console.error('createPayment: No paySession returned', result);
+                    $form.removeClass('processing').unblock();
+                    self.showFormError('付款資訊建立失敗，請重新輸入卡片資訊。');
                     return false;
                 }
 
@@ -460,17 +475,27 @@ jQuery(function ($) {
                     );
                 }
 
-                // Add save card preference if applicable
+                // Add save card preference
+                // SDK 可能返回 saveCard, bindCard, 或 savePaymentInstrument
+                var saveCardValue = false;
                 if (typeof result.saveCard !== 'undefined') {
-                    $form.find('input[name="ys_shopline_save_card"]').remove();
-                    $form.append(
-                        $('<input>').attr({
-                            type: 'hidden',
-                            name: 'ys_shopline_save_card',
-                            value: result.saveCard ? '1' : '0'
-                        })
-                    );
+                    saveCardValue = result.saveCard;
+                } else if (typeof result.bindCard !== 'undefined') {
+                    saveCardValue = result.bindCard;
+                } else if (typeof result.savePaymentInstrument !== 'undefined') {
+                    saveCardValue = result.savePaymentInstrument;
                 }
+
+                console.log('saveCard value:', saveCardValue);
+
+                $form.find('input[name="ys_shopline_save_card"]').remove();
+                $form.append(
+                    $('<input>').attr({
+                        type: 'hidden',
+                        name: 'ys_shopline_save_card',
+                        value: saveCardValue ? '1' : '0'
+                    })
+                );
 
                 // Submit form to WooCommerce
                 $form.submit();

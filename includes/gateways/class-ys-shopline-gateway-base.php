@@ -344,7 +344,16 @@ abstract class YS_Shopline_Gateway_Base extends WC_Payment_Gateway {
      */
     protected function prepare_payment_data( $order, $pay_session ) {
         $is_subscription = $this->order_contains_subscription( $order );
-        $save_card       = $is_subscription || ( isset( $_POST['wc-' . $this->id . '-new-payment-method'] ) && 'true' === $_POST['wc-' . $this->id . '-new-payment-method'] );
+
+        // 檢查用戶是否選擇儲存卡片（從 SDK 回傳的 saveCard 參數）
+        // phpcs:ignore WordPress.Security.NonceVerification.Missing
+        $save_card_from_sdk = isset( $_POST['ys_shopline_save_card'] ) && '1' === $_POST['ys_shopline_save_card'];
+
+        // 訂閱訂單強制儲存卡片，否則依用戶選擇
+        $save_card = $is_subscription || $save_card_from_sdk;
+
+        // 決定付款行為：不儲存卡片時使用 QuickPayment
+        $payment_behavior = $save_card ? 'CardBindPayment' : 'QuickPayment';
 
         $data = array(
             'paySession' => $pay_session,
@@ -353,25 +362,40 @@ abstract class YS_Shopline_Gateway_Base extends WC_Payment_Gateway {
                 'currency' => $order->get_currency(),
             ),
             'confirm'    => array(
-                'paymentBehavior'   => $save_card ? 'CardBindPayment' : 'QuickPayment',
+                'paymentBehavior'   => $payment_behavior,
                 'autoConfirm'       => true,
                 'autoCapture'       => true,
-                'paymentInstrument' => array(
-                    'savePaymentInstrument' => $save_card,
-                ),
             ),
             'order'      => array(
                 'referenceOrderId' => (string) $order->get_id(),
             ),
         );
 
-        // Add customer ID
-        if ( $order->get_user_id() ) {
-            $customer_id = $this->get_shopline_customer_id( $order->get_user_id() );
-            if ( $customer_id ) {
-                $data['confirm']['paymentCustomerId'] = $customer_id;
+        // 只有儲存卡片時才加入 paymentInstrument 設定
+        if ( $save_card ) {
+            $data['confirm']['paymentInstrument'] = array(
+                'savePaymentInstrument' => true,
+            );
+
+            // Add customer ID for token binding
+            if ( $order->get_user_id() ) {
+                $customer_id = $this->get_shopline_customer_id( $order->get_user_id() );
+                if ( $customer_id ) {
+                    $data['confirm']['paymentCustomerId'] = $customer_id;
+                }
             }
         }
+
+        // 記錄付款資料（用於除錯）
+        YS_Shopline_Logger::debug( 'Payment data prepared', array(
+            'order_id'         => $order->get_id(),
+            'amount'           => $data['amount']['value'],
+            'currency'         => $data['amount']['currency'],
+            'payment_behavior' => $payment_behavior,
+            'save_card'        => $save_card ? 'yes' : 'no',
+            'is_subscription'  => $is_subscription ? 'yes' : 'no',
+            'pay_session'      => substr( $pay_session, 0, 20 ) . '...',
+        ) );
 
         return apply_filters( 'ys_shopline_payment_data', $data, $order, $this );
     }
