@@ -512,12 +512,19 @@ jQuery(function ($) {
 
                 console.log('[YS Shopline] paySession saved, re-submitting form to WooCommerce...');
 
-                // Unblock and re-submit - WooCommerce will handle the AJAX
+                // Unblock form
                 $form.removeClass('processing').unblock();
 
-                // Re-submit form - this time the checkout_place_order event will return true
-                // because ys_shopline_pay_session is now present
-                $form.submit();
+                // Re-submit by clicking the submit button
+                // This ensures WooCommerce's checkout.js properly handles the submission
+                var $submitBtn = $form.find('#place_order');
+                if ($submitBtn.length) {
+                    console.log('[YS Shopline] Clicking place_order button...');
+                    $submitBtn.trigger('click');
+                } else {
+                    console.log('[YS Shopline] Submitting form directly...');
+                    $form.submit();
+                }
 
             }).catch(function (error) {
                 console.error('Shopline createPayment error:', error);
