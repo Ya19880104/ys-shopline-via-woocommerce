@@ -104,17 +104,148 @@ final class YSMyAccountEndpoint {
         // 處理表單提交（非 AJAX 備援）
         $this->handle_form_submission();
 
-        // 取得付款工具
-        $instruments_array = $this->customer_manager->get_payment_instruments( $user_id, true );
+        // 優先使用 WC Tokens
+        // 如果 WC Tokens 為空，則從 API 同步
+        $this->maybe_sync_tokens_from_api( $user_id );
 
-        // 轉換為 DTO
+        // 從 WC Tokens 取得儲存卡
+        $wc_tokens = \WC_Payment_Tokens::get_customer_tokens( $user_id, 'ys_shopline_credit_card' );
+
+        // 同時檢查訂閱 gateway 的 tokens
+        $subscription_tokens = \WC_Payment_Tokens::get_customer_tokens( $user_id, 'ys_shopline_credit_subscription' );
+        $wc_tokens = array_merge( $wc_tokens, $subscription_tokens );
+
+        // 轉換 WC Tokens 為顯示格式
         $instruments = array_map(
-            fn( $data ) => YSPaymentInstrumentDTO::from_response( $data ),
-            $instruments_array
+            fn( $token ) => $this->convert_wc_token_to_instrument( $token ),
+            $wc_tokens
         );
 
         // 載入模板
         $this->render_template( $instruments );
+    }
+
+    /**
+     * 當 WC Tokens 為空時，從 API 同步
+     *
+     * @param int $user_id WordPress 用戶 ID
+     */
+    private function maybe_sync_tokens_from_api( int $user_id ): void {
+        // 檢查現有的 WC Tokens
+        $tokens = \WC_Payment_Tokens::get_customer_tokens( $user_id, 'ys_shopline_credit_card' );
+
+        // 如果已有 tokens，不需要同步
+        if ( ! empty( $tokens ) ) {
+            return;
+        }
+
+        // 從 API 取得付款工具
+        $instruments_array = $this->customer_manager->get_payment_instruments( $user_id, true );
+
+        if ( empty( $instruments_array ) ) {
+            return;
+        }
+
+        YSLogger::info( '從 API 同步付款工具到 WC Tokens', [
+            'user_id' => $user_id,
+            'count'   => count( $instruments_array ),
+        ] );
+
+        // 同步到 WC Tokens
+        foreach ( $instruments_array as $instrument ) {
+            $this->create_wc_token_from_instrument( $user_id, $instrument );
+        }
+    }
+
+    /**
+     * 從付款工具建立 WC Token
+     *
+     * @param int   $user_id    WordPress 用戶 ID
+     * @param array $instrument 付款工具資料
+     * @return \WC_Payment_Token_CC|null
+     */
+    private function create_wc_token_from_instrument( int $user_id, array $instrument ): ?\WC_Payment_Token_CC {
+        $instrument_id = $instrument['paymentInstrumentId'] ?? '';
+        if ( empty( $instrument_id ) ) {
+            return null;
+        }
+
+        // 檢查是否已存在
+        $existing_tokens = \WC_Payment_Tokens::get_customer_tokens( $user_id, 'ys_shopline_credit_card' );
+        foreach ( $existing_tokens as $token ) {
+            if ( $token->get_token() === $instrument_id ) {
+                return $token;
+            }
+        }
+
+        $card_info = $instrument['instrumentCard'] ?? [];
+
+        // 取得卡片資訊（支援多種欄位名稱）
+        $card_type    = strtolower( $card_info['brand'] ?? $card_info['cardBrand'] ?? 'visa' );
+        $last4        = $card_info['last'] ?? $card_info['last4'] ?? $card_info['cardLast4'] ?? '****';
+        $expiry_month = $card_info['expiryMonth'] ?? $card_info['expireMonth'] ?? $card_info['expMonth'] ?? '12';
+        $expiry_year  = $card_info['expiryYear'] ?? $card_info['expireYear'] ?? $card_info['expYear'] ?? date( 'Y' );
+
+        // 確保 expiry 欄位有有效值
+        if ( empty( $expiry_month ) || ! is_numeric( $expiry_month ) ) {
+            $expiry_month = '12';
+        }
+        if ( empty( $expiry_year ) || ! is_numeric( $expiry_year ) ) {
+            $expiry_year = date( 'Y' );
+        }
+
+        $token = new \WC_Payment_Token_CC();
+        $token->set_token( $instrument_id );
+        $token->set_gateway_id( 'ys_shopline_credit_card' );
+        $token->set_user_id( $user_id );
+        $token->set_card_type( $card_type );
+        $token->set_last4( $last4 );
+        $token->set_expiry_month( $expiry_month );
+        $token->set_expiry_year( $expiry_year );
+
+        try {
+            if ( $token->save() ) {
+                YSLogger::debug( 'WC Token 建立成功', [
+                    'user_id'       => $user_id,
+                    'token_id'      => $token->get_id(),
+                    'instrument_id' => $instrument_id,
+                    'last4'         => $last4,
+                ] );
+                return $token;
+            }
+        } catch ( \Exception $e ) {
+            YSLogger::error( 'WC Token 建立失敗', [
+                'user_id'       => $user_id,
+                'instrument_id' => $instrument_id,
+                'error'         => $e->getMessage(),
+            ] );
+        }
+
+        return null;
+    }
+
+    /**
+     * 將 WC Token 轉換為顯示用的 DTO
+     *
+     * @param \WC_Payment_Token_CC $token WC Token
+     * @return YSPaymentInstrumentDTO
+     */
+    private function convert_wc_token_to_instrument( \WC_Payment_Token_CC $token ): YSPaymentInstrumentDTO {
+        // 建立一個相容的資料陣列
+        $data = [
+            'paymentInstrumentId' => $token->get_token(),
+            'instrumentStatus'    => 'ENABLED',
+            'instrumentCard'      => [
+                'brand'       => ucfirst( $token->get_card_type() ),
+                'last'        => $token->get_last4(),
+                'expiryMonth' => $token->get_expiry_month(),
+                'expiryYear'  => $token->get_expiry_year(),
+            ],
+            // 加入 WC Token ID 以便刪除
+            '_wc_token_id' => $token->get_id(),
+        ];
+
+        return YSPaymentInstrumentDTO::from_response( $data );
     }
 
     /**
@@ -336,13 +467,47 @@ final class YSMyAccountEndpoint {
             wp_send_json_error( [ 'message' => __( '缺少卡片 ID', 'ys-shopline-payment' ) ] );
         }
 
-        // 執行刪除
-        $success = $this->customer_manager->unbind_payment_instrument( $user_id, $instrument_id );
+        // 先刪除 WC Token（instrument_id 就是 token value）
+        $this->delete_wc_token_by_instrument_id( $user_id, $instrument_id );
 
-        if ( $success ) {
-            wp_send_json_success( [ 'message' => __( '卡片已成功刪除', 'ys-shopline-payment' ) ] );
-        } else {
-            wp_send_json_error( [ 'message' => __( '刪除失敗，請稍後再試', 'ys-shopline-payment' ) ] );
+        // 執行 API 解綁
+        $api_success = $this->customer_manager->unbind_payment_instrument( $user_id, $instrument_id );
+
+        // 無論 API 是否成功，WC Token 已刪除就算成功
+        // （API 可能早已刪除，或網路問題）
+        YSLogger::info( '刪除儲存卡', [
+            'user_id'       => $user_id,
+            'instrument_id' => $instrument_id,
+            'api_success'   => $api_success,
+        ] );
+
+        wp_send_json_success( [ 'message' => __( '卡片已成功刪除', 'ys-shopline-payment' ) ] );
+    }
+
+    /**
+     * 根據 instrument ID 刪除 WC Token
+     *
+     * @param int    $user_id       WordPress 用戶 ID
+     * @param string $instrument_id 付款工具 ID（也是 token value）
+     */
+    private function delete_wc_token_by_instrument_id( int $user_id, string $instrument_id ): void {
+        // 搜尋所有 gateway 的 tokens
+        $gateway_ids = [ 'ys_shopline_credit_card', 'ys_shopline_credit_subscription' ];
+
+        foreach ( $gateway_ids as $gateway_id ) {
+            $tokens = \WC_Payment_Tokens::get_customer_tokens( $user_id, $gateway_id );
+
+            foreach ( $tokens as $token ) {
+                if ( $token->get_token() === $instrument_id ) {
+                    \WC_Payment_Tokens::delete( $token->get_id() );
+                    YSLogger::debug( 'WC Token 已刪除', [
+                        'user_id'       => $user_id,
+                        'token_id'      => $token->get_id(),
+                        'instrument_id' => $instrument_id,
+                    ] );
+                    return;
+                }
+            }
         }
     }
 
@@ -366,12 +531,12 @@ final class YSMyAccountEndpoint {
             return;
         }
 
-        $success = $this->customer_manager->unbind_payment_instrument( $user_id, $instrument_id );
+        // 先刪除 WC Token
+        $this->delete_wc_token_by_instrument_id( $user_id, $instrument_id );
 
-        if ( $success ) {
-            wc_add_notice( __( '卡片已成功刪除', 'ys-shopline-payment' ), 'success' );
-        } else {
-            wc_add_notice( __( '刪除失敗，請稍後再試', 'ys-shopline-payment' ), 'error' );
-        }
+        // 執行 API 解綁
+        $this->customer_manager->unbind_payment_instrument( $user_id, $instrument_id );
+
+        wc_add_notice( __( '卡片已成功刪除', 'ys-shopline-payment' ), 'success' );
     }
 }
