@@ -161,6 +161,12 @@ final class YS_Shopline_Payment {
             YS_Shopline_Subscription::init();
         }
 
+        // Initialize customer management (儲存卡管理)
+        YS_Shopline_Customer::instance();
+
+        // Initialize order display enhancements (付款狀態顯示)
+        YS_Shopline_Order_Display::instance();
+
         // Register AJAX handlers
         $this->register_ajax_handlers();
 

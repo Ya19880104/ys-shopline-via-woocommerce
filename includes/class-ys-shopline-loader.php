@@ -22,6 +22,8 @@ class YS_Shopline_Loader {
         'YS_Shopline_Logger'          => 'includes/class-ys-shopline-logger.php',
         'YS_Shopline_API'             => 'includes/class-ys-shopline-api.php',
         'YS_Shopline_Webhook_Handler' => 'includes/class-ys-shopline-webhook-handler.php',
+        'YS_Shopline_Customer'        => 'includes/class-ys-shopline-customer.php',
+        'YS_Shopline_Order_Display'   => 'includes/class-ys-shopline-order-display.php',
 
         // Admin classes
         'YS_Shopline_Settings'        => 'includes/admin/class-ys-shopline-settings.php',

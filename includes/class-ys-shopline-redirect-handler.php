@@ -113,9 +113,14 @@ class YS_Shopline_Redirect_Handler {
             return;
         }
 
-        YS_Shopline_Logger::debug( 'Redirect handler: API response', array(
-            'status'    => isset( $response['status'] ) ? $response['status'] : 'unknown',
-            'subStatus' => isset( $response['subStatus'] ) ? $response['subStatus'] : 'unknown',
+        // 記錄完整的 API 回應結構以便除錯
+        YS_Shopline_Logger::debug( 'Redirect handler: Full API response', array(
+            'status'              => $response['status'] ?? 'unknown',
+            'subStatus'           => $response['subStatus'] ?? 'unknown',
+            'response_keys'       => array_keys( $response ),
+            'has_payment'         => isset( $response['payment'] ) ? 'yes' : 'no',
+            'has_paymentInstrument' => isset( $response['paymentInstrument'] ) ? 'yes' : 'no',
+            'paymentMethod'       => $response['paymentMethod'] ?? ( $response['payment']['paymentMethod'] ?? 'unknown' ),
         ) );
 
         $status = isset( $response['status'] ) ? $response['status'] : '';
@@ -135,27 +140,59 @@ class YS_Shopline_Redirect_Handler {
                 );
 
                 // 儲存付款資訊
-                if ( isset( $response['payment'] ) ) {
-                    $payment = $response['payment'];
-                    if ( isset( $payment['paymentMethod'] ) ) {
-                        $order->update_meta_data( '_ys_shopline_payment_method', $payment['paymentMethod'] );
-                    }
-                    if ( isset( $payment['creditCard'] ) ) {
-                        $card = $payment['creditCard'];
-                        $order->update_meta_data( '_ys_shopline_card_last4', isset( $card['last4'] ) ? $card['last4'] : '' );
-                        $order->update_meta_data( '_ys_shopline_card_brand', isset( $card['brand'] ) ? $card['brand'] : '' );
-                    }
+                // SHOPLINE API 可能把付款資訊放在不同位置
+                // 嘗試多種路徑取得資料
+                $payment_method = $response['paymentMethod']
+                    ?? $response['payment']['paymentMethod']
+                    ?? '';
+                $payment_instrument = $response['paymentInstrument']
+                    ?? $response['payment']['paymentInstrument']
+                    ?? array();
+                $credit_card = $response['creditCard']
+                    ?? $response['payment']['creditCard']
+                    ?? $payment_instrument['instrumentCard']
+                    ?? array();
+                $payment_customer_id = $response['paymentCustomerId']
+                    ?? $response['payment']['paymentCustomerId']
+                    ?? $response['customerId']
+                    ?? '';
+                $payment_instrument_id = $payment_instrument['paymentInstrumentId']
+                    ?? $payment_instrument['instrumentId']
+                    ?? '';
 
-                    // 同步付款工具到 WooCommerce Payment Tokens
-                    if ( isset( $payment['paymentInstrument']['paymentInstrumentId'] ) ) {
-                        self::sync_payment_token(
-                            $order,
-                            $payment['paymentInstrument']['paymentInstrumentId'],
-                            isset( $payment['creditCard'] ) ? $payment['creditCard'] : array(),
-                            isset( $payment['paymentCustomerId'] ) ? $payment['paymentCustomerId'] : ''
-                        );
-                    }
+                YS_Shopline_Logger::debug( 'Redirect handler: Extracted payment info', array(
+                    'payment_method'        => $payment_method,
+                    'payment_customer_id'   => $payment_customer_id,
+                    'payment_instrument_id' => $payment_instrument_id,
+                    'credit_card'           => $credit_card,
+                    'raw_instrument'        => $payment_instrument,
+                ) );
+
+                if ( $payment_method ) {
+                    $order->update_meta_data( '_ys_shopline_payment_method', $payment_method );
                 }
+                if ( ! empty( $credit_card ) ) {
+                    $order->update_meta_data( '_ys_shopline_card_last4', $credit_card['last4'] ?? $credit_card['last'] ?? '' );
+                    $order->update_meta_data( '_ys_shopline_card_brand', $credit_card['brand'] ?? '' );
+                }
+
+                // 同步付款工具到 WooCommerce Payment Tokens
+                if ( ! empty( $payment_instrument_id ) ) {
+                    self::sync_payment_token(
+                        $order,
+                        $payment_instrument_id,
+                        $credit_card,
+                        $payment_customer_id
+                    );
+                }
+
+                // 儲存完整的付款詳情
+                $order->update_meta_data( '_ys_shopline_payment_detail', array(
+                    'paymentMethod'       => $payment_method,
+                    'paymentInstrument'   => $payment_instrument,
+                    'creditCard'          => $credit_card,
+                    'paymentCustomerId'   => $payment_customer_id,
+                ) );
 
                 $order->update_meta_data( '_ys_shopline_payment_status', $status );
                 $order->save();
@@ -215,11 +252,17 @@ class YS_Shopline_Redirect_Handler {
             return;
         }
 
+        // 驗證必要的 payment_instrument_id
+        if ( empty( $payment_instrument_id ) ) {
+            YS_Shopline_Logger::debug( 'Redirect handler: Empty payment_instrument_id, skipping token sync' );
+            return;
+        }
+
         // 決定 gateway ID
         // 優先使用訂單的付款方式，如果是訂閱則使用訂閱專用 gateway
         $gateway_id = $order->get_payment_method();
         if ( empty( $gateway_id ) || strpos( $gateway_id, 'ys_shopline' ) !== 0 ) {
-            $gateway_id = 'ys_shopline_credit';
+            $gateway_id = 'ys_shopline_credit_card';
         }
 
         // 檢查 token 是否已存在
@@ -235,14 +278,41 @@ class YS_Shopline_Redirect_Handler {
             }
         }
 
+        // 取得卡片資訊（支援多種 API 回傳格式）
+        // SHOPLINE API 可能使用不同的欄位名稱
+        $card_type    = strtolower( $card_info['brand'] ?? $card_info['cardBrand'] ?? 'visa' );
+        $last4        = $card_info['last4'] ?? $card_info['last'] ?? $card_info['cardLast4'] ?? '0000';
+        $expiry_month = $card_info['expireMonth'] ?? $card_info['expiryMonth'] ?? $card_info['expMonth'] ?? '12';
+        $expiry_year  = $card_info['expireYear'] ?? $card_info['expiryYear'] ?? $card_info['expYear'] ?? date( 'Y' );
+
+        // 確保 expiry 欄位有有效值（WooCommerce 必須有這些欄位）
+        if ( empty( $expiry_month ) || ! is_numeric( $expiry_month ) ) {
+            $expiry_month = '12';
+        }
+        if ( empty( $expiry_year ) || ! is_numeric( $expiry_year ) ) {
+            $expiry_year = date( 'Y' );
+        }
+        if ( empty( $last4 ) ) {
+            $last4 = '0000';
+        }
+
+        YS_Shopline_Logger::debug( 'Redirect handler: Creating payment token', array(
+            'payment_instrument_id' => $payment_instrument_id,
+            'card_type'             => $card_type,
+            'last4'                 => $last4,
+            'expiry_month'          => $expiry_month,
+            'expiry_year'           => $expiry_year,
+            'raw_card_info'         => $card_info,
+        ) );
+
         // 建立新 token
         $token = new WC_Payment_Token_CC();
         $token->set_token( $payment_instrument_id );
         $token->set_gateway_id( $gateway_id );
-        $token->set_card_type( strtolower( isset( $card_info['brand'] ) ? $card_info['brand'] : 'card' ) );
-        $token->set_last4( isset( $card_info['last4'] ) ? $card_info['last4'] : '****' );
-        $token->set_expiry_month( isset( $card_info['expireMonth'] ) ? $card_info['expireMonth'] : '' );
-        $token->set_expiry_year( isset( $card_info['expireYear'] ) ? $card_info['expireYear'] : '' );
+        $token->set_card_type( $card_type );
+        $token->set_last4( $last4 );
+        $token->set_expiry_month( $expiry_month );
+        $token->set_expiry_year( $expiry_year );
         $token->set_user_id( $user_id );
 
         // 如果是第一張卡，設為預設
@@ -250,27 +320,36 @@ class YS_Shopline_Redirect_Handler {
             $token->set_default( true );
         }
 
-        $saved = $token->save();
+        try {
+            $saved = $token->save();
 
-        if ( $saved ) {
-            YS_Shopline_Logger::info( 'Redirect handler: Payment token synced', array(
-                'user_id'               => $user_id,
-                'gateway_id'            => $gateway_id,
-                'payment_instrument_id' => $payment_instrument_id,
-                'card_last4'            => isset( $card_info['last4'] ) ? $card_info['last4'] : '****',
-            ) );
+            if ( $saved ) {
+                YS_Shopline_Logger::info( 'Redirect handler: Payment token synced', array(
+                    'user_id'               => $user_id,
+                    'token_id'              => $token->get_id(),
+                    'gateway_id'            => $gateway_id,
+                    'payment_instrument_id' => $payment_instrument_id,
+                    'card_last4'            => $last4,
+                ) );
 
-            // 同時儲存 SHOPLINE customer ID 到用戶 meta（如果還沒有）
-            if ( $payment_customer_id ) {
-                $existing_customer_id = get_user_meta( $user_id, '_ys_shopline_customer_id', true );
-                if ( empty( $existing_customer_id ) ) {
-                    update_user_meta( $user_id, '_ys_shopline_customer_id', $payment_customer_id );
+                // 同時儲存 SHOPLINE customer ID 到用戶 meta（如果還沒有）
+                if ( $payment_customer_id ) {
+                    $existing_customer_id = get_user_meta( $user_id, '_ys_shopline_customer_id', true );
+                    if ( empty( $existing_customer_id ) ) {
+                        update_user_meta( $user_id, '_ys_shopline_customer_id', $payment_customer_id );
+                    }
                 }
+            } else {
+                YS_Shopline_Logger::error( 'Redirect handler: Failed to save payment token (save returned false)', array(
+                    'user_id'               => $user_id,
+                    'payment_instrument_id' => $payment_instrument_id,
+                ) );
             }
-        } else {
-            YS_Shopline_Logger::error( 'Redirect handler: Failed to save payment token', array(
+        } catch ( Exception $e ) {
+            YS_Shopline_Logger::error( 'Redirect handler: Exception when saving payment token', array(
                 'user_id'               => $user_id,
                 'payment_instrument_id' => $payment_instrument_id,
+                'error'                 => $e->getMessage(),
             ) );
         }
     }
