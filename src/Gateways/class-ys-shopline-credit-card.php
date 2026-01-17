@@ -28,6 +28,7 @@ class YS_Shopline_Credit_Card extends YS_Shopline_Gateway_Base {
         $this->supports = array(
             'products',
             'refunds',
+            'tokenization',
         );
 
         parent::__construct();

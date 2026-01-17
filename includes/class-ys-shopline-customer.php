@@ -69,13 +69,21 @@ class YS_Shopline_Customer {
 	/**
 	 * Initialize hooks.
 	 *
-	 * 注意：儲存卡管理頁面已移至 src/Customer/YSMyAccountEndpoint.php
-	 * 使用 /my-account/ys-saved-cards/ 端點，不再使用 WC 內建的 payment-methods
+	 * 整合 WC 內建的 payment-methods 頁面
+	 * 樣式和按鈕已移至 templates/myaccount/payment-methods.php
 	 */
 	private function init_hooks() {
-		// 移除 WC 內建付款方式頁面的 hook，改用 ys-saved-cards 頁面
-		// add_action( 'woocommerce_account_payment-methods_endpoint', array( $this, 'render_payment_methods_page' ), 5 );
-		// add_action( 'woocommerce_account_payment-methods_endpoint', array( $this, 'maybe_sync_tokens_from_api' ), 1 );
+		// 當使用者進入 payment-methods 頁面時，自動同步 tokens
+		add_action( 'woocommerce_account_payment-methods_endpoint', array( $this, 'maybe_sync_tokens_from_api' ), 1 );
+
+		// 當 WC Token 被刪除時，呼叫 Shopline API 解綁
+		add_action( 'woocommerce_payment_token_deleted', array( $this, 'on_payment_token_deleted' ), 10, 2 );
+
+		// AJAX 刪除卡片（保留相容性）
+		add_action( 'wp_ajax_ys_shopline_delete_card', array( $this, 'ajax_delete_card' ) );
+
+		// AJAX 同步卡片
+		add_action( 'wp_ajax_ys_shopline_sync_cards', array( $this, 'ajax_sync_cards' ) );
 	}
 
 	/**
@@ -182,9 +190,8 @@ class YS_Shopline_Customer {
 			return array();
 		}
 
-		$response = $this->api->get_payment_instruments( $customer_id, array(
-			'instrumentStatusList' => array( 'ENABLED', 'CREATED' ),
-		) );
+		// 不帶 filter，取得所有卡片（帶 filter 會導致 API 返回 null）
+		$response = $this->api->get_payment_instruments( $customer_id );
 
 		if ( is_wp_error( $response ) ) {
 			YS_Shopline_Logger::error( 'Failed to get payment instruments: ' . $response->get_error_message(), array(
@@ -238,6 +245,60 @@ class YS_Shopline_Customer {
 		) );
 
 		return true;
+	}
+
+	/**
+	 * 當 WC Token 被刪除時的回呼
+	 *
+	 * WooCommerce 在 /my-account/payment-methods/ 頁面刪除 token 時會觸發這個 action。
+	 * 我們攔截這個事件，呼叫 Shopline API 解綁付款工具。
+	 *
+	 * @param int                $token_id Token ID
+	 * @param WC_Payment_Token   $token    Token 物件
+	 */
+	public function on_payment_token_deleted( $token_id, $token ) {
+		// 只處理我們閘道的 tokens
+		$gateway_id = $token->get_gateway_id();
+		if ( strpos( $gateway_id, 'ys_shopline' ) === false ) {
+			return;
+		}
+
+		$user_id       = $token->get_user_id();
+		$instrument_id = $token->get_token();
+
+		if ( ! $user_id || ! $instrument_id ) {
+			return;
+		}
+
+		$customer_id = $this->get_customer_id( $user_id );
+
+		if ( ! $customer_id || ! $this->api ) {
+			YS_Shopline_Logger::warning( 'Cannot unbind payment instrument: no customer ID or API', array(
+				'user_id'       => $user_id,
+				'instrument_id' => $instrument_id,
+			) );
+			return;
+		}
+
+		// 呼叫 Shopline API 解綁付款工具
+		$response = $this->api->delete_payment_instrument( $customer_id, $instrument_id );
+
+		if ( is_wp_error( $response ) ) {
+			// API 失敗時只記錄警告，不影響 WC Token 刪除（已經被 WC 刪除了）
+			YS_Shopline_Logger::warning( 'Failed to unbind payment instrument via API (WC token already deleted): ' . $response->get_error_message(), array(
+				'user_id'       => $user_id,
+				'instrument_id' => $instrument_id,
+			) );
+			return;
+		}
+
+		// 清除快取
+		$this->clear_instruments_cache( $user_id );
+
+		YS_Shopline_Logger::info( 'Payment instrument unbound via WC payment-methods page', array(
+			'user_id'       => $user_id,
+			'instrument_id' => $instrument_id,
+		) );
 	}
 
 	/**
@@ -576,5 +637,66 @@ class YS_Shopline_Customer {
 	public function has_saved_instruments( $user_id ) {
 		$instruments = $this->get_payment_instruments( $user_id );
 		return ! empty( $instruments );
+	}
+
+	/**
+	 * AJAX 同步卡片
+	 */
+	public function ajax_sync_cards() {
+		check_ajax_referer( 'ys_shopline_sync_cards', 'nonce' );
+
+		$user_id = get_current_user_id();
+		if ( ! $user_id ) {
+			wp_send_json_error( array( 'message' => '請先登入' ) );
+		}
+
+		$customer_id = $this->get_customer_id( $user_id );
+		if ( ! $customer_id ) {
+			wp_send_json_error( array( 'message' => '找不到 Shopline 會員資料' ) );
+		}
+
+		// 清除快取，強制從 API 取得最新資料
+		$this->clear_instruments_cache( $user_id );
+
+		// 從 API 取得付款工具
+		$instruments = $this->get_payment_instruments( $user_id, true );
+
+		if ( empty( $instruments ) ) {
+			wp_send_json_success( array(
+				'message' => '沒有找到儲存的卡片',
+				'count'   => 0,
+			) );
+		}
+
+		// 取得現有的 WC Tokens
+		$existing_tokens = WC_Payment_Tokens::get_customer_tokens( $user_id, 'ys_shopline_credit_card' );
+		$existing_instrument_ids = array();
+		foreach ( $existing_tokens as $token ) {
+			$existing_instrument_ids[] = $token->get_token();
+		}
+
+		// 同步到 WC Tokens
+		$synced_count = 0;
+		foreach ( $instruments as $instrument ) {
+			$instrument_id = $instrument['paymentInstrumentId'] ?? '';
+			if ( $instrument_id && ! in_array( $instrument_id, $existing_instrument_ids, true ) ) {
+				$result = $this->create_wc_token_from_instrument( $user_id, $instrument );
+				if ( $result ) {
+					$synced_count++;
+				}
+			}
+		}
+
+		YS_Shopline_Logger::info( 'Cards synced from API', array(
+			'user_id'      => $user_id,
+			'total'        => count( $instruments ),
+			'synced'       => $synced_count,
+		) );
+
+		wp_send_json_success( array(
+			'message' => sprintf( '同步完成，共 %d 張卡片', count( $instruments ) ),
+			'count'   => count( $instruments ),
+			'synced'  => $synced_count,
+		) );
 	}
 }

@@ -114,6 +114,35 @@ final class YS_Shopline_Payment {
 
         // Add settings link on plugins page
         add_filter( 'plugin_action_links_' . YS_SHOPLINE_PLUGIN_BASENAME, array( $this, 'plugin_action_links' ) );
+
+        // Add plugin templates path for WooCommerce template overrides
+        add_filter( 'woocommerce_locate_template', array( $this, 'locate_template' ), 10, 3 );
+    }
+
+    /**
+     * Locate plugin templates.
+     *
+     * 讓 WooCommerce 優先使用外掛中的 template 檔案
+     *
+     * @param string $template      Template file path.
+     * @param string $template_name Template name.
+     * @param string $template_path Template path.
+     * @return string
+     */
+    public function locate_template( $template, $template_name, $template_path ) {
+        // 只處理 payment-methods.php
+        if ( 'myaccount/payment-methods.php' !== $template_name ) {
+            return $template;
+        }
+
+        // 檢查外掛是否有這個 template
+        $plugin_template = YS_SHOPLINE_PLUGIN_DIR . 'templates/' . $template_name;
+
+        if ( file_exists( $plugin_template ) ) {
+            return $plugin_template;
+        }
+
+        return $template;
     }
 
     /**
@@ -194,12 +223,12 @@ final class YS_Shopline_Payment {
      */
     private function init_new_architecture(): void {
         // Check if autoloader is available
-        if ( ! class_exists( 'YangSheep\\ShoplinePayment\\Customer\\YSMyAccountEndpoint' ) ) {
+        if ( ! class_exists( 'YangSheep\\ShoplinePayment\\Handlers\\YSWebhookHandler' ) ) {
             return;
         }
 
-        // Initialize customer management (My Account - 管理儲存卡)
-        \YangSheep\ShoplinePayment\Customer\YSMyAccountEndpoint::init();
+        // 注意：YSMyAccountEndpoint 已棄用，改用 WC 內建的 payment-methods 頁面
+        // 自訂 template 位於 templates/myaccount/payment-methods.php
 
         // Initialize new webhook handler (REST API)
         \YangSheep\ShoplinePayment\Handlers\YSWebhookHandler::init();
