@@ -20,7 +20,7 @@ ys-shopline-via-woocommerce/
 │       ├── shopline-checkout.js        # 結帳頁 SDK 初始化
 │       └── ys-shopline-myaccount.js    # My Account 卡片管理
 │
-├── includes/                            # 舊架構（維護中）
+├── includes/                            # 核心類別
 │   ├── class-ys-shopline-loader.php    # 自動加載器
 │   ├── class-ys-shopline-logger.php    # 日誌記錄
 │   ├── class-ys-shopline-api.php       # API 通訊
@@ -29,34 +29,23 @@ ys-shopline-via-woocommerce/
 │   ├── class-ys-shopline-order-display.php
 │   ├── class-ys-shopline-redirect-handler.php
 │   │
-│   ├── admin/
-│   │   └── class-ys-shopline-settings.php
-│   │
-│   └── gateways/                        # 支付閘道
-│       ├── class-ys-shopline-gateway-base.php
-│       ├── class-ys-shopline-credit-card.php
-│       ├── class-ys-shopline-credit-subscription.php
-│       ├── class-ys-shopline-virtual-account.php
-│       ├── class-ys-shopline-jkopay.php
-│       ├── class-ys-shopline-applepay.php
-│       ├── class-ys-shopline-linepay.php
-│       ├── class-ys-shopline-chailease-bnpl.php
-│       └── class-ys-shopline-subscription.php
+│   └── admin/
+│       └── class-ys-shopline-settings.php
 │
-├── src/                                 # 新架構（PSR-4）
-│   ├── Api/
-│   │   ├── YSShoplineClient.php        # API 客戶端
-│   │   └── YSShoplineRequester.php     # HTTP 請求器
+├── src/                                 # 功能模組
+│   ├── Api/                            # API 客戶端（PSR-4）
+│   │   ├── YSShoplineClient.php
+│   │   └── YSShoplineRequester.php
 │   │
-│   ├── Blocks/
+│   ├── Blocks/                         # Block Checkout（PSR-4）
 │   │   ├── YSBlocksSupport.php
 │   │   └── YSBlocksIntegration.php
 │   │
-│   ├── Customer/
+│   ├── Customer/                       # 儲存卡管理（PSR-4）
 │   │   ├── YSCustomerManager.php
 │   │   └── YSMyAccountEndpoint.php
 │   │
-│   ├── DTOs/                           # 資料傳輸物件
+│   ├── DTOs/                           # 資料傳輸物件（PSR-4）
 │   │   ├── YSSessionDTO.php
 │   │   ├── YSPaymentDTO.php
 │   │   ├── YSPaymentInstrumentDTO.php
@@ -64,15 +53,22 @@ ys-shopline-via-woocommerce/
 │   │   ├── YSCustomerDTO.php
 │   │   └── YSRefundDTO.php
 │   │
-│   ├── Gateways/
-│   │   ├── YSAbstractGateway.php
-│   │   └── YSRedirectGateway.php
+│   ├── Gateways/                       # 付款閘道（SDK 站內付款）
+│   │   ├── class-ys-shopline-gateway-base.php
+│   │   ├── class-ys-shopline-credit-card.php
+│   │   ├── class-ys-shopline-credit-subscription.php
+│   │   ├── class-ys-shopline-virtual-account.php
+│   │   ├── class-ys-shopline-jkopay.php
+│   │   ├── class-ys-shopline-applepay.php
+│   │   ├── class-ys-shopline-linepay.php
+│   │   ├── class-ys-shopline-chailease-bnpl.php
+│   │   └── class-ys-shopline-subscription.php
 │   │
-│   ├── Handlers/
+│   ├── Handlers/                       # Webhook、狀態同步（PSR-4）
 │   │   ├── YSWebhookHandler.php
 │   │   └── YSStatusManager.php
 │   │
-│   └── Utils/
+│   └── Utils/                          # 工具類別（PSR-4）
 │       ├── YSLogger.php
 │       ├── YSOrderMeta.php
 │       └── YSSignatureVerifier.php
@@ -89,14 +85,15 @@ ys-shopline-via-woocommerce/
 
 ## 架構說明
 
-### 雙架構設計
+### 混合架構設計
 
-外掛採用雙架構並行設計：
+外掛採用混合架構：
 
-| 架構 | 位置 | 命名規則 | 說明 |
-|------|------|---------|------|
-| 舊架構 | `includes/` | `YS_Shopline_*` | 維護中，確保相容性 |
-| 新架構 | `src/` | `YS*` (PSR-4) | 主要開發方向 |
+| 目錄 | 命名規則 | 說明 |
+|------|---------|------|
+| `includes/` | `YS_Shopline_*` | 核心類別、API、設定頁 |
+| `src/Gateways/` | `YS_Shopline_*` | 付款閘道（SDK 站內付款） |
+| `src/` 其他 | `YS*` (PSR-4) | 輔助功能模組 |
 
 ### 命名空間
 
@@ -337,7 +334,7 @@ add_action( 'wp_ajax_ys_shopline_sync_cards', [ $this, 'sync_cards' ] );
 
 ### 新增支付方式
 
-1. 在 `includes/gateways/` 建立新閘道類別
+1. 在 `src/Gateways/` 建立新閘道類別
 2. 繼承 `YS_Shopline_Gateway_Base`
 3. 實作必要方法：
    - `__construct()` - 設定 id, title, supports

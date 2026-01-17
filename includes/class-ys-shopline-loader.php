@@ -28,16 +28,16 @@ class YS_Shopline_Loader {
         // Admin classes
         'YS_Shopline_Settings'        => 'includes/admin/class-ys-shopline-settings.php',
 
-        // Gateway classes
-        'YS_Shopline_Gateway_Base'       => 'includes/gateways/class-ys-shopline-gateway-base.php',
-        'YS_Shopline_Credit_Card'        => 'includes/gateways/class-ys-shopline-credit-card.php',
-        'YS_Shopline_Credit_Subscription'=> 'includes/gateways/class-ys-shopline-credit-subscription.php',
-        'YS_Shopline_Virtual_Account'    => 'includes/gateways/class-ys-shopline-virtual-account.php',
-        'YS_Shopline_JKOPay'             => 'includes/gateways/class-ys-shopline-jkopay.php',
-        'YS_Shopline_ApplePay'           => 'includes/gateways/class-ys-shopline-applepay.php',
-        'YS_Shopline_LinePay'            => 'includes/gateways/class-ys-shopline-linepay.php',
-        'YS_Shopline_Chailease_BNPL'     => 'includes/gateways/class-ys-shopline-chailease-bnpl.php',
-        'YS_Shopline_Subscription'       => 'includes/gateways/class-ys-shopline-subscription.php',
+        // Gateway classes (moved to src/Gateways/)
+        'YS_Shopline_Gateway_Base'       => 'src/Gateways/class-ys-shopline-gateway-base.php',
+        'YS_Shopline_Credit_Card'        => 'src/Gateways/class-ys-shopline-credit-card.php',
+        'YS_Shopline_Credit_Subscription'=> 'src/Gateways/class-ys-shopline-credit-subscription.php',
+        'YS_Shopline_Virtual_Account'    => 'src/Gateways/class-ys-shopline-virtual-account.php',
+        'YS_Shopline_JKOPay'             => 'src/Gateways/class-ys-shopline-jkopay.php',
+        'YS_Shopline_ApplePay'           => 'src/Gateways/class-ys-shopline-applepay.php',
+        'YS_Shopline_LinePay'            => 'src/Gateways/class-ys-shopline-linepay.php',
+        'YS_Shopline_Chailease_BNPL'     => 'src/Gateways/class-ys-shopline-chailease-bnpl.php',
+        'YS_Shopline_Subscription'       => 'src/Gateways/class-ys-shopline-subscription.php',
     );
 
     /**

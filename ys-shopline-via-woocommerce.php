@@ -78,19 +78,19 @@ final class YS_Shopline_Payment {
      */
     private function includes_wc() {
         // Gateway base class
-        require_once YS_SHOPLINE_PLUGIN_DIR . 'includes/gateways/class-ys-shopline-gateway-base.php';
+        require_once YS_SHOPLINE_PLUGIN_DIR . 'src/Gateways/class-ys-shopline-gateway-base.php';
 
         // Payment gateways
-        require_once YS_SHOPLINE_PLUGIN_DIR . 'includes/gateways/class-ys-shopline-credit-card.php';
-        require_once YS_SHOPLINE_PLUGIN_DIR . 'includes/gateways/class-ys-shopline-credit-subscription.php';
-        require_once YS_SHOPLINE_PLUGIN_DIR . 'includes/gateways/class-ys-shopline-virtual-account.php';
-        require_once YS_SHOPLINE_PLUGIN_DIR . 'includes/gateways/class-ys-shopline-jkopay.php';
-        require_once YS_SHOPLINE_PLUGIN_DIR . 'includes/gateways/class-ys-shopline-applepay.php';
-        require_once YS_SHOPLINE_PLUGIN_DIR . 'includes/gateways/class-ys-shopline-linepay.php';
-        require_once YS_SHOPLINE_PLUGIN_DIR . 'includes/gateways/class-ys-shopline-chailease-bnpl.php';
+        require_once YS_SHOPLINE_PLUGIN_DIR . 'src/Gateways/class-ys-shopline-credit-card.php';
+        require_once YS_SHOPLINE_PLUGIN_DIR . 'src/Gateways/class-ys-shopline-credit-subscription.php';
+        require_once YS_SHOPLINE_PLUGIN_DIR . 'src/Gateways/class-ys-shopline-virtual-account.php';
+        require_once YS_SHOPLINE_PLUGIN_DIR . 'src/Gateways/class-ys-shopline-jkopay.php';
+        require_once YS_SHOPLINE_PLUGIN_DIR . 'src/Gateways/class-ys-shopline-applepay.php';
+        require_once YS_SHOPLINE_PLUGIN_DIR . 'src/Gateways/class-ys-shopline-linepay.php';
+        require_once YS_SHOPLINE_PLUGIN_DIR . 'src/Gateways/class-ys-shopline-chailease-bnpl.php';
 
         // Subscription handler
-        require_once YS_SHOPLINE_PLUGIN_DIR . 'includes/gateways/class-ys-shopline-subscription.php';
+        require_once YS_SHOPLINE_PLUGIN_DIR . 'src/Gateways/class-ys-shopline-subscription.php';
 
         // Redirect handler - 處理付款完成後的跳轉查詢
         require_once YS_SHOPLINE_PLUGIN_DIR . 'includes/class-ys-shopline-redirect-handler.php';
@@ -194,12 +194,9 @@ final class YS_Shopline_Payment {
      */
     private function init_new_architecture(): void {
         // Check if autoloader is available
-        if ( ! class_exists( 'YangSheep\\ShoplinePayment\\Gateways\\YSRedirectGateway' ) ) {
+        if ( ! class_exists( 'YangSheep\\ShoplinePayment\\Customer\\YSMyAccountEndpoint' ) ) {
             return;
         }
-
-        // Initialize new gateways
-        \YangSheep\ShoplinePayment\Gateways\YSRedirectGateway::init();
 
         // Initialize customer management (My Account - 管理儲存卡)
         \YangSheep\ShoplinePayment\Customer\YSMyAccountEndpoint::init();
