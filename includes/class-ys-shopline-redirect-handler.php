@@ -259,22 +259,28 @@ class YS_Shopline_Redirect_Handler {
         }
 
         // 決定 gateway ID
-        // 優先使用訂單的付款方式，如果是訂閱則使用訂閱專用 gateway
+        // 優先使用訂單的付款方式（例如 ys_shopline_credit）
         $gateway_id = $order->get_payment_method();
         if ( empty( $gateway_id ) || strpos( $gateway_id, 'ys_shopline' ) !== 0 ) {
-            $gateway_id = 'ys_shopline_credit_card';
+            // 預設使用 ys_shopline_credit（主要信用卡 gateway）
+            $gateway_id = 'ys_shopline_credit';
         }
 
-        // 檢查 token 是否已存在
-        $existing_tokens = WC_Payment_Tokens::get_customer_tokens( $user_id, $gateway_id );
+        // 檢查 token 是否已存在（檢查所有相關 gateway）
+        $all_gateway_ids = array( $gateway_id, 'ys_shopline_credit', 'ys_shopline_credit_subscription', 'ys_shopline_credit_card' );
+        $all_gateway_ids = array_unique( $all_gateway_ids );
 
-        foreach ( $existing_tokens as $existing_token ) {
-            if ( $existing_token->get_token() === $payment_instrument_id ) {
-                YS_Shopline_Logger::debug( 'Redirect handler: Token already exists', array(
-                    'token_id'              => $existing_token->get_id(),
-                    'payment_instrument_id' => $payment_instrument_id,
-                ) );
-                return;
+        foreach ( $all_gateway_ids as $check_gateway_id ) {
+            $existing_tokens = WC_Payment_Tokens::get_customer_tokens( $user_id, $check_gateway_id );
+
+            foreach ( $existing_tokens as $existing_token ) {
+                if ( $existing_token->get_token() === $payment_instrument_id ) {
+                    YS_Shopline_Logger::debug( 'Redirect handler: Token already exists', array(
+                        'token_id'              => $existing_token->get_id(),
+                        'payment_instrument_id' => $payment_instrument_id,
+                    ) );
+                    return;
+                }
             }
         }
 

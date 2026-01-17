@@ -109,11 +109,16 @@ final class YSMyAccountEndpoint {
         $this->maybe_sync_tokens_from_api( $user_id );
 
         // 從 WC Tokens 取得儲存卡
-        $wc_tokens = \WC_Payment_Tokens::get_customer_tokens( $user_id, 'ys_shopline_credit_card' );
+        // 注意：Gateway ID 是 ys_shopline_credit（不是 ys_shopline_credit_card）
+        $wc_tokens = \WC_Payment_Tokens::get_customer_tokens( $user_id, 'ys_shopline_credit' );
 
         // 同時檢查訂閱 gateway 的 tokens
         $subscription_tokens = \WC_Payment_Tokens::get_customer_tokens( $user_id, 'ys_shopline_credit_subscription' );
         $wc_tokens = array_merge( $wc_tokens, $subscription_tokens );
+
+        // 也檢查舊的 gateway ID（相容性）
+        $legacy_tokens = \WC_Payment_Tokens::get_customer_tokens( $user_id, 'ys_shopline_credit_card' );
+        $wc_tokens = array_merge( $wc_tokens, $legacy_tokens );
 
         // 轉換 WC Tokens 為顯示格式
         $instruments = array_map(
@@ -131,8 +136,10 @@ final class YSMyAccountEndpoint {
      * @param int $user_id WordPress 用戶 ID
      */
     private function maybe_sync_tokens_from_api( int $user_id ): void {
-        // 檢查現有的 WC Tokens
-        $tokens = \WC_Payment_Tokens::get_customer_tokens( $user_id, 'ys_shopline_credit_card' );
+        // 檢查現有的 WC Tokens（所有相關 gateway）
+        $tokens = \WC_Payment_Tokens::get_customer_tokens( $user_id, 'ys_shopline_credit' );
+        $tokens = array_merge( $tokens, \WC_Payment_Tokens::get_customer_tokens( $user_id, 'ys_shopline_credit_subscription' ) );
+        $tokens = array_merge( $tokens, \WC_Payment_Tokens::get_customer_tokens( $user_id, 'ys_shopline_credit_card' ) );
 
         // 如果已有 tokens，不需要同步
         if ( ! empty( $tokens ) ) {
@@ -170,11 +177,14 @@ final class YSMyAccountEndpoint {
             return null;
         }
 
-        // 檢查是否已存在
-        $existing_tokens = \WC_Payment_Tokens::get_customer_tokens( $user_id, 'ys_shopline_credit_card' );
-        foreach ( $existing_tokens as $token ) {
-            if ( $token->get_token() === $instrument_id ) {
-                return $token;
+        // 檢查是否已存在（所有相關 gateway）
+        $gateway_ids = [ 'ys_shopline_credit', 'ys_shopline_credit_subscription', 'ys_shopline_credit_card' ];
+        foreach ( $gateway_ids as $gw_id ) {
+            $existing_tokens = \WC_Payment_Tokens::get_customer_tokens( $user_id, $gw_id );
+            foreach ( $existing_tokens as $token ) {
+                if ( $token->get_token() === $instrument_id ) {
+                    return $token;
+                }
             }
         }
 
@@ -196,7 +206,8 @@ final class YSMyAccountEndpoint {
 
         $token = new \WC_Payment_Token_CC();
         $token->set_token( $instrument_id );
-        $token->set_gateway_id( 'ys_shopline_credit_card' );
+        // 使用正確的 gateway ID
+        $token->set_gateway_id( 'ys_shopline_credit' );
         $token->set_user_id( $user_id );
         $token->set_card_type( $card_type );
         $token->set_last4( $last4 );
