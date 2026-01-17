@@ -68,16 +68,14 @@ class YS_Shopline_Customer {
 
 	/**
 	 * Initialize hooks.
+	 *
+	 * 注意：儲存卡管理頁面已移至 src/Customer/YSMyAccountEndpoint.php
+	 * 使用 /my-account/ys-saved-cards/ 端點，不再使用 WC 內建的 payment-methods
 	 */
 	private function init_hooks() {
-		// 我的帳戶 - 付款方式頁面
-		add_action( 'woocommerce_account_payment-methods_endpoint', array( $this, 'render_payment_methods_page' ), 5 );
-
-		// AJAX 刪除卡片 - 已由 src/Customer/YSMyAccountEndpoint 處理，避免衝突
-		// add_action( 'wp_ajax_ys_shopline_delete_card', array( $this, 'ajax_delete_card' ) );
-
-		// 同步儲存卡到 WC Tokens（當用戶進入我的帳戶時）
-		add_action( 'woocommerce_account_payment-methods_endpoint', array( $this, 'maybe_sync_tokens_from_api' ), 1 );
+		// 移除 WC 內建付款方式頁面的 hook，改用 ys-saved-cards 頁面
+		// add_action( 'woocommerce_account_payment-methods_endpoint', array( $this, 'render_payment_methods_page' ), 5 );
+		// add_action( 'woocommerce_account_payment-methods_endpoint', array( $this, 'maybe_sync_tokens_from_api' ), 1 );
 	}
 
 	/**
