@@ -73,8 +73,8 @@ class YS_Shopline_Customer {
 		// 我的帳戶 - 付款方式頁面
 		add_action( 'woocommerce_account_payment-methods_endpoint', array( $this, 'render_payment_methods_page' ), 5 );
 
-		// AJAX 刪除卡片
-		add_action( 'wp_ajax_ys_shopline_delete_card', array( $this, 'ajax_delete_card' ) );
+		// AJAX 刪除卡片 - 已由 src/Customer/YSMyAccountEndpoint 處理，避免衝突
+		// add_action( 'wp_ajax_ys_shopline_delete_card', array( $this, 'ajax_delete_card' ) );
 
 		// 同步儲存卡到 WC Tokens（當用戶進入我的帳戶時）
 		add_action( 'woocommerce_account_payment-methods_endpoint', array( $this, 'maybe_sync_tokens_from_api' ), 1 );
