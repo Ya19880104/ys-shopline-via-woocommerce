@@ -108,26 +108,15 @@ final class YSMyAccountEndpoint {
         $this->handle_form_submission();
 
         // 從 WC Tokens 取得儲存卡（不自動同步 API，改由按鈕觸發）
-        // 檢查所有相關 gateway
+        // 檢查所有相關 gateway，每個 token 獨立顯示以便管理刪除
         $wc_tokens = \WC_Payment_Tokens::get_customer_tokens( $user_id, 'ys_shopline_credit' );
         $wc_tokens = array_merge( $wc_tokens, \WC_Payment_Tokens::get_customer_tokens( $user_id, 'ys_shopline_credit_subscription' ) );
         $wc_tokens = array_merge( $wc_tokens, \WC_Payment_Tokens::get_customer_tokens( $user_id, 'ys_shopline_credit_card' ) );
 
-        // 去除重複（根據 token 值）
-        $unique_tokens = [];
-        $seen_ids = [];
-        foreach ( $wc_tokens as $token ) {
-            $token_value = $token->get_token();
-            if ( ! in_array( $token_value, $seen_ids, true ) ) {
-                $seen_ids[] = $token_value;
-                $unique_tokens[] = $token;
-            }
-        }
-
         // 轉換 WC Tokens 為顯示格式
         $instruments = array_map(
             fn( $token ) => $this->convert_wc_token_to_instrument( $token ),
-            $unique_tokens
+            $wc_tokens
         );
 
         // 載入模板
