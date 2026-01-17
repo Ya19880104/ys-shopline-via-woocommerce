@@ -202,6 +202,11 @@ final class YSMyAccountEndpoint {
             $expiry_year = date( 'Y' );
         }
 
+        // API 可能回傳兩位數年份（如 "30"），需轉換為四位數（如 "2030"）
+        if ( strlen( (string) $expiry_year ) === 2 ) {
+            $expiry_year = '20' . $expiry_year;
+        }
+
         $token = new \WC_Payment_Token_CC();
         $token->set_token( $instrument_id );
         // 使用正確的 gateway ID
