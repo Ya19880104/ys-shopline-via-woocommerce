@@ -599,10 +599,8 @@ final class YSMyAccountEndpoint {
             return;
         }
 
-        // 從 API 取得付款工具
-        $response = $api->get_payment_instruments( $customer_id, [
-            'instrumentStatusList' => [ 'ENABLED', 'CREATED' ],
-        ] );
+        // 從 API 取得付款工具（不帶 filter，取得所有卡片）
+        $response = $api->get_payment_instruments( $customer_id );
 
         if ( is_wp_error( $response ) ) {
             YSLogger::error( '同步儲存卡：API 查詢失敗', [
