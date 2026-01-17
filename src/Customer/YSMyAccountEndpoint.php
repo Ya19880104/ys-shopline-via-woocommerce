@@ -263,6 +263,91 @@ final class YSMyAccountEndpoint {
     }
 
     /**
+     * 渲染卡片列表 HTML（供頁面渲染和 AJAX 更新使用）
+     *
+     * @param array<YSPaymentInstrumentDTO> $instruments 付款工具列表
+     * @return string HTML 字串
+     */
+    private function render_cards_list_html( array $instruments ): string {
+        ob_start();
+
+        if ( empty( $instruments ) ) :
+            ?>
+            <div class="ys-no-saved-cards">
+                <p><?php esc_html_e( '您目前沒有儲存的付款方式。', 'ys-shopline-payment' ); ?></p>
+                <p class="description"><?php esc_html_e( '在結帳時選擇「儲存卡片」即可新增付款方式。', 'ys-shopline-payment' ); ?></p>
+            </div>
+            <?php
+        else :
+            ?>
+            <div class="ys-saved-cards-list">
+                <?php foreach ( $instruments as $instrument ) : ?>
+                    <div class="ys-saved-card-item" data-instrument-id="<?php echo esc_attr( $instrument->instrument_id ); ?>">
+                        <div class="ys-card-icon">
+                            <?php echo $this->get_card_brand_icon( $instrument->get_card_brand() ); ?>
+                        </div>
+                        <div class="ys-card-info">
+                            <div class="ys-card-name">
+                                <?php echo esc_html( $instrument->get_display_name() ); ?>
+                            </div>
+                            <div class="ys-card-details">
+                                <span class="ys-card-expiry">
+                                    <?php
+                                    printf(
+                                        /* translators: %s: Card expiry date */
+                                        esc_html__( '到期日：%s', 'ys-shopline-payment' ),
+                                        esc_html( $instrument->get_card_expiry() )
+                                    );
+                                    ?>
+                                </span>
+                                <span class="ys-card-status <?php echo esc_attr( $instrument->is_expired() ? 'expired' : 'active' ); ?>">
+                                    <?php echo esc_html( $instrument->get_status_display() ); ?>
+                                </span>
+                            </div>
+                        </div>
+                        <div class="ys-card-actions">
+                            <button type="button"
+                                    class="ys-delete-card-btn button"
+                                    data-instrument-id="<?php echo esc_attr( $instrument->instrument_id ); ?>"
+                                    data-card-name="<?php echo esc_attr( $instrument->get_display_name() ); ?>">
+                                <?php esc_html_e( '刪除', 'ys-shopline-payment' ); ?>
+                            </button>
+                        </div>
+                    </div>
+                <?php endforeach; ?>
+            </div>
+            <?php
+        endif;
+
+        return ob_get_clean();
+    }
+
+    /**
+     * 取得當前用戶的卡片列表 HTML（供 AJAX 使用）
+     *
+     * @return string HTML 字串
+     */
+    private function get_current_user_cards_html(): string {
+        $user_id = get_current_user_id();
+        if ( ! $user_id ) {
+            return '';
+        }
+
+        // 從 WC Tokens 取得儲存卡
+        $wc_tokens = \WC_Payment_Tokens::get_customer_tokens( $user_id, 'ys_shopline_credit' );
+        $wc_tokens = array_merge( $wc_tokens, \WC_Payment_Tokens::get_customer_tokens( $user_id, 'ys_shopline_credit_subscription' ) );
+        $wc_tokens = array_merge( $wc_tokens, \WC_Payment_Tokens::get_customer_tokens( $user_id, 'ys_shopline_credit_card' ) );
+
+        // 轉換 WC Tokens 為顯示格式
+        $instruments = array_map(
+            fn( $token ) => $this->convert_wc_token_to_instrument( $token ),
+            $wc_tokens
+        );
+
+        return $this->render_cards_list_html( $instruments );
+    }
+
+    /**
      * 渲染模板
      *
      * @param array<YSPaymentInstrumentDTO> $instruments 付款工具列表
@@ -274,53 +359,13 @@ final class YSMyAccountEndpoint {
                 <h3><?php esc_html_e( '已儲存的付款方式', 'ys-shopline-payment' ); ?></h3>
                 <button type="button" class="ys-sync-cards-btn button" id="ys-sync-cards-btn">
                     <span class="ys-sync-icon">↻</span>
-                    <?php esc_html_e( '同步卡片', 'ys-shopline-payment' ); ?>
+                    <span><?php esc_html_e( '同步卡片', 'ys-shopline-payment' ); ?></span>
                 </button>
             </div>
 
-            <?php if ( empty( $instruments ) ) : ?>
-                <div class="ys-no-saved-cards">
-                    <p><?php esc_html_e( '您目前沒有儲存的付款方式。', 'ys-shopline-payment' ); ?></p>
-                    <p class="description"><?php esc_html_e( '在結帳時選擇「儲存卡片」即可新增付款方式。', 'ys-shopline-payment' ); ?></p>
-                </div>
-            <?php else : ?>
-                <div class="ys-saved-cards-list">
-                    <?php foreach ( $instruments as $instrument ) : ?>
-                        <div class="ys-saved-card-item" data-instrument-id="<?php echo esc_attr( $instrument->instrument_id ); ?>">
-                            <div class="ys-card-icon">
-                                <?php echo $this->get_card_brand_icon( $instrument->get_card_brand() ); ?>
-                            </div>
-                            <div class="ys-card-info">
-                                <div class="ys-card-name">
-                                    <?php echo esc_html( $instrument->get_display_name() ); ?>
-                                </div>
-                                <div class="ys-card-details">
-                                    <span class="ys-card-expiry">
-                                        <?php
-                                        printf(
-                                            /* translators: %s: Card expiry date */
-                                            esc_html__( '到期日：%s', 'ys-shopline-payment' ),
-                                            esc_html( $instrument->get_card_expiry() )
-                                        );
-                                        ?>
-                                    </span>
-                                    <span class="ys-card-status <?php echo esc_attr( $instrument->is_expired() ? 'expired' : 'active' ); ?>">
-                                        <?php echo esc_html( $instrument->get_status_display() ); ?>
-                                    </span>
-                                </div>
-                            </div>
-                            <div class="ys-card-actions">
-                                <button type="button"
-                                        class="ys-delete-card-btn button"
-                                        data-instrument-id="<?php echo esc_attr( $instrument->instrument_id ); ?>"
-                                        data-card-name="<?php echo esc_attr( $instrument->get_display_name() ); ?>">
-                                    <?php esc_html_e( '刪除', 'ys-shopline-payment' ); ?>
-                                </button>
-                            </div>
-                        </div>
-                    <?php endforeach; ?>
-                </div>
-            <?php endif; ?>
+            <div class="ys-saved-cards-content">
+                <?php echo $this->render_cards_list_html( $instruments ); ?>
+            </div>
         </div>
 
         <style>
@@ -624,8 +669,9 @@ final class YSMyAccountEndpoint {
 
         if ( empty( $instruments_array ) ) {
             wp_send_json_success( [
-                'message' => __( '沒有找到儲存的卡片', 'ys-shopline-payment' ),
-                'count'   => 0,
+                'message'    => __( '沒有找到儲存的卡片', 'ys-shopline-payment' ),
+                'count'      => 0,
+                'cards_html' => $this->get_current_user_cards_html(),
             ] );
             return;
         }
@@ -659,14 +705,17 @@ final class YSMyAccountEndpoint {
             'new_count' => $new_count,
         ] );
 
+        // 取得更新後的卡片 HTML（用於 AJAX 更新頁面，不需重整）
+        $cards_html = $this->get_current_user_cards_html();
+
         wp_send_json_success( [
-            'message' => sprintf(
+            'message'    => sprintf(
                 /* translators: %d: number of cards synced */
                 __( '同步完成，新增 %d 張卡片', 'ys-shopline-payment' ),
                 $new_count
             ),
-            'count'   => $new_count,
-            'reload'  => $new_count > 0,
+            'count'      => $new_count,
+            'cards_html' => $cards_html,
         ] );
     }
 

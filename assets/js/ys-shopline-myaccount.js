@@ -99,11 +99,9 @@
                 success: function(response) {
                     if (response.success) {
                         YSSavedCards.showNotice(response.data.message, 'success');
-                        // 如果有新卡片，重新載入頁面
-                        if (response.data.reload) {
-                            setTimeout(function() {
-                                location.reload();
-                            }, 1000);
+                        // 使用 AJAX 更新卡片列表，不需重整頁面
+                        if (response.data.cards_html) {
+                            $('.ys-saved-cards-content').html(response.data.cards_html);
                         }
                     } else {
                         YSSavedCards.showNotice(response.data?.message || ys_shopline_myaccount.i18n.sync_error, 'error');

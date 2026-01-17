@@ -127,11 +127,21 @@ final class YSPaymentInstrumentDTO {
             return '';
         }
 
-        $month = $this->instrument_card['expireMonth'] ?? '';
-        $year  = $this->instrument_card['expireYear'] ?? '';
+        // 支援多種欄位名稱
+        $month = $this->instrument_card['expireMonth']
+            ?? $this->instrument_card['expiryMonth']
+            ?? '';
+        $year  = $this->instrument_card['expireYear']
+            ?? $this->instrument_card['expiryYear']
+            ?? '';
 
         if ( ! $month || ! $year ) {
             return '';
+        }
+
+        // 處理兩位數年份
+        if ( strlen( (string) $year ) === 2 ) {
+            $year = '20' . $year;
         }
 
         return sprintf( '%02d/%s', (int) $month, $year );
