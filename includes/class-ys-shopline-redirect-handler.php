@@ -288,8 +288,27 @@ class YS_Shopline_Redirect_Handler {
         // SHOPLINE API 可能使用不同的欄位名稱
         $card_type    = strtolower( $card_info['brand'] ?? $card_info['cardBrand'] ?? 'visa' );
         $last4        = $card_info['last4'] ?? $card_info['last'] ?? $card_info['cardLast4'] ?? '0000';
-        $expiry_month = $card_info['expireMonth'] ?? $card_info['expiryMonth'] ?? $card_info['expMonth'] ?? '12';
-        $expiry_year  = $card_info['expireYear'] ?? $card_info['expiryYear'] ?? $card_info['expYear'] ?? date( 'Y' );
+        $expiry_month = $card_info['expireMonth'] ?? $card_info['expiryMonth'] ?? $card_info['expMonth'] ?? '';
+        $expiry_year  = $card_info['expireYear'] ?? $card_info['expiryYear'] ?? $card_info['expYear'] ?? '';
+
+        // 如果 creditCard 回應沒有到期日，查詢 paymentInstrument API 取得完整資訊
+        if ( empty( $expiry_month ) || empty( $expiry_year ) ) {
+            YS_Shopline_Logger::debug( 'Redirect handler: creditCard missing expiry, fetching from paymentInstrument API', array(
+                'payment_instrument_id' => $payment_instrument_id,
+                'payment_customer_id'   => $payment_customer_id,
+            ) );
+
+            $instrument_card = self::fetch_instrument_card_info( $payment_customer_id, $payment_instrument_id );
+            if ( ! empty( $instrument_card ) ) {
+                // 從 paymentInstrument API 取得到期日
+                $expiry_month = $instrument_card['expireMonth'] ?? $instrument_card['expiryMonth'] ?? $expiry_month;
+                $expiry_year  = $instrument_card['expireYear'] ?? $instrument_card['expiryYear'] ?? $expiry_year;
+                // 如果 last4 也是空的，補上
+                if ( empty( $last4 ) || '0000' === $last4 ) {
+                    $last4 = $instrument_card['last'] ?? $instrument_card['last4'] ?? $last4;
+                }
+            }
+        }
 
         // 確保 expiry 欄位有有效值（WooCommerce 必須有這些欄位）
         if ( empty( $expiry_month ) || ! is_numeric( $expiry_month ) ) {
@@ -297,6 +316,10 @@ class YS_Shopline_Redirect_Handler {
         }
         if ( empty( $expiry_year ) || ! is_numeric( $expiry_year ) ) {
             $expiry_year = date( 'Y' );
+        }
+        // 處理兩位數年份（如 "30" -> "2030"）
+        if ( strlen( (string) $expiry_year ) === 2 ) {
+            $expiry_year = '20' . $expiry_year;
         }
         if ( empty( $last4 ) ) {
             $last4 = '0000';
@@ -358,6 +381,58 @@ class YS_Shopline_Redirect_Handler {
                 'error'                 => $e->getMessage(),
             ) );
         }
+    }
+
+    /**
+     * Fetch instrument card info from API.
+     *
+     * 當 creditCard 回應沒有到期日時，透過 paymentInstrument/query API 取得完整卡片資訊。
+     *
+     * @param string $customer_id            SHOPLINE customer ID.
+     * @param string $payment_instrument_id  Payment instrument ID to find.
+     * @return array|null instrumentCard data or null if not found.
+     */
+    private static function fetch_instrument_card_info( $customer_id, $payment_instrument_id ) {
+        if ( empty( $customer_id ) || empty( $payment_instrument_id ) ) {
+            return null;
+        }
+
+        $api = YS_Shopline_Payment::get_api();
+        if ( ! $api ) {
+            return null;
+        }
+
+        // 查詢該客戶的所有付款工具
+        $response = $api->get_payment_instruments( $customer_id );
+
+        if ( is_wp_error( $response ) ) {
+            YS_Shopline_Logger::warning( 'Redirect handler: Failed to fetch payment instruments', array(
+                'customer_id' => $customer_id,
+                'error'       => $response->get_error_message(),
+            ) );
+            return null;
+        }
+
+        $instruments = $response['paymentInstruments'] ?? array();
+
+        // 找到對應的 instrument
+        foreach ( $instruments as $instrument ) {
+            $inst_id = $instrument['instrumentId'] ?? $instrument['paymentInstrumentId'] ?? '';
+            if ( $inst_id === $payment_instrument_id ) {
+                YS_Shopline_Logger::debug( 'Redirect handler: Found instrument card info from API', array(
+                    'payment_instrument_id' => $payment_instrument_id,
+                    'instrument_card'       => $instrument['instrumentCard'] ?? array(),
+                ) );
+                return $instrument['instrumentCard'] ?? null;
+            }
+        }
+
+        YS_Shopline_Logger::debug( 'Redirect handler: Instrument not found in API response', array(
+            'payment_instrument_id' => $payment_instrument_id,
+            'instruments_count'     => count( $instruments ),
+        ) );
+
+        return null;
     }
 }
 
