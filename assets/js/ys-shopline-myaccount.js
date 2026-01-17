@@ -23,6 +23,7 @@
          */
         bindEvents: function() {
             $(document).on('click', '.ys-delete-card-btn', this.handleDeleteCard.bind(this));
+            $(document).on('click', '#ys-sync-cards-btn', this.handleSyncCards.bind(this));
         },
 
         /**
@@ -38,9 +39,10 @@
             const cardName = $btn.data('card-name');
             const $cardItem = $btn.closest('.ys-saved-card-item');
 
+            console.log('刪除卡片', { instrumentId, cardName });
+
             // 確認刪除
-            const confirmMsg = ys_shopline_myaccount.i18n.confirm_delete.replace('%s', cardName);
-            if (!confirm(confirmMsg)) {
+            if (!confirm(ys_shopline_myaccount.i18n.confirm_delete)) {
                 return;
             }
 
@@ -62,9 +64,57 @@
                     instrument_id: instrumentId
                 },
                 success: this.handleDeleteSuccess.bind(this, $cardItem),
-                error: this.handleDeleteError.bind(this, $btn, $cardItem),
+                error: this.handleDeleteError.bind(this, $btn, $cardItem)
+            });
+        },
+
+        /**
+         * 處理同步卡片
+         *
+         * @param {Event} e 事件物件
+         */
+        handleSyncCards: function(e) {
+            e.preventDefault();
+
+            const $btn = $(e.currentTarget);
+
+            // 防止重複點擊
+            if ($btn.prop('disabled')) {
+                return;
+            }
+
+            // 設定載入狀態
+            $btn.prop('disabled', true).addClass('syncing');
+            const originalText = $btn.find('span:last').text();
+            $btn.find('span:last').text(ys_shopline_myaccount.i18n.syncing);
+
+            // 發送 AJAX 請求
+            $.ajax({
+                url: ys_shopline_myaccount.ajax_url,
+                type: 'POST',
+                data: {
+                    action: 'ys_shopline_sync_cards',
+                    nonce: ys_shopline_myaccount.sync_nonce
+                },
+                success: function(response) {
+                    if (response.success) {
+                        YSSavedCards.showNotice(response.data.message, 'success');
+                        // 如果有新卡片，重新載入頁面
+                        if (response.data.reload) {
+                            setTimeout(function() {
+                                location.reload();
+                            }, 1000);
+                        }
+                    } else {
+                        YSSavedCards.showNotice(response.data?.message || ys_shopline_myaccount.i18n.sync_error, 'error');
+                    }
+                },
+                error: function() {
+                    YSSavedCards.showNotice(ys_shopline_myaccount.i18n.sync_error, 'error');
+                },
                 complete: function() {
-                    // 如果有錯誤，重設狀態會在 error handler 處理
+                    $btn.prop('disabled', false).removeClass('syncing');
+                    $btn.find('span:last').text(originalText);
                 }
             });
         },
@@ -81,7 +131,7 @@
                 $btn.prop('disabled', true).text(ys_shopline_myaccount.i18n.deleting);
                 $cardItem.addClass('deleting');
             } else {
-                $btn.prop('disabled', false).text(ys_shopline_myaccount.i18n.delete || '刪除');
+                $btn.prop('disabled', false).text('刪除');
                 $cardItem.removeClass('deleting');
             }
         },
@@ -103,8 +153,8 @@
                         // 顯示無卡片訊息
                         $('.ys-saved-cards-list').replaceWith(
                             '<div class="ys-no-saved-cards">' +
-                            '<p>' + (ys_shopline_myaccount.i18n.no_cards || '您目前沒有儲存的付款方式。') + '</p>' +
-                            '<p class="description">' + (ys_shopline_myaccount.i18n.add_card_hint || '在結帳時選擇「儲存卡片」即可新增付款方式。') + '</p>' +
+                            '<p>您目前沒有儲存的付款方式。</p>' +
+                            '<p class="description">在結帳時選擇「儲存卡片」即可新增付款方式。</p>' +
                             '</div>'
                         );
                     }

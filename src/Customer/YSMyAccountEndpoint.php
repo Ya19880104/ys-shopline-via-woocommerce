@@ -59,6 +59,9 @@ final class YSMyAccountEndpoint {
         // 處理 AJAX 刪除請求
         add_action( 'wp_ajax_ys_shopline_delete_card', [ $this, 'handle_delete_card' ] );
 
+        // 處理 AJAX 同步請求
+        add_action( 'wp_ajax_ys_shopline_sync_cards', [ $this, 'handle_sync_cards' ] );
+
         // 載入腳本
         add_action( 'wp_enqueue_scripts', [ $this, 'enqueue_scripts' ] );
     }
@@ -104,26 +107,27 @@ final class YSMyAccountEndpoint {
         // 處理表單提交（非 AJAX 備援）
         $this->handle_form_submission();
 
-        // 優先使用 WC Tokens
-        // 如果 WC Tokens 為空，則從 API 同步
-        $this->maybe_sync_tokens_from_api( $user_id );
-
-        // 從 WC Tokens 取得儲存卡
-        // 注意：Gateway ID 是 ys_shopline_credit（不是 ys_shopline_credit_card）
+        // 從 WC Tokens 取得儲存卡（不自動同步 API，改由按鈕觸發）
+        // 檢查所有相關 gateway
         $wc_tokens = \WC_Payment_Tokens::get_customer_tokens( $user_id, 'ys_shopline_credit' );
+        $wc_tokens = array_merge( $wc_tokens, \WC_Payment_Tokens::get_customer_tokens( $user_id, 'ys_shopline_credit_subscription' ) );
+        $wc_tokens = array_merge( $wc_tokens, \WC_Payment_Tokens::get_customer_tokens( $user_id, 'ys_shopline_credit_card' ) );
 
-        // 同時檢查訂閱 gateway 的 tokens
-        $subscription_tokens = \WC_Payment_Tokens::get_customer_tokens( $user_id, 'ys_shopline_credit_subscription' );
-        $wc_tokens = array_merge( $wc_tokens, $subscription_tokens );
-
-        // 也檢查舊的 gateway ID（相容性）
-        $legacy_tokens = \WC_Payment_Tokens::get_customer_tokens( $user_id, 'ys_shopline_credit_card' );
-        $wc_tokens = array_merge( $wc_tokens, $legacy_tokens );
+        // 去除重複（根據 token 值）
+        $unique_tokens = [];
+        $seen_ids = [];
+        foreach ( $wc_tokens as $token ) {
+            $token_value = $token->get_token();
+            if ( ! in_array( $token_value, $seen_ids, true ) ) {
+                $seen_ids[] = $token_value;
+                $unique_tokens[] = $token;
+            }
+        }
 
         // 轉換 WC Tokens 為顯示格式
         $instruments = array_map(
             fn( $token ) => $this->convert_wc_token_to_instrument( $token ),
-            $wc_tokens
+            $unique_tokens
         );
 
         // 載入模板
@@ -267,7 +271,13 @@ final class YSMyAccountEndpoint {
     private function render_template( array $instruments ): void {
         ?>
         <div class="ys-saved-cards-wrapper">
-            <h3><?php esc_html_e( '已儲存的付款方式', 'ys-shopline-payment' ); ?></h3>
+            <div class="ys-saved-cards-header">
+                <h3><?php esc_html_e( '已儲存的付款方式', 'ys-shopline-payment' ); ?></h3>
+                <button type="button" class="ys-sync-cards-btn button" id="ys-sync-cards-btn">
+                    <span class="ys-sync-icon">↻</span>
+                    <?php esc_html_e( '同步卡片', 'ys-shopline-payment' ); ?>
+                </button>
+            </div>
 
             <?php if ( empty( $instruments ) ) : ?>
                 <div class="ys-no-saved-cards">
@@ -318,8 +328,36 @@ final class YSMyAccountEndpoint {
             .ys-saved-cards-wrapper {
                 max-width: 600px;
             }
-            .ys-saved-cards-wrapper h3 {
+            .ys-saved-cards-header {
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
                 margin-bottom: 20px;
+            }
+            .ys-saved-cards-header h3 {
+                margin: 0;
+            }
+            .ys-sync-cards-btn {
+                display: inline-flex;
+                align-items: center;
+                gap: 5px;
+                padding: 8px 16px;
+                font-size: 13px;
+            }
+            .ys-sync-cards-btn .ys-sync-icon {
+                font-size: 16px;
+                transition: transform 0.3s;
+            }
+            .ys-sync-cards-btn.syncing .ys-sync-icon {
+                animation: ys-spin 1s linear infinite;
+            }
+            .ys-sync-cards-btn:disabled {
+                opacity: 0.6;
+                cursor: not-allowed;
+            }
+            @keyframes ys-spin {
+                from { transform: rotate(0deg); }
+                to { transform: rotate(360deg); }
             }
             .ys-no-saved-cards {
                 padding: 30px;
@@ -446,13 +484,17 @@ final class YSMyAccountEndpoint {
         );
 
         wp_localize_script( 'ys-shopline-myaccount', 'ys_shopline_myaccount', [
-            'ajax_url' => admin_url( 'admin-ajax.php' ),
-            'nonce'    => wp_create_nonce( 'ys_shopline_delete_card' ),
-            'i18n'     => [
+            'ajax_url'   => admin_url( 'admin-ajax.php' ),
+            'nonce'      => wp_create_nonce( 'ys_shopline_delete_card' ),
+            'sync_nonce' => wp_create_nonce( 'ys_shopline_sync_cards' ),
+            'i18n'       => [
                 'confirm_delete' => __( '確定要刪除這張卡片嗎？', 'ys-shopline-payment' ),
                 'deleting'       => __( '刪除中...', 'ys-shopline-payment' ),
                 'delete_success' => __( '卡片已成功刪除', 'ys-shopline-payment' ),
                 'delete_error'   => __( '刪除失敗，請稍後再試', 'ys-shopline-payment' ),
+                'syncing'        => __( '同步中...', 'ys-shopline-payment' ),
+                'sync_success'   => __( '同步完成', 'ys-shopline-payment' ),
+                'sync_error'     => __( '同步失敗，請稍後再試', 'ys-shopline-payment' ),
             ],
         ] );
     }
@@ -500,10 +542,11 @@ final class YSMyAccountEndpoint {
      *
      * @param int    $user_id       WordPress 用戶 ID
      * @param string $instrument_id 付款工具 ID（也是 token value）
+     * @return bool 是否成功刪除
      */
-    private function delete_wc_token_by_instrument_id( int $user_id, string $instrument_id ): void {
-        // 搜尋所有 gateway 的 tokens
-        $gateway_ids = [ 'ys_shopline_credit_card', 'ys_shopline_credit_subscription' ];
+    private function delete_wc_token_by_instrument_id( int $user_id, string $instrument_id ): bool {
+        // 搜尋所有相關 gateway 的 tokens
+        $gateway_ids = [ 'ys_shopline_credit', 'ys_shopline_credit_subscription', 'ys_shopline_credit_card' ];
 
         foreach ( $gateway_ids as $gateway_id ) {
             $tokens = \WC_Payment_Tokens::get_customer_tokens( $user_id, $gateway_id );
@@ -511,15 +554,89 @@ final class YSMyAccountEndpoint {
             foreach ( $tokens as $token ) {
                 if ( $token->get_token() === $instrument_id ) {
                     \WC_Payment_Tokens::delete( $token->get_id() );
-                    YSLogger::debug( 'WC Token 已刪除', [
+                    YSLogger::info( 'WC Token 已刪除', [
                         'user_id'       => $user_id,
                         'token_id'      => $token->get_id(),
+                        'gateway_id'    => $gateway_id,
                         'instrument_id' => $instrument_id,
                     ] );
-                    return;
+                    return true;
                 }
             }
         }
+
+        YSLogger::warning( '找不到要刪除的 WC Token', [
+            'user_id'       => $user_id,
+            'instrument_id' => $instrument_id,
+        ] );
+        return false;
+    }
+
+    /**
+     * 處理 AJAX 同步卡片請求
+     */
+    public function handle_sync_cards(): void {
+        // 驗證 Nonce
+        if ( ! wp_verify_nonce( $_POST['nonce'] ?? '', 'ys_shopline_sync_cards' ) ) {
+            wp_send_json_error( [ 'message' => __( '安全驗證失敗', 'ys-shopline-payment' ) ] );
+        }
+
+        // 驗證登入
+        $user_id = get_current_user_id();
+        if ( ! $user_id ) {
+            wp_send_json_error( [ 'message' => __( '請先登入', 'ys-shopline-payment' ) ] );
+        }
+
+        YSLogger::info( '開始同步儲存卡', [ 'user_id' => $user_id ] );
+
+        // 從 API 取得付款工具
+        $instruments_array = $this->customer_manager->get_payment_instruments( $user_id, true );
+
+        if ( empty( $instruments_array ) ) {
+            wp_send_json_success( [
+                'message' => __( '沒有找到儲存的卡片', 'ys-shopline-payment' ),
+                'count'   => 0,
+            ] );
+            return;
+        }
+
+        // 取得現有的 WC Token instrument IDs
+        $existing_instrument_ids = [];
+        $gateway_ids = [ 'ys_shopline_credit', 'ys_shopline_credit_subscription', 'ys_shopline_credit_card' ];
+        foreach ( $gateway_ids as $gw_id ) {
+            $tokens = \WC_Payment_Tokens::get_customer_tokens( $user_id, $gw_id );
+            foreach ( $tokens as $token ) {
+                $existing_instrument_ids[] = $token->get_token();
+            }
+        }
+
+        // 同步到 WC Tokens（只新增不存在的）
+        $new_count = 0;
+        foreach ( $instruments_array as $instrument ) {
+            $instrument_id = $instrument['paymentInstrumentId'] ?? '';
+            if ( ! empty( $instrument_id ) && ! in_array( $instrument_id, $existing_instrument_ids, true ) ) {
+                $token = $this->create_wc_token_from_instrument( $user_id, $instrument );
+                if ( $token ) {
+                    $new_count++;
+                }
+            }
+        }
+
+        YSLogger::info( '同步儲存卡完成', [
+            'user_id'   => $user_id,
+            'api_count' => count( $instruments_array ),
+            'new_count' => $new_count,
+        ] );
+
+        wp_send_json_success( [
+            'message' => sprintf(
+                /* translators: %d: number of cards synced */
+                __( '同步完成，新增 %d 張卡片', 'ys-shopline-payment' ),
+                $new_count
+            ),
+            'count'   => $new_count,
+            'reload'  => $new_count > 0,
+        ] );
     }
 
     /**
