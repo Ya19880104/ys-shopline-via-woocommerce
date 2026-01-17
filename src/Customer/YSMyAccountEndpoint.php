@@ -165,8 +165,12 @@ final class YSMyAccountEndpoint {
      * @return \WC_Payment_Token_CC|null
      */
     private function create_wc_token_from_instrument( int $user_id, array $instrument ): ?\WC_Payment_Token_CC {
-        $instrument_id = $instrument['paymentInstrumentId'] ?? '';
+        // API 可能回傳 instrumentId 或 paymentInstrumentId
+        $instrument_id = $instrument['instrumentId'] ?? $instrument['paymentInstrumentId'] ?? '';
         if ( empty( $instrument_id ) ) {
+            YSLogger::warning( 'create_wc_token_from_instrument: 找不到 instrument ID', [
+                'instrument_keys' => array_keys( $instrument ),
+            ] );
             return null;
         }
 
@@ -183,11 +187,12 @@ final class YSMyAccountEndpoint {
 
         $card_info = $instrument['instrumentCard'] ?? [];
 
-        // 取得卡片資訊（支援多種欄位名稱）
+        // 取得卡片資訊（支援多種 API 回傳格式）
+        // API 文件：brand, last, expireMonth, expireYear
         $card_type    = strtolower( $card_info['brand'] ?? $card_info['cardBrand'] ?? 'visa' );
         $last4        = $card_info['last'] ?? $card_info['last4'] ?? $card_info['cardLast4'] ?? '****';
-        $expiry_month = $card_info['expiryMonth'] ?? $card_info['expireMonth'] ?? $card_info['expMonth'] ?? '12';
-        $expiry_year  = $card_info['expiryYear'] ?? $card_info['expireYear'] ?? $card_info['expYear'] ?? date( 'Y' );
+        $expiry_month = $card_info['expireMonth'] ?? $card_info['expiryMonth'] ?? $card_info['expMonth'] ?? '12';
+        $expiry_year  = $card_info['expireYear'] ?? $card_info['expiryYear'] ?? $card_info['expYear'] ?? date( 'Y' );
 
         // 確保 expiry 欄位有有效值
         if ( empty( $expiry_month ) || ! is_numeric( $expiry_month ) ) {
@@ -578,8 +583,41 @@ final class YSMyAccountEndpoint {
 
         YSLogger::info( '開始同步儲存卡', [ 'user_id' => $user_id ] );
 
+        // 取得 Customer ID
+        $customer_id = get_user_meta( $user_id, '_ys_shopline_customer_id', true );
+        if ( empty( $customer_id ) ) {
+            YSLogger::warning( '同步儲存卡：找不到 Customer ID', [ 'user_id' => $user_id ] );
+            wp_send_json_error( [ 'message' => __( '找不到會員資料', 'ys-shopline-payment' ) ] );
+            return;
+        }
+
+        // 使用 includes 架構的 API（更穩定）
+        $api = \YS_Shopline_Payment::get_api();
+        if ( ! $api ) {
+            YSLogger::error( '同步儲存卡：API 未初始化' );
+            wp_send_json_error( [ 'message' => __( 'API 未初始化', 'ys-shopline-payment' ) ] );
+            return;
+        }
+
         // 從 API 取得付款工具
-        $instruments_array = $this->customer_manager->get_payment_instruments( $user_id, true );
+        $response = $api->get_payment_instruments( $customer_id, [
+            'instrumentStatusList' => [ 'ENABLED', 'CREATED' ],
+        ] );
+
+        if ( is_wp_error( $response ) ) {
+            YSLogger::error( '同步儲存卡：API 查詢失敗', [
+                'error' => $response->get_error_message(),
+            ] );
+            wp_send_json_error( [ 'message' => $response->get_error_message() ] );
+            return;
+        }
+
+        $instruments_array = $response['paymentInstruments'] ?? [];
+
+        YSLogger::debug( '同步儲存卡：API 回應', [
+            'count'       => count( $instruments_array ),
+            'instruments' => $instruments_array,
+        ] );
 
         if ( empty( $instruments_array ) ) {
             wp_send_json_success( [
@@ -602,7 +640,8 @@ final class YSMyAccountEndpoint {
         // 同步到 WC Tokens（只新增不存在的）
         $new_count = 0;
         foreach ( $instruments_array as $instrument ) {
-            $instrument_id = $instrument['paymentInstrumentId'] ?? '';
+            // API 可能回傳 instrumentId 或 paymentInstrumentId
+            $instrument_id = $instrument['instrumentId'] ?? $instrument['paymentInstrumentId'] ?? '';
             if ( ! empty( $instrument_id ) && ! in_array( $instrument_id, $existing_instrument_ids, true ) ) {
                 $token = $this->create_wc_token_from_instrument( $user_id, $instrument );
                 if ( $token ) {

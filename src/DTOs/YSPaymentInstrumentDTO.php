@@ -40,8 +40,14 @@ final class YSPaymentInstrumentDTO {
      * @return self
      */
     public static function from_response( array $response ): self {
+        // 支援多種 API 回傳格式
+        // API 可能回傳 instrumentId 或 paymentInstrumentId
+        $instrument_id = $response['instrumentId']
+            ?? $response['paymentInstrumentId']
+            ?? '';
+
         return new self(
-            instrument_id: $response['instrumentId'] ?? '',
+            instrument_id: $instrument_id,
             instrument_type: $response['instrumentType'] ?? '',
             instrument_status: $response['instrumentStatus'] ?? '',
             instrument_card: $response['instrumentCard'] ?? null,
