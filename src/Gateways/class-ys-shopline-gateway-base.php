@@ -374,13 +374,21 @@ abstract class YS_Shopline_Gateway_Base extends WC_Payment_Gateway {
      * @return array
      */
     public function get_sdk_config() {
+        // 檢查是否是 add_payment_method 頁面（AJAX 請求時從 POST 判斷）
+        // phpcs:ignore WordPress.Security.NonceVerification.Missing
+        $is_add_payment_method = is_add_payment_method_page() || ( isset( $_POST['is_add_payment_method'] ) && '1' === $_POST['is_add_payment_method'] );
+
         // 取得金額：優先從訂單付款頁面取得，否則從購物車
         $amount_raw = 0;
         $currency   = get_woocommerce_currency();
 
+        // 新增卡片頁面使用 0 金額
+        if ( $is_add_payment_method ) {
+            $amount_raw = 0;
+        }
         // 檢查是否是訂單付款頁面（pay for order）
         // phpcs:ignore WordPress.Security.NonceVerification.Recommended
-        if ( isset( $_GET['pay_for_order'] ) && isset( $_GET['key'] ) ) {
+        elseif ( isset( $_GET['pay_for_order'] ) && isset( $_GET['key'] ) ) {
             global $wp;
             $order_id = isset( $wp->query_vars['order-pay'] ) ? absint( $wp->query_vars['order-pay'] ) : 0;
             if ( $order_id ) {
@@ -391,9 +399,8 @@ abstract class YS_Shopline_Gateway_Base extends WC_Payment_Gateway {
                 }
             }
         }
-
         // 如果不是訂單付款頁面，從購物車取得
-        if ( ! $amount_raw && WC()->cart ) {
+        elseif ( WC()->cart ) {
             $amount_raw = WC()->cart->get_total( 'edit' );
         }
 
@@ -420,12 +427,13 @@ abstract class YS_Shopline_Gateway_Base extends WC_Payment_Gateway {
 
         // Debug log for troubleshooting
         YS_Shopline_Logger::debug( 'SDK Config generated', array(
-            'gateway'     => $this->id,
-            'testmode'    => $this->testmode ? 'yes' : 'no',
-            'merchantId'  => $merchant_id ? substr( $merchant_id, 0, 8 ) . '...' : '(empty)',
-            'clientKey'   => $client_key ? substr( $client_key, 0, 8 ) . '...' : '(empty)',
-            'env'         => $config['env'],
-            'amount'      => $amount,
+            'gateway'               => $this->id,
+            'testmode'              => $this->testmode ? 'yes' : 'no',
+            'merchantId'            => $merchant_id ? substr( $merchant_id, 0, 8 ) . '...' : '(empty)',
+            'clientKey'             => $client_key ? substr( $client_key, 0, 8 ) . '...' : '(empty)',
+            'env'                   => $config['env'],
+            'amount'                => $amount,
+            'is_add_payment_method' => $is_add_payment_method ? 'yes' : 'no',
         ) );
 
         // Check for subscription in cart
@@ -444,6 +452,21 @@ abstract class YS_Shopline_Gateway_Base extends WC_Payment_Gateway {
                     'user_id' => $user_id,
                 ) );
             }
+        }
+
+        // 新增卡片頁面：強制啟用 bindCard
+        if ( $is_add_payment_method && isset( $config['customerToken'] ) ) {
+            $config['paymentInstrument'] = array(
+                'bindCard' => array(
+                    'enable'   => true,
+                    'protocol' => array(
+                        'switchVisible'       => false,  // 隱藏開關，強制儲存
+                        'defaultSwitchStatus' => true,
+                        'mustAccept'          => true,
+                    ),
+                ),
+            );
+            $config['forceSaveCard'] = true;
         }
 
         return apply_filters( 'ys_shopline_sdk_config', $config, $this );
@@ -1020,6 +1043,40 @@ abstract class YS_Shopline_Gateway_Base extends WC_Payment_Gateway {
             $postcode = $order->{"get_{$other_type}_postcode"}();
         }
 
+        // Fallback 到商店地址（API 設定中的備用地址）
+        // 順序：運送地址 → 帳單地址 → 商店地址
+        if ( empty( $street ) ) {
+            $store_address = get_option( 'ys_shopline_store_address', '' );
+            if ( ! empty( $store_address ) ) {
+                $street = $store_address;
+                YS_Shopline_Logger::debug( 'Using store address as fallback', array(
+                    'order_id' => $order->get_id(),
+                    'address'  => $store_address,
+                ) );
+            }
+        }
+
+        if ( empty( $city ) ) {
+            $store_city = get_option( 'ys_shopline_store_city', '' );
+            if ( ! empty( $store_city ) ) {
+                $city = $store_city;
+            }
+        }
+
+        if ( empty( $postcode ) ) {
+            $store_postcode = get_option( 'ys_shopline_store_postcode', '' );
+            if ( ! empty( $store_postcode ) ) {
+                $postcode = $store_postcode;
+            }
+        }
+
+        if ( empty( $country_code ) ) {
+            $store_country = get_option( 'ys_shopline_store_country', 'TW' );
+            if ( ! empty( $store_country ) ) {
+                $country_code = $store_country;
+            }
+        }
+
         // 最終防呆：確保必填欄位不為空
         if ( empty( $street ) ) {
             $street = ! empty( $city ) ? $city : __( '未輸入地址', 'ys-shopline-via-woocommerce' );
@@ -1453,5 +1510,165 @@ abstract class YS_Shopline_Gateway_Base extends WC_Payment_Gateway {
         if ( $this->debug ) {
             YS_Shopline_Logger::log( $message, $level );
         }
+    }
+
+    /**
+     * Add payment method via My Account.
+     *
+     * 處理 /my-account/add-payment-method/ 頁面的新增卡片請求
+     * 使用純綁卡（CardBind）流程，不需要實際付款
+     *
+     * @return array
+     */
+    public function add_payment_method() {
+        $user_id = get_current_user_id();
+
+        if ( ! $user_id ) {
+            wc_add_notice( __( '請先登入後再新增付款方式。', 'ys-shopline-via-woocommerce' ), 'error' );
+            return array( 'result' => 'failure' );
+        }
+
+        // 從 POST 取得 paySession
+        // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
+        $pay_session_raw = isset( $_POST['ys_shopline_pay_session'] ) ? wp_unslash( $_POST['ys_shopline_pay_session'] ) : '';
+
+        if ( empty( $pay_session_raw ) ) {
+            wc_add_notice( __( '付款資訊遺失，請重新輸入卡片資訊。', 'ys-shopline-via-woocommerce' ), 'error' );
+            return array( 'result' => 'failure' );
+        }
+
+        // 驗證 paySession 是有效的 JSON
+        $decoded = json_decode( $pay_session_raw, true );
+        if ( json_last_error() !== JSON_ERROR_NONE ) {
+            YS_Shopline_Logger::error( 'Invalid paySession JSON in add_payment_method', array(
+                'error' => json_last_error_msg(),
+            ) );
+            wc_add_notice( __( '付款資訊格式錯誤，請重新輸入。', 'ys-shopline-via-woocommerce' ), 'error' );
+            return array( 'result' => 'failure' );
+        }
+
+        // 取得或建立 SHOPLINE customerId
+        $customer_id = $this->get_shopline_customer_id( $user_id );
+
+        if ( ! $customer_id ) {
+            wc_add_notice( __( '無法建立客戶資訊，請稍後重試。', 'ys-shopline-via-woocommerce' ), 'error' );
+            return array( 'result' => 'failure' );
+        }
+
+        // 產生虛擬 referenceOrderId: ADD{YYYYMMDDHHmmss}{2位亂數}
+        $reference_order_id = 'ADD' . gmdate( 'YmdHis' ) . wp_rand( 10, 99 );
+
+        // Return URL for 3DS completion
+        $return_url = add_query_arg(
+            array(
+                'ys_shopline_add_method' => '1',
+                'reference_id'           => $reference_order_id,
+            ),
+            wc_get_account_endpoint_url( 'payment-methods' )
+        );
+
+        // 取得用戶資訊
+        $user = get_userdata( $user_id );
+        $raw_phone = get_user_meta( $user_id, 'billing_phone', true );
+        $country   = get_user_meta( $user_id, 'billing_country', true ) ?: 'TW';
+        $phone     = $this->format_phone_number( $raw_phone, $country );
+
+        // 準備 API 請求資料（純綁卡）
+        $data = array(
+            'paySession'       => $pay_session_raw,
+            'referenceOrderId' => $reference_order_id,
+            'returnUrl'        => $return_url,
+            'acquirerType'     => 'SDK',
+            'language'         => $this->get_shopline_language(),
+            'amount'           => array(
+                'value'    => 0,
+                'currency' => 'TWD',
+            ),
+            'confirm'          => array(
+                'paymentMethod'     => 'CreditCard',
+                'paymentBehavior'   => 'CardBind',
+                'paymentCustomerId' => $customer_id,
+                'paymentInstrument' => array(
+                    'savePaymentInstrument' => true,
+                ),
+            ),
+            'customer'         => array(
+                'referenceCustomerId' => (string) $user_id,
+                'type'                => '0',
+                'personalInfo'        => array(
+                    'firstName' => $user->display_name ?: $user->user_login,
+                    'lastName'  => $user->display_name ?: $user->user_login,
+                    'email'     => $user->user_email,
+                    'phone'     => $phone,
+                ),
+            ),
+            'client'           => $this->build_client_info( $this->get_client_ip() ),
+        );
+
+        YS_Shopline_Logger::debug( 'Add payment method request', array(
+            'user_id'            => $user_id,
+            'customer_id'        => $customer_id,
+            'reference_order_id' => $reference_order_id,
+        ) );
+
+        // 呼叫 API
+        if ( ! $this->api ) {
+            wc_add_notice( __( '付款閘道尚未設定。', 'ys-shopline-via-woocommerce' ), 'error' );
+            return array( 'result' => 'failure' );
+        }
+
+        $response = $this->api->create_payment_trade( $data );
+
+        if ( is_wp_error( $response ) ) {
+            YS_Shopline_Logger::error( 'Add payment method failed: ' . $response->get_error_message() );
+            wc_add_notice(
+                __( '新增付款方式失敗：', 'ys-shopline-via-woocommerce' ) . $response->get_error_message(),
+                'error'
+            );
+            return array( 'result' => 'failure' );
+        }
+
+        // 儲存綁卡資訊到 user meta（供 3DS 完成後使用）
+        update_user_meta( $user_id, '_ys_shopline_pending_bind', array(
+            'reference_order_id' => $reference_order_id,
+            'trade_order_id'     => isset( $response['tradeOrderId'] ) ? $response['tradeOrderId'] : '',
+            'customer_id'        => $customer_id,
+            'created_at'         => time(),
+        ) );
+
+        // 處理 nextAction（3DS 驗證）
+        if ( isset( $response['nextAction'] ) ) {
+            YS_Shopline_Logger::debug( 'Add payment method requires 3DS', array(
+                'has_next_action' => 'yes',
+            ) );
+
+            // 儲存 nextAction 供前端處理
+            update_user_meta( $user_id, '_ys_shopline_add_method_next_action', $response['nextAction'] );
+
+            return array(
+                'result'     => 'success',
+                'nextAction' => $response['nextAction'],
+                'returnUrl'  => $return_url,
+            );
+        }
+
+        // 無需 3DS，直接完成
+        YS_Shopline_Logger::info( 'Add payment method completed without 3DS', array(
+            'trade_order_id' => isset( $response['tradeOrderId'] ) ? $response['tradeOrderId'] : '',
+        ) );
+
+        // 清理暫存資料
+        delete_user_meta( $user_id, '_ys_shopline_pending_bind' );
+
+        // 同步 Token（從 API 或 Webhook）
+        $customer_manager = YS_Shopline_Customer::instance();
+        $customer_manager->sync_tokens_from_api( $user_id );
+
+        wc_add_notice( __( '付款方式已成功新增。', 'ys-shopline-via-woocommerce' ), 'success' );
+
+        return array(
+            'result'   => 'success',
+            'redirect' => wc_get_account_endpoint_url( 'payment-methods' ),
+        );
     }
 }

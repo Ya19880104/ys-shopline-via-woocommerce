@@ -640,6 +640,74 @@ class YS_Shopline_Customer {
 	}
 
 	/**
+	 * 從 API 同步 Token 到 WooCommerce（公開方法）
+	 *
+	 * 用於在新增卡片、付款完成後同步 Token。
+	 *
+	 * @param int $user_id WordPress 用戶 ID
+	 * @return int 同步的 Token 數量
+	 */
+	public function sync_tokens_from_api( $user_id ) {
+		if ( ! $user_id ) {
+			return 0;
+		}
+
+		// 檢查是否有 Shopline Customer ID
+		$customer_id = $this->get_customer_id( $user_id );
+		if ( ! $customer_id ) {
+			YS_Shopline_Logger::debug( 'sync_tokens_from_api: No customer ID', array(
+				'user_id' => $user_id,
+			) );
+			return 0;
+		}
+
+		// 清除快取，強制從 API 取得最新資料
+		$this->clear_instruments_cache( $user_id );
+
+		// 從 API 取得付款工具
+		$instruments = $this->get_payment_instruments( $user_id, true );
+
+		if ( empty( $instruments ) ) {
+			YS_Shopline_Logger::debug( 'sync_tokens_from_api: No instruments from API', array(
+				'user_id'     => $user_id,
+				'customer_id' => $customer_id,
+			) );
+			return 0;
+		}
+
+		// 取得現有的 WC Tokens（檢查多個 gateway）
+		$gateway_ids = array( 'ys_shopline_credit', 'ys_shopline_credit_card', 'ys_shopline_credit_subscription' );
+		$existing_instrument_ids = array();
+
+		foreach ( $gateway_ids as $gw_id ) {
+			$tokens = WC_Payment_Tokens::get_customer_tokens( $user_id, $gw_id );
+			foreach ( $tokens as $token ) {
+				$existing_instrument_ids[] = $token->get_token();
+			}
+		}
+
+		// 同步到 WC Tokens
+		$synced_count = 0;
+		foreach ( $instruments as $instrument ) {
+			$instrument_id = $instrument['paymentInstrumentId'] ?? '';
+			if ( $instrument_id && ! in_array( $instrument_id, $existing_instrument_ids, true ) ) {
+				$result = $this->create_wc_token_from_instrument( $user_id, $instrument );
+				if ( $result ) {
+					$synced_count++;
+				}
+			}
+		}
+
+		YS_Shopline_Logger::info( 'Tokens synced from API', array(
+			'user_id'      => $user_id,
+			'total'        => count( $instruments ),
+			'synced'       => $synced_count,
+		) );
+
+		return $synced_count;
+	}
+
+	/**
 	 * AJAX 同步卡片
 	 */
 	public function ajax_sync_cards() {

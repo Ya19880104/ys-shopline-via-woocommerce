@@ -980,4 +980,314 @@ jQuery(function ($) {
 
     // Expose to global scope for extensions
     window.ShoplineCheckout = ShoplineCheckout;
+
+    /**
+     * Add Payment Method Page Handler
+     *
+     * 處理 /my-account/add-payment-method/ 頁面的 SDK 初始化和表單提交。
+     */
+    var AddPaymentMethodHandler = {
+
+        /**
+         * Payment instance
+         */
+        paymentInstance: null,
+
+        /**
+         * Initialize handler
+         */
+        init: function () {
+            var self = this;
+
+            // 檢查是否在 add_payment_method 頁面
+            if (!this.isAddPaymentMethodPage()) {
+                return;
+            }
+
+            console.log('[YS Shopline] Add payment method page detected');
+
+            // 初始化 SDK
+            this.initSDK();
+
+            // 綁定表單事件
+            this.bindFormEvents();
+        },
+
+        /**
+         * Check if on add payment method page
+         *
+         * @return {boolean}
+         */
+        isAddPaymentMethodPage: function () {
+            // 檢查 URL 或頁面元素
+            return $('form#add_payment_method').length > 0 ||
+                   window.location.href.indexOf('add-payment-method') !== -1;
+        },
+
+        /**
+         * Initialize SDK for add payment method
+         */
+        initSDK: function () {
+            var self = this;
+
+            // 找到 Shopline 信用卡的容器
+            var $container = $('.ys-shopline-payment-container[data-gateway="ys_shopline_credit"]');
+
+            if (!$container.length) {
+                // 嘗試其他可能的 gateway ID
+                $container = $('.ys-shopline-payment-container').first();
+            }
+
+            if (!$container.length) {
+                console.log('[YS Shopline] No payment container found on add_payment_method page');
+                return;
+            }
+
+            var gatewayId = $container.data('gateway') || 'ys_shopline_credit';
+
+            console.log('[YS Shopline] Initializing SDK for add_payment_method, gateway:', gatewayId);
+
+            // 顯示載入狀態
+            $container.html('<div class="ys-shopline-loading" style="text-align: center; padding: 20px;"><span class="spinner is-active" style="float: none;"></span> 正在載入...</div>');
+
+            // 從伺服器取得 SDK 配置
+            $.ajax({
+                type: 'POST',
+                url: ys_shopline_params.ajax_url,
+                data: {
+                    action: 'ys_shopline_get_sdk_config',
+                    nonce: ys_shopline_params.nonce,
+                    gateway: gatewayId,
+                    is_add_payment_method: 1
+                },
+                success: function (response) {
+                    if (response.success) {
+                        self.renderPayment($container, response.data);
+                    } else {
+                        var errorMsg = (response.data && response.data.message) ? response.data.message : '載入失敗';
+                        $container.html('<div class="woocommerce-error">' + errorMsg + '</div>');
+                    }
+                },
+                error: function () {
+                    $container.html('<div class="woocommerce-error">網路錯誤，請重新整理頁面。</div>');
+                }
+            });
+        },
+
+        /**
+         * Render payment SDK
+         *
+         * @param {jQuery} $container Container element
+         * @param {Object} serverConfig Server configuration
+         */
+        renderPayment: async function ($container, serverConfig) {
+            var self = this;
+
+            if (typeof ShoplinePayments === 'undefined') {
+                $container.html('<div class="woocommerce-error">付款 SDK 未載入，請重新整理頁面。</div>');
+                return;
+            }
+
+            if (!serverConfig.clientKey || !serverConfig.merchantId) {
+                $container.html('<div class="woocommerce-error">付款設定錯誤。</div>');
+                return;
+            }
+
+            // 清空容器
+            $container.empty();
+
+            try {
+                // SDK 選項 - 新增卡片頁面使用 0 金額
+                var options = {
+                    clientKey: serverConfig.clientKey,
+                    merchantId: serverConfig.merchantId,
+                    paymentMethod: 'CreditCard',
+                    currency: serverConfig.currency || 'TWD',
+                    amount: 0, // 純綁卡不需金額
+                    element: '#' + $container.attr('id'),
+                    env: serverConfig.env || 'production'
+                };
+
+                // Customer token（必須有才能儲存卡片）
+                if (serverConfig.customerToken) {
+                    options.customerToken = serverConfig.customerToken;
+
+                    // 強制啟用並儲存卡片
+                    options.paymentInstrument = {
+                        bindCard: {
+                            enable: true,
+                            protocol: {
+                                switchVisible: false,     // 隱藏開關，強制儲存
+                                defaultSwitchStatus: true,
+                                mustAccept: true
+                            }
+                        }
+                    };
+                } else {
+                    $container.html('<div class="woocommerce-error">無法取得客戶資訊，請確認您已登入。</div>');
+                    return;
+                }
+
+                console.log('[YS Shopline] Add payment method SDK options:', {
+                    merchantId: options.merchantId.substring(0, 8) + '...',
+                    paymentMethod: options.paymentMethod,
+                    env: options.env,
+                    amount: options.amount,
+                    hasCustomerToken: !!options.customerToken
+                });
+
+                // 初始化 SDK
+                var result = await ShoplinePayments(options);
+
+                console.log('[YS Shopline] Add payment method SDK result:', result);
+
+                if (result.error) {
+                    console.error('[YS Shopline] Add payment method SDK error:', result.error);
+                    $container.html('<div class="woocommerce-error">' + (result.error.message || 'SDK 錯誤') + '</div>');
+                    return;
+                }
+
+                // 儲存 payment instance
+                self.paymentInstance = result.payment;
+                $container.data('sdk-initialized', true);
+
+                console.log('[YS Shopline] Add payment method SDK initialized successfully');
+
+            } catch (e) {
+                console.error('[YS Shopline] Add payment method SDK exception:', e);
+                $container.html('<div class="woocommerce-error">' + (e.message || 'SDK 初始化失敗') + '</div>');
+            }
+        },
+
+        /**
+         * Bind form submit event
+         */
+        bindFormEvents: function () {
+            var self = this;
+
+            // WooCommerce add payment method form
+            var $form = $('form#add_payment_method');
+
+            if (!$form.length) {
+                return;
+            }
+
+            // 移除舊的綁定
+            $form.off('.ys_shopline_add_method');
+
+            // 綁定提交事件
+            $form.on('submit.ys_shopline_add_method', function (e) {
+                // 檢查是否選擇了 Shopline 付款方式
+                var selectedPayment = $('input[name="payment_method"]:checked').val();
+
+                if (!selectedPayment || selectedPayment.indexOf('ys_shopline') !== 0) {
+                    // 不是 Shopline 付款方式，讓 WooCommerce 處理
+                    return true;
+                }
+
+                // 檢查是否已有 paySession
+                if ($form.find('input[name="ys_shopline_pay_session"]').val()) {
+                    console.log('[YS Shopline] Add method: paySession exists, submitting');
+                    return true;
+                }
+
+                e.preventDefault();
+                self.processAddPaymentMethod($form);
+                return false;
+            });
+
+            console.log('[YS Shopline] Add payment method form events bound');
+        },
+
+        /**
+         * Process add payment method
+         *
+         * @param {jQuery} $form Form element
+         */
+        processAddPaymentMethod: function ($form) {
+            var self = this;
+
+            if (!this.paymentInstance) {
+                this.showError($form, '付款尚未準備就緒，請稍候再試。');
+                return;
+            }
+
+            // Block form
+            $form.addClass('processing').block({
+                message: null,
+                overlayCSS: { background: '#fff', opacity: 0.6 }
+            });
+
+            console.log('[YS Shopline] Creating payment for add_payment_method...');
+
+            // 呼叫 SDK createPayment
+            this.paymentInstance.createPayment().then(function (result) {
+                console.log('[YS Shopline] Add method createPayment result:', result);
+
+                if (result.error) {
+                    $form.removeClass('processing').unblock();
+                    self.showError($form, result.error.message || '建立付款失敗');
+                    return;
+                }
+
+                if (!result.paySession) {
+                    $form.removeClass('processing').unblock();
+                    self.showError($form, '付款資訊建立失敗，請重新輸入卡片資訊。');
+                    return;
+                }
+
+                // 添加 paySession 到表單
+                var paySessionValue = result.paySession;
+                if (typeof paySessionValue === 'object') {
+                    paySessionValue = JSON.stringify(paySessionValue);
+                }
+
+                $form.find('input[name="ys_shopline_pay_session"]').remove();
+                $form.append($('<input>').attr({
+                    type: 'hidden',
+                    name: 'ys_shopline_pay_session',
+                    value: paySessionValue
+                }));
+
+                console.log('[YS Shopline] Add method paySession saved, submitting form...');
+
+                // 提交表單到 WooCommerce
+                $form.submit();
+
+            }).catch(function (error) {
+                console.error('[YS Shopline] Add method createPayment error:', error);
+                $form.removeClass('processing').unblock();
+                self.showError($form, error.message || '發生錯誤');
+            });
+        },
+
+        /**
+         * Show error message
+         *
+         * @param {jQuery} $form Form element
+         * @param {string} message Error message
+         */
+        showError: function ($form, message) {
+            // 移除現有錯誤
+            $form.find('.woocommerce-error, .woocommerce-message').remove();
+
+            // 添加新錯誤
+            $form.prepend(
+                '<ul class="woocommerce-error" role="alert"><li>' +
+                $('<div>').text(message).html() +
+                '</li></ul>'
+            );
+
+            // 捲動到錯誤位置
+            $('html, body').animate({
+                scrollTop: $form.offset().top - 100
+            }, 500);
+        }
+    };
+
+    // Initialize add payment method handler
+    AddPaymentMethodHandler.init();
+
+    // Expose to global scope
+    window.AddPaymentMethodHandler = AddPaymentMethodHandler;
 });

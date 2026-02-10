@@ -29,6 +29,7 @@ class YS_Shopline_Credit_Card extends YS_Shopline_Gateway_Base {
             'products',
             'refunds',
             'tokenization',
+            'add_payment_method',
         );
 
         parent::__construct();
