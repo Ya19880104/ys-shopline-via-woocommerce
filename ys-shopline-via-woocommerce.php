@@ -1,11 +1,11 @@
 <?php
 /**
  * Plugin Name: YS Shopline via WooCommerce
- * Plugin URI: https://yangsheep.com
+ * Plugin URI: https://yangsheep.com.tw
  * Description: Support Shopline Payments for WooCommerce, including HPOS and Subscriptions. Supports Credit Card, ATM, JKOPay, Apple Pay, LINE Pay, and Chailease BNPL.
  * Version: 2.0.6
  * Author: YangSheep
- * Author URI: https://yangsheep.com
+ * Author URI: https://yangsheep.com.tw
  * Text Domain: ys-shopline-via-woocommerce
  * Domain Path: /languages
  * Requires at least: 6.0
@@ -94,6 +94,15 @@ final class YS_Shopline_Payment {
 
         // Redirect handler - 處理付款完成後的跳轉查詢
         require_once YS_SHOPLINE_PLUGIN_DIR . 'includes/class-ys-shopline-redirect-handler.php';
+
+        // Add payment method handler - 處理新增卡片的 3DS 回調
+        require_once YS_SHOPLINE_PLUGIN_DIR . 'includes/class-ys-shopline-add-payment-method-handler.php';
+
+        // Customer management - 會員/儲存卡管理
+        require_once YS_SHOPLINE_PLUGIN_DIR . 'includes/class-ys-shopline-customer.php';
+
+        // Order display - 訂單顯示增強
+        require_once YS_SHOPLINE_PLUGIN_DIR . 'includes/class-ys-shopline-order-display.php';
     }
 
     /**
@@ -109,8 +118,8 @@ final class YS_Shopline_Payment {
         // Register payment gateways
         add_filter( 'woocommerce_payment_gateways', array( $this, 'register_gateways' ) );
 
-        // Add settings page to WooCommerce (after WooCommerce is loaded)
-        add_filter( 'woocommerce_get_settings_pages', array( $this, 'add_settings_page' ) );
+        // Load admin settings page (independent menu, not in WooCommerce)
+        require_once YS_SHOPLINE_PLUGIN_DIR . 'includes/admin/class-ys-shopline-admin-settings.php';
 
         // Add settings link on plugins page
         add_filter( 'plugin_action_links_' . YS_SHOPLINE_PLUGIN_BASENAME, array( $this, 'plugin_action_links' ) );
@@ -204,18 +213,6 @@ final class YS_Shopline_Payment {
 
         // Initialize new architecture components (PSR-4)
         $this->init_new_architecture();
-    }
-
-    /**
-     * Add settings page to WooCommerce settings.
-     *
-     * @param array $settings Settings pages array.
-     * @return array
-     */
-    public function add_settings_page( $settings ) {
-        require_once YS_SHOPLINE_PLUGIN_DIR . 'includes/admin/class-ys-shopline-settings.php';
-        $settings[] = new YS_Shopline_Settings();
-        return $settings;
     }
 
     /**
@@ -611,7 +608,7 @@ final class YS_Shopline_Payment {
     public function plugin_action_links( $links ) {
         $settings_link = sprintf(
             '<a href="%s">%s</a>',
-            admin_url( 'admin.php?page=wc-settings&tab=ys_shopline_payment' ),
+            admin_url( 'admin.php?page=ys_shopline_payment' ),
             __( 'Settings', 'ys-shopline-via-woocommerce' )
         );
 
