@@ -67,7 +67,7 @@ final class YSBlocksIntegration extends AbstractPaymentMethodType {
      * @return array
      */
     public function get_payment_method_script_handles(): array {
-        $asset_path = YS_SHOPLINE_PLUGIN_PATH . 'assets/js/blocks/ys-shopline-blocks.asset.php';
+        $asset_path = YS_SHOPLINE_PLUGIN_DIR . 'assets/js/blocks/ys-shopline-blocks.asset.php';
 
         $version      = YS_SHOPLINE_VERSION;
         $dependencies = [];

@@ -6,6 +6,17 @@
 
 ---
 
+## [2.0.7] - 2026-02-10
+
+### Changed
+- 重構：將所有程式碼統一到 `includes/` 目錄，消除 `src/` 與 `includes/` 雙目錄架構
+- 閘道檔案從 `src/Gateways/` 搬回 `includes/gateways/`
+- PSR-4 模組從 `src/` 搬入 `includes/`（Api、Blocks、Customer、DTOs、Handlers、Utils）
+- 更新 autoloader 路徑對應
+
+### Removed
+- 移除死代碼：`class-ys-shopline-gateway.php`、`class-ys-shopline-loader.php`、`YSMyAccountEndpoint.php`
+
 ## [2.0.6] - 2026-01-17
 
 ### Fixed
