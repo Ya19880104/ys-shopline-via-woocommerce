@@ -3,7 +3,7 @@
  * Plugin Name: YS Shopline via WooCommerce
  * Plugin URI: https://yangsheep.com.tw
  * Description: Support Shopline Payments for WooCommerce, including HPOS and Subscriptions. Supports Credit Card, ATM, JKOPay, Apple Pay, LINE Pay, and Chailease BNPL.
- * Version: 2.0.6
+ * Version: 2.0.7
  * Author: YangSheep
  * Author URI: https://yangsheep.com.tw
  * Text Domain: ys-shopline-via-woocommerce
@@ -17,10 +17,9 @@
 defined( 'ABSPATH' ) || exit;
 
 // Define plugin constants
-define( 'YS_SHOPLINE_VERSION', '2.0.6' );
+define( 'YS_SHOPLINE_VERSION', '2.0.7' );
 define( 'YS_SHOPLINE_PLUGIN_FILE', __FILE__ );
 define( 'YS_SHOPLINE_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
-define( 'YS_SHOPLINE_PLUGIN_PATH', plugin_dir_path( __FILE__ ) );
 define( 'YS_SHOPLINE_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
 define( 'YS_SHOPLINE_PLUGIN_BASENAME', plugin_basename( __FILE__ ) );
 
@@ -66,7 +65,6 @@ final class YS_Shopline_Payment {
      */
     private function includes() {
         // Core classes - always load (they don't depend on WooCommerce)
-        require_once YS_SHOPLINE_PLUGIN_DIR . 'includes/class-ys-shopline-loader.php';
         require_once YS_SHOPLINE_PLUGIN_DIR . 'includes/class-ys-shopline-logger.php';
         require_once YS_SHOPLINE_PLUGIN_DIR . 'includes/class-ys-shopline-api.php';
         require_once YS_SHOPLINE_PLUGIN_DIR . 'includes/class-ys-shopline-webhook-handler.php';
@@ -78,19 +76,19 @@ final class YS_Shopline_Payment {
      */
     private function includes_wc() {
         // Gateway base class
-        require_once YS_SHOPLINE_PLUGIN_DIR . 'src/Gateways/class-ys-shopline-gateway-base.php';
+        require_once YS_SHOPLINE_PLUGIN_DIR . 'includes/gateways/class-ys-shopline-gateway-base.php';
 
         // Payment gateways
-        require_once YS_SHOPLINE_PLUGIN_DIR . 'src/Gateways/class-ys-shopline-credit-card.php';
-        require_once YS_SHOPLINE_PLUGIN_DIR . 'src/Gateways/class-ys-shopline-credit-subscription.php';
-        require_once YS_SHOPLINE_PLUGIN_DIR . 'src/Gateways/class-ys-shopline-virtual-account.php';
-        require_once YS_SHOPLINE_PLUGIN_DIR . 'src/Gateways/class-ys-shopline-jkopay.php';
-        require_once YS_SHOPLINE_PLUGIN_DIR . 'src/Gateways/class-ys-shopline-applepay.php';
-        require_once YS_SHOPLINE_PLUGIN_DIR . 'src/Gateways/class-ys-shopline-linepay.php';
-        require_once YS_SHOPLINE_PLUGIN_DIR . 'src/Gateways/class-ys-shopline-chailease-bnpl.php';
+        require_once YS_SHOPLINE_PLUGIN_DIR . 'includes/gateways/class-ys-shopline-credit-card.php';
+        require_once YS_SHOPLINE_PLUGIN_DIR . 'includes/gateways/class-ys-shopline-credit-subscription.php';
+        require_once YS_SHOPLINE_PLUGIN_DIR . 'includes/gateways/class-ys-shopline-virtual-account.php';
+        require_once YS_SHOPLINE_PLUGIN_DIR . 'includes/gateways/class-ys-shopline-jkopay.php';
+        require_once YS_SHOPLINE_PLUGIN_DIR . 'includes/gateways/class-ys-shopline-applepay.php';
+        require_once YS_SHOPLINE_PLUGIN_DIR . 'includes/gateways/class-ys-shopline-linepay.php';
+        require_once YS_SHOPLINE_PLUGIN_DIR . 'includes/gateways/class-ys-shopline-chailease-bnpl.php';
 
         // Subscription handler
-        require_once YS_SHOPLINE_PLUGIN_DIR . 'src/Gateways/class-ys-shopline-subscription.php';
+        require_once YS_SHOPLINE_PLUGIN_DIR . 'includes/gateways/class-ys-shopline-subscription.php';
 
         // Redirect handler - 處理付款完成後的跳轉查詢
         require_once YS_SHOPLINE_PLUGIN_DIR . 'includes/class-ys-shopline-redirect-handler.php';

@@ -11,11 +11,11 @@
     ],
     "autoload": {
         "psr-4": {
-            "YangSheep\\ShoplinePayment\\": "src/"
+            "YangSheep\\ShoplinePayment\\": "includes/"
         }
     },
     "require": {
-        "php": ">=8.0"
+        "php": ">=7.4"
     },
     "config": {
         "optimize-autoloader": true
