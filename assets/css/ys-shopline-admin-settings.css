@@ -1,0 +1,482 @@
+/**
+ * Admin Settings Styles for YS Shopline Payment
+ *
+ * @package YangSheep\ShoplinePayment
+ */
+
+/* ==========================================================================
+   Settings Page Layout
+   ========================================================================== */
+
+.ys-shopline-settings-wrap {
+    max-width: 1200px;
+}
+
+.ys-shopline-settings-wrap h2 {
+    font-size: 1.3em;
+    margin-top: 2em;
+    padding-bottom: 0.5em;
+    border-bottom: 1px solid #ddd;
+}
+
+.ys-shopline-settings-wrap h2:first-of-type {
+    margin-top: 1em;
+}
+
+/* ==========================================================================
+   Section Headers with Purple Accent
+   ========================================================================== */
+
+.ys-shopline-section-title {
+    position: relative;
+    padding-left: 15px;
+    margin: 30px 0 15px;
+    font-size: 1.1em;
+    font-weight: 600;
+    color: #1d2327;
+}
+
+.ys-shopline-section-title::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: 4px;
+    background: #cc99c2;
+    border-radius: 2px;
+}
+
+/* ==========================================================================
+   Toggle Switch Styles
+   ========================================================================== */
+
+.ys-shopline-toggle-wrap {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.ys-shopline-toggle {
+    position: relative;
+    display: inline-block;
+    width: 50px;
+    height: 26px;
+    flex-shrink: 0;
+}
+
+.ys-shopline-toggle input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+}
+
+.ys-shopline-toggle-slider {
+    position: absolute;
+    cursor: pointer;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-color: #ccc;
+    transition: 0.3s;
+    border-radius: 26px;
+}
+
+.ys-shopline-toggle-slider::before {
+    position: absolute;
+    content: "";
+    height: 20px;
+    width: 20px;
+    left: 3px;
+    bottom: 3px;
+    background-color: white;
+    transition: 0.3s;
+    border-radius: 50%;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+
+.ys-shopline-toggle input:checked + .ys-shopline-toggle-slider {
+    background-color: #cc99c2;
+}
+
+.ys-shopline-toggle input:focus + .ys-shopline-toggle-slider {
+    box-shadow: 0 0 1px #cc99c2;
+}
+
+.ys-shopline-toggle input:checked + .ys-shopline-toggle-slider::before {
+    transform: translateX(24px);
+}
+
+.ys-shopline-toggle-label {
+    font-size: 13px;
+    color: #50575e;
+}
+
+/* ==========================================================================
+   Form Table Enhancements
+   ========================================================================== */
+
+.ys-shopline-settings-wrap .form-table {
+    margin-top: 0;
+}
+
+.ys-shopline-settings-wrap .form-table th {
+    padding: 20px 10px 20px 0;
+    width: 200px;
+    vertical-align: top;
+}
+
+.ys-shopline-settings-wrap .form-table td {
+    padding: 15px 10px;
+    vertical-align: top;
+}
+
+.ys-shopline-settings-wrap .form-table td p.description {
+    margin-top: 8px;
+    color: #646970;
+    font-style: italic;
+}
+
+.ys-shopline-settings-wrap .form-table input[type="text"],
+.ys-shopline-settings-wrap .form-table input[type="password"],
+.ys-shopline-settings-wrap .form-table input[type="number"],
+.ys-shopline-settings-wrap .form-table input[type="url"],
+.ys-shopline-settings-wrap .form-table select,
+.ys-shopline-settings-wrap .form-table textarea {
+    width: 400px;
+    max-width: 100%;
+}
+
+/* ==========================================================================
+   Status Indicators
+   ========================================================================== */
+
+.ys-shopline-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    border-radius: 4px;
+    font-size: 12px;
+    font-weight: 500;
+}
+
+.ys-shopline-status-enabled {
+    background: #d4edda;
+    color: #155724;
+}
+
+.ys-shopline-status-disabled {
+    background: #f8d7da;
+    color: #721c24;
+}
+
+.ys-shopline-status-test {
+    background: #fff3cd;
+    color: #856404;
+}
+
+.ys-shopline-status::before {
+    content: '';
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+}
+
+.ys-shopline-status-enabled::before {
+    background: #28a745;
+}
+
+.ys-shopline-status-disabled::before {
+    background: #dc3545;
+}
+
+.ys-shopline-status-test::before {
+    background: #ffc107;
+}
+
+/* ==========================================================================
+   Card/Box Styles
+   ========================================================================== */
+
+.ys-shopline-card {
+    background: #fff;
+    border: 1px solid #c3c4c7;
+    border-radius: 4px;
+    padding: 20px;
+    margin-bottom: 20px;
+}
+
+.ys-shopline-card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 15px;
+    padding-bottom: 15px;
+    border-bottom: 1px solid #dcdcde;
+}
+
+.ys-shopline-card-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: #1d2327;
+    margin: 0;
+}
+
+.ys-shopline-card-body {
+    color: #50575e;
+}
+
+/* ==========================================================================
+   Gateway List
+   ========================================================================== */
+
+.ys-shopline-gateway-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 15px;
+}
+
+.ys-shopline-gateway-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 15px;
+    background: #f6f7f7;
+    border: 1px solid #dcdcde;
+    border-radius: 4px;
+    transition: border-color 0.2s;
+}
+
+.ys-shopline-gateway-item:hover {
+    border-color: #cc99c2;
+}
+
+.ys-shopline-gateway-item.enabled {
+    background: #fdf9fd;
+    border-color: #cc99c2;
+}
+
+.ys-shopline-gateway-icon {
+    width: 40px;
+    height: 40px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+}
+
+.ys-shopline-gateway-icon img {
+    max-width: 100%;
+    max-height: 100%;
+}
+
+.ys-shopline-gateway-info {
+    flex-grow: 1;
+    min-width: 0;
+}
+
+.ys-shopline-gateway-name {
+    font-weight: 500;
+    color: #1d2327;
+    margin-bottom: 2px;
+}
+
+.ys-shopline-gateway-desc {
+    font-size: 12px;
+    color: #646970;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* ==========================================================================
+   Notice Styles
+   ========================================================================== */
+
+.ys-shopline-notice {
+    padding: 12px 15px;
+    border-left: 4px solid;
+    background: #fff;
+    margin: 15px 0;
+}
+
+.ys-shopline-notice-info {
+    border-color: #00a0d2;
+    background: #f0f6fc;
+}
+
+.ys-shopline-notice-success {
+    border-color: #46b450;
+    background: #ecf7ed;
+}
+
+.ys-shopline-notice-warning {
+    border-color: #ffb900;
+    background: #fff8e5;
+}
+
+.ys-shopline-notice-error {
+    border-color: #dc3232;
+    background: #fbeaea;
+}
+
+/* ==========================================================================
+   Button Styles
+   ========================================================================== */
+
+.ys-shopline-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 16px;
+    border: 1px solid;
+    border-radius: 4px;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    text-decoration: none;
+    transition: all 0.2s;
+}
+
+.ys-shopline-btn-primary {
+    background: #cc99c2;
+    border-color: #cc99c2;
+    color: #fff;
+}
+
+.ys-shopline-btn-primary:hover {
+    background: #b888ad;
+    border-color: #b888ad;
+    color: #fff;
+}
+
+.ys-shopline-btn-secondary {
+    background: #fff;
+    border-color: #cc99c2;
+    color: #cc99c2;
+}
+
+.ys-shopline-btn-secondary:hover {
+    background: #fdf9fd;
+}
+
+/* ==========================================================================
+   Credential Fields
+   ========================================================================== */
+
+.ys-shopline-credential-field {
+    position: relative;
+}
+
+.ys-shopline-credential-field input {
+    padding-right: 40px;
+}
+
+.ys-shopline-toggle-visibility {
+    position: absolute;
+    right: 10px;
+    top: 50%;
+    transform: translateY(-50%);
+    background: none;
+    border: none;
+    cursor: pointer;
+    color: #646970;
+    padding: 5px;
+}
+
+.ys-shopline-toggle-visibility:hover {
+    color: #1d2327;
+}
+
+/* ==========================================================================
+   Responsive Adjustments
+   ========================================================================== */
+
+@media screen and (max-width: 782px) {
+    .ys-shopline-settings-wrap .form-table th {
+        width: auto;
+        padding-bottom: 10px;
+    }
+
+    .ys-shopline-settings-wrap .form-table td {
+        padding-left: 0;
+    }
+
+    .ys-shopline-settings-wrap .form-table input[type="text"],
+    .ys-shopline-settings-wrap .form-table input[type="password"],
+    .ys-shopline-settings-wrap .form-table input[type="number"],
+    .ys-shopline-settings-wrap .form-table select {
+        width: 100%;
+    }
+
+    .ys-shopline-gateway-list {
+        grid-template-columns: 1fr;
+    }
+}
+
+/* ==========================================================================
+   Tab Navigation Enhancement
+   ========================================================================== */
+
+.woocommerce .subsubsub li a[href*="ys_shopline_payment"] {
+    color: #cc99c2;
+}
+
+.woocommerce .subsubsub li a[href*="ys_shopline_payment"]:hover,
+.woocommerce .subsubsub li a[href*="ys_shopline_payment"].current {
+    color: #b888ad;
+}
+
+/* ==========================================================================
+   Test Mode Banner
+   ========================================================================== */
+
+.ys-shopline-testmode-banner {
+    background: linear-gradient(135deg, #fff3cd 0%, #ffeeba 100%);
+    border: 1px solid #ffc107;
+    border-radius: 4px;
+    padding: 12px 20px;
+    margin-bottom: 20px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.ys-shopline-testmode-banner .dashicons {
+    color: #856404;
+}
+
+.ys-shopline-testmode-banner span {
+    color: #856404;
+    font-weight: 500;
+}
+
+/* ==========================================================================
+   Webhook URL Display
+   ========================================================================== */
+
+.ys-shopline-webhook-url {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    background: #f0f0f1;
+    padding: 10px 15px;
+    border-radius: 4px;
+    font-family: monospace;
+    font-size: 13px;
+    word-break: break-all;
+}
+
+.ys-shopline-webhook-url code {
+    flex-grow: 1;
+    background: none;
+    padding: 0;
+}
+
+.ys-shopline-copy-btn {
+    flex-shrink: 0;
+    padding: 5px 10px;
+    font-size: 12px;
+}

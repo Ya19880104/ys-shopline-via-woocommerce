@@ -6,6 +6,56 @@
 
 ---
 
+## [2.2.0] - 2026-02-15
+
+### Changed
+- 重構：統一所有命名為 PSR-4 風格（PascalCase 檔名 + 命名空間）
+- 所有 14 個 Legacy 檔案（`class-ys-shopline-*.php`）重新命名為 PascalCase（`YS*.php`）
+- 所有類別加上 `namespace YangSheep\ShoplinePayment\{Module}`
+- 類別名稱統一：`YS_Shopline_*` → `YS*`（如 `YS_Shopline_Credit_Card` → `YSCreditCard`）
+- 主入口類別：`YS_Shopline_Payment` → `YSShoplinePayment`
+- 閘道註冊改用 `::class` 語法（FQN 字串）
+- 消除所有 `require_once`，全部由 PSR-4 autoloader 載入
+- 合併 `init_new_architecture()` 到 `init()`，不再區分新舊架構
+- 資產檔案統一使用 `ys-shopline-*` 前綴命名
+
+### Fixed
+- Webhook 事件名稱對齊 API 文件（`trade.cancelled`、`customer.instrument.binded/unbinded`、`trade.refund.succeeded/failed`）
+- Webhook 付款工具欄位改用 API 文件結構（`data.paymentInstrument.instrumentId`、`data.customerId`）
+- 卡片同步欄位映射修正（`instrumentId`、`expireMonth`、`expireYear`）
+- 簽章驗證移除本地環境繞過，所有環境一律驗證 HMAC
+
+### Added
+- 新增 `trade.expired`、`trade.processing`、`trade.customer_action`、`customer.instrument.updated` 事件處理
+- 新增 `manual.trade.capture.succeeded`、`manual.trade.cancel.succeeded` 事件處理
+- 保留舊事件名稱相容（`payment.success`、`refund.succeeded` 等）
+- 新增 Block Checkout 信用卡圖示（visa.svg、mastercard.svg、jcb.svg）
+
+### Removed
+- 移除 `includes()` 和 `includes_wc()` 方法（15 個 `require_once`）
+- 移除 `init_new_architecture()` 方法
+- 移除簽章驗證的本地環境繞過邏輯
+
+## [2.1.0] - 2026-02-14
+
+### Changed
+- 重構：統一所有程式碼至 `src/` 目錄，消除 `includes/` 與 `src/` 雙架構
+- 所有閘道檔案搬至 `src/Gateways/`
+- 所有 PSR-4 模組搬至 `src/`（Api、Blocks、DTOs、Handlers、Utils）
+- Legacy 類別搬入對應子目錄（Admin、Customer、Frontend、Handlers）
+- 合併 Logger：統一使用 `YSLogger`（PSR-4），所有檔案透過 `use` 語句引用
+- 合併 Webhook Handler：統一使用 `YSWebhookHandler`（PSR-4），支援 REST API + WC API 雙端點
+- 統一 debug option key 為 `ys_shopline_debug`
+- PHP 最低需求升級至 8.0
+- 更新 Composer PSR-4 autoloader 路徑
+
+### Removed
+- 移除 `includes/class-ys-shopline-logger.php`（已合併至 YSLogger）
+- 移除 `includes/class-ys-shopline-webhook-handler.php`（已合併至 YSWebhookHandler）
+- 移除 `class_alias` 向後相容機制，直接使用 PSR-4 類別
+- 移除死代碼：`class-ys-shopline-settings.php`、`YSCustomerManager.php`
+- 移除整個 `includes/` 目錄
+
 ## [2.0.7] - 2026-02-10
 
 ### Changed
