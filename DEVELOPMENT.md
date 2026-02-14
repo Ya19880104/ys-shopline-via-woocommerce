@@ -8,72 +8,65 @@
 
 ```
 ys-shopline-via-woocommerce/
-├── ys-shopline-via-woocommerce.php     # 主入口檔案
+├── ys-shopline-via-woocommerce.php     # 主入口（YSShoplinePayment 類別）
 ├── composer.json                        # PSR-4 自動加載配置
 │
-├── assets/                              # 靜態資源
+├── assets/                              # 靜態資源（ys-shopline-* kebab-case）
 │   ├── css/
-│   │   └── admin-settings.css          # 後台設定樣式
+│   │   └── ys-shopline-admin-settings.css
+│   ├── images/
+│   │   ├── visa.svg
+│   │   ├── mastercard.svg
+│   │   └── jcb.svg
 │   └── js/
 │       ├── blocks/
-│       │   └── ys-shopline-blocks.js   # Block Checkout 支援
-│       └── shopline-checkout.js        # 結帳頁 SDK 初始化
+│       │   └── ys-shopline-blocks.js
+│       └── ys-shopline-checkout.js
 │
-├── includes/                            # 所有 PHP 類別
-│   ├── class-ys-shopline-logger.php    # 日誌記錄
-│   ├── class-ys-shopline-api.php       # API 通訊（底層）
-│   ├── class-ys-shopline-webhook-handler.php  # Legacy Webhook
-│   ├── class-ys-shopline-redirect-handler.php # 付款跳轉處理
-│   ├── class-ys-shopline-add-payment-method-handler.php # 新增卡片 3DS
-│   ├── class-ys-shopline-customer.php  # 會員/儲存卡管理
-│   ├── class-ys-shopline-order-display.php    # 訂單頁面顯示增強
-│   │
-│   ├── admin/                          # 後台設定
-│   │   ├── class-ys-shopline-admin-settings.php
-│   │   └── class-ys-shopline-settings.php
-│   │
-│   ├── gateways/                       # 付款閘道（require_once 載入）
-│   │   ├── class-ys-shopline-gateway-base.php
-│   │   ├── class-ys-shopline-credit-card.php
-│   │   ├── class-ys-shopline-credit-subscription.php
-│   │   ├── class-ys-shopline-virtual-account.php
-│   │   ├── class-ys-shopline-jkopay.php
-│   │   ├── class-ys-shopline-applepay.php
-│   │   ├── class-ys-shopline-linepay.php
-│   │   ├── class-ys-shopline-chailease-bnpl.php
-│   │   └── class-ys-shopline-subscription.php
-│   │
-│   ├── Api/                            # API 客戶端（PSR-4）
+├── src/                                 # PHP 類別（PascalCase = 類別名 = 檔名）
+│   ├── Admin/
+│   │   └── YSAdminSettings.php
+│   ├── Api/
+│   │   ├── YSApi.php
 │   │   ├── YSShoplineClient.php
 │   │   └── YSShoplineRequester.php
-│   │
-│   ├── Blocks/                         # Block Checkout（PSR-4）
+│   ├── Blocks/
 │   │   ├── YSBlocksSupport.php
 │   │   └── YSBlocksIntegration.php
-│   │
-│   ├── Customer/                       # 客戶管理（PSR-4）
-│   │   └── YSCustomerManager.php
-│   │
-│   ├── DTOs/                           # 資料傳輸物件（PSR-4）
-│   │   ├── YSSessionDTO.php
-│   │   ├── YSPaymentDTO.php
-│   │   ├── YSPaymentInstrumentDTO.php
+│   ├── Customer/
+│   │   └── YSCustomer.php
+│   ├── DTOs/
 │   │   ├── YSAmountDTO.php
 │   │   ├── YSCustomerDTO.php
-│   │   └── YSRefundDTO.php
-│   │
-│   ├── Handlers/                       # Webhook、狀態同步（PSR-4）
+│   │   ├── YSPaymentDTO.php
+│   │   ├── YSPaymentInstrumentDTO.php
+│   │   ├── YSRefundDTO.php
+│   │   └── YSSessionDTO.php
+│   ├── Frontend/
+│   │   └── YSOrderDisplay.php
+│   ├── Gateways/
+│   │   ├── YSGatewayBase.php           # 抽象基底類別
+│   │   ├── YSCreditCard.php            # 信用卡
+│   │   ├── YSCreditSubscription.php    # 信用卡訂閱
+│   │   ├── YSVirtualAccount.php        # ATM 虛擬帳號
+│   │   ├── YSJKOPay.php               # 街口支付
+│   │   ├── YSApplePay.php             # Apple Pay
+│   │   ├── YSLinePay.php              # LINE Pay
+│   │   ├── YSChaileaseBNPL.php        # 中租零卡分期
+│   │   └── YSSubscription.php          # 訂閱處理器
+│   ├── Handlers/
 │   │   ├── YSWebhookHandler.php
-│   │   └── YSStatusManager.php
-│   │
-│   └── Utils/                          # 工具類別（PSR-4）
+│   │   ├── YSStatusManager.php
+│   │   ├── YSRedirectHandler.php
+│   │   └── YSAddPaymentMethodHandler.php
+│   └── Utils/
 │       ├── YSLogger.php
 │       ├── YSOrderMeta.php
 │       └── YSSignatureVerifier.php
 │
 ├── templates/
 │   └── myaccount/
-│       └── payment-methods.php         # 儲存卡頁面自訂模板
+│       └── payment-methods.php
 │
 └── vendor/
     └── autoload.php                    # PSR-4 自動加載器
@@ -83,26 +76,34 @@ ys-shopline-via-woocommerce/
 
 ## 架構說明
 
-### 統一目錄架構
+### 統一 PSR-4 架構
 
-所有程式碼統一放在 `includes/` 目錄下，分為兩種載入方式：
+所有 PHP 類別放在 `src/` 目錄下，檔名 = 類別名（PascalCase），由 PSR-4 autoloader 直接載入：
 
-| 子目錄 | 命名規則 | 載入方式 | 說明 |
-|--------|---------|---------|------|
-| `includes/` 根層 | `YS_Shopline_*` | require_once | 核心類別、API、設定頁 |
-| `includes/gateways/` | `YS_Shopline_*` | require_once | 付款閘道 |
-| `includes/Api/` 等大寫目錄 | `YS*` (PSR-4) | autoload | 功能模組 |
+| 子目錄 | 命名空間 | 說明 |
+|--------|---------|------|
+| `src/Api/` | `YangSheep\ShoplinePayment\Api` | API 通訊 |
+| `src/Admin/` | `YangSheep\ShoplinePayment\Admin` | 後台管理 |
+| `src/Blocks/` | `YangSheep\ShoplinePayment\Blocks` | Block Checkout |
+| `src/Customer/` | `YangSheep\ShoplinePayment\Customer` | 會員/儲存卡 |
+| `src/DTOs/` | `YangSheep\ShoplinePayment\DTOs` | 資料傳輸物件 |
+| `src/Frontend/` | `YangSheep\ShoplinePayment\Frontend` | 前台顯示 |
+| `src/Gateways/` | `YangSheep\ShoplinePayment\Gateways` | 付款閘道 |
+| `src/Handlers/` | `YangSheep\ShoplinePayment\Handlers` | 事件處理器 |
+| `src/Utils/` | `YangSheep\ShoplinePayment\Utils` | 工具類別 |
 
-### 命名空間
+### 跨模組引用
+
+所有類別透過 `use` 語句互相引用：
 
 ```php
-// PSR-4 命名空間（自動載入，對應 includes/ 目錄）
-namespace YangSheep\ShoplinePayment\Api;
-namespace YangSheep\ShoplinePayment\Blocks;
-namespace YangSheep\ShoplinePayment\Customer;
-namespace YangSheep\ShoplinePayment\DTOs;
-namespace YangSheep\ShoplinePayment\Handlers;
-namespace YangSheep\ShoplinePayment\Utils;
+namespace YangSheep\ShoplinePayment\Gateways;
+
+use YangSheep\ShoplinePayment\Utils\YSLogger;
+use YangSheep\ShoplinePayment\Customer\YSCustomer;
+
+// 引用主入口類別（全域命名空間）
+\YSShoplinePayment::get_api();
 ```
 
 ---
@@ -120,13 +121,15 @@ namespace YangSheep\ShoplinePayment\Utils;
 | 常數 | `YS_` | `YS_SHOPLINE_VERSION` |
 | REST API | `ys-` | `ys-shopline/v1/webhook` |
 
-### 舊架構類別名稱
+### 類別名稱對照
 
-```php
-YS_Shopline_Payment         // 主外掛類別
-YS_Shopline_Gateway_Base    // 閘道基底類別
-YS_Shopline_Credit_Card     // 信用卡閘道
-```
+| 模組 | 類別名稱 | FQN |
+|------|---------|-----|
+| 主入口 | `YSShoplinePayment` | （全域命名空間） |
+| API | `YSApi` | `YangSheep\ShoplinePayment\Api\YSApi` |
+| 閘道基底 | `YSGatewayBase` | `YangSheep\ShoplinePayment\Gateways\YSGatewayBase` |
+| 信用卡 | `YSCreditCard` | `YangSheep\ShoplinePayment\Gateways\YSCreditCard` |
+| Logger | `YSLogger` | `YangSheep\ShoplinePayment\Utils\YSLogger` |
 
 ---
 
@@ -134,12 +137,11 @@ YS_Shopline_Credit_Card     // 信用卡閘道
 
 ```php
 // 版本
-YS_SHOPLINE_VERSION = '2.0.7'
+YS_SHOPLINE_VERSION = '2.2.0'
 
 // 路徑
 YS_SHOPLINE_PLUGIN_FILE      // 主檔完整路徑
 YS_SHOPLINE_PLUGIN_DIR       // 外掛目錄路徑
-YS_SHOPLINE_PLUGIN_PATH      // 同 PLUGIN_DIR
 YS_SHOPLINE_PLUGIN_URL       // 外掛 URL
 YS_SHOPLINE_PLUGIN_BASENAME  // 外掛基本名稱
 ```
@@ -185,7 +187,7 @@ $order->save();
 
 ## 核心類別說明
 
-### API 層 (includes/Api/)
+### API 層 (src/Api/)
 
 **YSShoplineClient** - 高階 API 客戶端
 ```php
@@ -208,7 +210,7 @@ $refund = $client->create_refund( $payment_id, $amount );
 - 認證頭設定
 - 簽章生成
 
-### DTO 層 (includes/DTOs/)
+### DTO 層 (src/DTOs/)
 
 資料傳輸物件，用於 API 回應的結構化：
 
@@ -222,16 +224,18 @@ echo $payment->amount->value;    // 金額
 
 ### 閘道層
 
-**YS_Shopline_Gateway_Base** (includes/gateways/)
-- 所有閘道的基底類別
+**YSGatewayBase** (src/Gateways/)
+- 所有閘道的抽象基底類別（`extends WC_Payment_Gateway`）
 - 提供通用設定、API 調用方法
 
 ### Webhook 處理
 
-**YSWebhookHandler** (includes/Handlers/)
+**YSWebhookHandler** (src/Handlers/)
 - REST API 端點：`/wp-json/ys-shopline/v1/webhook`
-- 簽章驗證
-- 事件處理和訂單狀態更新
+- WC API 端點：`/wc-api/ys_shopline_webhook`
+- 簽章驗證（HMAC-SHA256，`sign` + `timestamp` header）
+- 支援事件：`trade.succeeded/failed/cancelled/expired/processing/authorized/captured`、`trade.refund.succeeded/failed`、`customer.instrument.binded/unbinded/updated`
+- 保留舊事件格式相容（`payment.success`、`refund.succeeded` 等）
 
 ---
 
@@ -249,7 +253,7 @@ echo $payment->amount->value;    // 金額
 3. 跳轉至 Shopline 付款頁面 (session.redirectUrl)
 
 4. 顧客完成付款，跳回 return URL
-   └─ YS_Shopline_Redirect_Handler 處理
+   └─ YSRedirectHandler 處理
 
 5. 查詢 Session 狀態，更新訂單
    ├─ 成功：設為 processing
@@ -327,13 +331,14 @@ add_action( 'wp_ajax_ys_shopline_sync_cards', [ $this, 'sync_cards' ] );
 
 ### 新增支付方式
 
-1. 在 `includes/gateways/` 建立新閘道類別
-2. 繼承 `YS_Shopline_Gateway_Base`
-3. 實作必要方法：
+1. 在 `src/Gateways/` 建立新閘道類別（`YSXxx.php` PascalCase 檔名 = 類別名）
+2. 加上 `namespace YangSheep\ShoplinePayment\Gateways;`
+3. 繼承 `YSGatewayBase`
+4. 實作必要方法：
    - `__construct()` - 設定 id, title, supports
    - `init_form_fields()` - 定義設定欄位
    - `process_payment()` - 處理付款
-4. 在主檔案註冊閘道
+5. 在主檔案 `register_gateways()` 中用 `YSNewGateway::class` 註冊
 
 ### HPOS 相容性
 
@@ -375,6 +380,21 @@ YSLogger::error( 'API Error', [ 'response' => $response ] );
 ---
 
 ## 版本歷史
+
+### 2.2.0
+- 統一所有命名為 PSR-4 風格（PascalCase + namespace）
+- 消除所有 `require_once`，全部由 autoloader 載入
+- 類別名稱統一：`YS_Shopline_*` → `YS*`
+- 主類別：`YS_Shopline_Payment` → `YSShoplinePayment`
+
+### 2.1.0
+- 統一所有程式碼至 `src/` 目錄
+- 合併 Logger 和 Webhook Handler，統一使用 PSR-4 類別
+- 所有檔案透過 `use` 語句直接引用 `YSLogger`（移除 class_alias）
+- 移除死代碼，PHP 最低需求升級至 8.0
+
+### 2.0.7
+- 將所有程式碼統一到 `includes/`
 
 ### 2.0.6
 - 改善儲存卡頁面使用 AJAX 更新

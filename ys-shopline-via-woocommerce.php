@@ -3,13 +3,13 @@
  * Plugin Name: YS Shopline via WooCommerce
  * Plugin URI: https://yangsheep.com.tw
  * Description: Support Shopline Payments for WooCommerce, including HPOS and Subscriptions. Supports Credit Card, ATM, JKOPay, Apple Pay, LINE Pay, and Chailease BNPL.
- * Version: 2.0.7
+ * Version: 2.2.0
  * Author: YangSheep
  * Author URI: https://yangsheep.com.tw
  * Text Domain: ys-shopline-via-woocommerce
  * Domain Path: /languages
  * Requires at least: 6.0
- * Requires PHP: 7.4
+ * Requires PHP: 8.0
  * WC requires at least: 7.0
  * WC tested up to: 9.0
  */
@@ -17,33 +17,52 @@
 defined( 'ABSPATH' ) || exit;
 
 // Define plugin constants
-define( 'YS_SHOPLINE_VERSION', '2.0.7' );
+define( 'YS_SHOPLINE_VERSION', '2.2.0' );
 define( 'YS_SHOPLINE_PLUGIN_FILE', __FILE__ );
 define( 'YS_SHOPLINE_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 define( 'YS_SHOPLINE_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
 define( 'YS_SHOPLINE_PLUGIN_BASENAME', plugin_basename( __FILE__ ) );
 
-// Load Composer autoloader for new architecture
+// Load Composer autoloader
 if ( file_exists( YS_SHOPLINE_PLUGIN_DIR . 'vendor/autoload.php' ) ) {
     require_once YS_SHOPLINE_PLUGIN_DIR . 'vendor/autoload.php';
 }
 
+use YangSheep\ShoplinePayment\Utils\YSLogger;
+use YangSheep\ShoplinePayment\Api\YSApi;
+use YangSheep\ShoplinePayment\Admin\YSAdminSettings;
+use YangSheep\ShoplinePayment\Gateways\YSSubscription;
+use YangSheep\ShoplinePayment\Gateways\YSCreditCard;
+use YangSheep\ShoplinePayment\Gateways\YSCreditSubscription;
+use YangSheep\ShoplinePayment\Gateways\YSVirtualAccount;
+use YangSheep\ShoplinePayment\Gateways\YSJKOPay;
+use YangSheep\ShoplinePayment\Gateways\YSApplePay;
+use YangSheep\ShoplinePayment\Gateways\YSLinePay;
+use YangSheep\ShoplinePayment\Gateways\YSChaileaseBNPL;
+use YangSheep\ShoplinePayment\Customer\YSCustomer;
+use YangSheep\ShoplinePayment\Frontend\YSOrderDisplay;
+use YangSheep\ShoplinePayment\Handlers\YSRedirectHandler;
+use YangSheep\ShoplinePayment\Handlers\YSAddPaymentMethodHandler;
+use YangSheep\ShoplinePayment\Handlers\YSWebhookHandler;
+use YangSheep\ShoplinePayment\Handlers\YSStatusManager;
+use YangSheep\ShoplinePayment\Blocks\YSBlocksSupport;
+
 /**
  * Main plugin class.
  */
-final class YS_Shopline_Payment {
+final class YSShoplinePayment {
 
     /**
      * Plugin instance.
      *
-     * @var YS_Shopline_Payment
+     * @var YSShoplinePayment
      */
     private static $instance = null;
 
     /**
      * Get plugin instance.
      *
-     * @return YS_Shopline_Payment
+     * @return YSShoplinePayment
      */
     public static function instance() {
         if ( is_null( self::$instance ) ) {
@@ -56,51 +75,7 @@ final class YS_Shopline_Payment {
      * Constructor.
      */
     private function __construct() {
-        $this->includes();
         $this->init_hooks();
-    }
-
-    /**
-     * Include required files.
-     */
-    private function includes() {
-        // Core classes - always load (they don't depend on WooCommerce)
-        require_once YS_SHOPLINE_PLUGIN_DIR . 'includes/class-ys-shopline-logger.php';
-        require_once YS_SHOPLINE_PLUGIN_DIR . 'includes/class-ys-shopline-api.php';
-        require_once YS_SHOPLINE_PLUGIN_DIR . 'includes/class-ys-shopline-webhook-handler.php';
-    }
-
-    /**
-     * Include WooCommerce-dependent files.
-     * Called after WooCommerce is loaded.
-     */
-    private function includes_wc() {
-        // Gateway base class
-        require_once YS_SHOPLINE_PLUGIN_DIR . 'includes/gateways/class-ys-shopline-gateway-base.php';
-
-        // Payment gateways
-        require_once YS_SHOPLINE_PLUGIN_DIR . 'includes/gateways/class-ys-shopline-credit-card.php';
-        require_once YS_SHOPLINE_PLUGIN_DIR . 'includes/gateways/class-ys-shopline-credit-subscription.php';
-        require_once YS_SHOPLINE_PLUGIN_DIR . 'includes/gateways/class-ys-shopline-virtual-account.php';
-        require_once YS_SHOPLINE_PLUGIN_DIR . 'includes/gateways/class-ys-shopline-jkopay.php';
-        require_once YS_SHOPLINE_PLUGIN_DIR . 'includes/gateways/class-ys-shopline-applepay.php';
-        require_once YS_SHOPLINE_PLUGIN_DIR . 'includes/gateways/class-ys-shopline-linepay.php';
-        require_once YS_SHOPLINE_PLUGIN_DIR . 'includes/gateways/class-ys-shopline-chailease-bnpl.php';
-
-        // Subscription handler
-        require_once YS_SHOPLINE_PLUGIN_DIR . 'includes/gateways/class-ys-shopline-subscription.php';
-
-        // Redirect handler - 處理付款完成後的跳轉查詢
-        require_once YS_SHOPLINE_PLUGIN_DIR . 'includes/class-ys-shopline-redirect-handler.php';
-
-        // Add payment method handler - 處理新增卡片的 3DS 回調
-        require_once YS_SHOPLINE_PLUGIN_DIR . 'includes/class-ys-shopline-add-payment-method-handler.php';
-
-        // Customer management - 會員/儲存卡管理
-        require_once YS_SHOPLINE_PLUGIN_DIR . 'includes/class-ys-shopline-customer.php';
-
-        // Order display - 訂單顯示增強
-        require_once YS_SHOPLINE_PLUGIN_DIR . 'includes/class-ys-shopline-order-display.php';
     }
 
     /**
@@ -116,8 +91,8 @@ final class YS_Shopline_Payment {
         // Register payment gateways
         add_filter( 'woocommerce_payment_gateways', array( $this, 'register_gateways' ) );
 
-        // Load admin settings page (independent menu, not in WooCommerce)
-        require_once YS_SHOPLINE_PLUGIN_DIR . 'includes/admin/class-ys-shopline-admin-settings.php';
+        // Initialize admin settings page
+        YSAdminSettings::get_instance();
 
         // Add settings link on plugins page
         add_filter( 'plugin_action_links_' . YS_SHOPLINE_PLUGIN_BASENAME, array( $this, 'plugin_action_links' ) );
@@ -183,56 +158,42 @@ final class YS_Shopline_Payment {
             return;
         }
 
-        // Include WooCommerce-dependent files
-        $this->includes_wc();
-
         // Load text domain
         load_plugin_textdomain( 'ys-shopline-via-woocommerce', false, dirname( YS_SHOPLINE_PLUGIN_BASENAME ) . '/languages' );
 
-        // Initialize webhook handler (legacy)
-        new YS_Shopline_Webhook_Handler();
+        // 所有類別由 Composer PSR-4 autoloader 載入，不需 require_once
 
         // Initialize subscription handler if WooCommerce Subscriptions is active
         if ( class_exists( 'WC_Subscriptions' ) ) {
-            YS_Shopline_Subscription::init();
+            YSSubscription::init();
         }
 
         // Initialize customer management (儲存卡管理)
-        YS_Shopline_Customer::instance();
+        YSCustomer::instance();
 
         // Initialize order display enhancements (付款狀態顯示)
-        YS_Shopline_Order_Display::instance();
+        YSOrderDisplay::instance();
+
+        // Initialize redirect handler (付款完成後的跳轉查詢)
+        YSRedirectHandler::init();
+
+        // Initialize add payment method handler (新增卡片的 3DS 回調)
+        YSAddPaymentMethodHandler::init();
+
+        // Initialize webhook handler (REST API)
+        YSWebhookHandler::init();
+
+        // Initialize status manager
+        YSStatusManager::init();
+
+        // Initialize WooCommerce Blocks support
+        YSBlocksSupport::init();
 
         // Register AJAX handlers
         $this->register_ajax_handlers();
 
         // Handle 3DS/redirect payment - 必須在主外掛中註冊，因為閘道可能還沒被實例化
         add_action( 'template_redirect', array( $this, 'handle_3ds_redirect' ), 5 );
-
-        // Initialize new architecture components (PSR-4)
-        $this->init_new_architecture();
-    }
-
-    /**
-     * Initialize new architecture components (PSR-4 autoloaded)
-     */
-    private function init_new_architecture(): void {
-        // Check if autoloader is available
-        if ( ! class_exists( 'YangSheep\\ShoplinePayment\\Handlers\\YSWebhookHandler' ) ) {
-            return;
-        }
-
-        // 注意：YSMyAccountEndpoint 已棄用，改用 WC 內建的 payment-methods 頁面
-        // 自訂 template 位於 templates/myaccount/payment-methods.php
-
-        // Initialize new webhook handler (REST API)
-        \YangSheep\ShoplinePayment\Handlers\YSWebhookHandler::init();
-
-        // Initialize status manager
-        \YangSheep\ShoplinePayment\Handlers\YSStatusManager::init();
-
-        // Initialize WooCommerce Blocks support
-        \YangSheep\ShoplinePayment\Blocks\YSBlocksSupport::init();
     }
 
     /**
@@ -260,14 +221,14 @@ final class YS_Shopline_Payment {
         // phpcs:ignore WordPress.Security.NonceVerification.Recommended
         $key = sanitize_text_field( wp_unslash( $_GET['key'] ) );
 
-        YS_Shopline_Logger::debug( 'handle_3ds_redirect triggered (main plugin)', array(
+        YSLogger::debug( 'handle_3ds_redirect triggered (main plugin)', array(
             'order_id' => $order_id,
         ) );
 
         $order = wc_get_order( $order_id );
 
         if ( ! $order || $order->get_order_key() !== $key ) {
-            YS_Shopline_Logger::error( 'Invalid order in 3DS redirect', array(
+            YSLogger::error( 'Invalid order in 3DS redirect', array(
                 'order_id' => $order_id,
                 'key'      => $key,
             ) );
@@ -277,7 +238,7 @@ final class YS_Shopline_Payment {
         // 檢查是否為 Shopline 閘道
         $payment_method = $order->get_payment_method();
         if ( strpos( $payment_method, 'ys_shopline' ) !== 0 ) {
-            YS_Shopline_Logger::debug( 'Not a Shopline gateway, skipping', array(
+            YSLogger::debug( 'Not a Shopline gateway, skipping', array(
                 'payment_method' => $payment_method,
             ) );
             return;
@@ -285,20 +246,20 @@ final class YS_Shopline_Payment {
 
         $next_action = $order->get_meta( '_ys_shopline_next_action' );
 
-        YS_Shopline_Logger::debug( 'Next action check', array(
+        YSLogger::debug( 'Next action check', array(
             'has_next_action' => ! empty( $next_action ) ? 'yes' : 'no',
             'payment_method'  => $payment_method,
         ) );
 
         if ( ! $next_action ) {
             // No next action, redirect to thank you page
-            YS_Shopline_Logger::debug( 'No next action, redirecting to order-received page' );
+            YSLogger::debug( 'No next action, redirecting to order-received page' );
             wp_safe_redirect( $order->get_checkout_order_received_url() );
             exit;
         }
 
         // Render 3DS page
-        YS_Shopline_Logger::debug( 'Rendering 3DS page from main plugin' );
+        YSLogger::debug( 'Rendering 3DS page from main plugin' );
         $this->render_3ds_page( $order, $next_action );
         exit;
     }
@@ -561,37 +522,37 @@ final class YS_Shopline_Payment {
     public function register_gateways( $gateways ) {
         // Credit Card
         if ( 'yes' === get_option( 'ys_shopline_credit_enabled', 'yes' ) ) {
-            $gateways[] = 'YS_Shopline_Credit_Card';
+            $gateways[] = YSCreditCard::class;
         }
 
         // Credit Card Subscription
         if ( 'yes' === get_option( 'ys_shopline_credit_subscription_enabled', 'yes' ) && class_exists( 'WC_Subscriptions' ) ) {
-            $gateways[] = 'YS_Shopline_Credit_Subscription';
+            $gateways[] = YSCreditSubscription::class;
         }
 
         // ATM Virtual Account
         if ( 'yes' === get_option( 'ys_shopline_atm_enabled', 'yes' ) ) {
-            $gateways[] = 'YS_Shopline_Virtual_Account';
+            $gateways[] = YSVirtualAccount::class;
         }
 
         // JKOPay
         if ( 'yes' === get_option( 'ys_shopline_jkopay_enabled', 'yes' ) ) {
-            $gateways[] = 'YS_Shopline_JKOPay';
+            $gateways[] = YSJKOPay::class;
         }
 
         // Apple Pay
         if ( 'yes' === get_option( 'ys_shopline_applepay_enabled', 'yes' ) ) {
-            $gateways[] = 'YS_Shopline_ApplePay';
+            $gateways[] = YSApplePay::class;
         }
 
         // LINE Pay
         if ( 'yes' === get_option( 'ys_shopline_linepay_enabled', 'yes' ) ) {
-            $gateways[] = 'YS_Shopline_LinePay';
+            $gateways[] = YSLinePay::class;
         }
 
         // Chailease BNPL
         if ( 'yes' === get_option( 'ys_shopline_bnpl_enabled', 'yes' ) ) {
-            $gateways[] = 'YS_Shopline_Chailease_BNPL';
+            $gateways[] = YSChaileaseBNPL::class;
         }
 
         return $gateways;
@@ -637,7 +598,7 @@ final class YS_Shopline_Payment {
     /**
      * Get API instance.
      *
-     * @return YS_Shopline_API|null
+     * @return YSApi|null
      */
     public static function get_api() {
         $test_mode = 'yes' === get_option( 'ys_shopline_testmode', 'yes' );
@@ -655,7 +616,7 @@ final class YS_Shopline_Payment {
             return null;
         }
 
-        return new YS_Shopline_API( $merchant_id, $api_key, $test_mode );
+        return new YSApi( $merchant_id, $api_key, $test_mode );
     }
 
     /**
@@ -693,10 +654,10 @@ final class YS_Shopline_Payment {
 /**
  * Get plugin instance.
  *
- * @return YS_Shopline_Payment
+ * @return YSShoplinePayment
  */
 function ys_shopline_payment() {
-    return YS_Shopline_Payment::instance();
+    return YSShoplinePayment::instance();
 }
 
 // Initialize the plugin

@@ -10,7 +10,7 @@ const { decodeEntities } = window.wp.htmlEntities;
 const { createElement, Fragment } = window.wp.element;
 
 // 取得設定
-const settings = getSetting('ys_shopline_redirect_data', {});
+const settings = getSetting('ys_shopline_credit_data', {});
 const title = decodeEntities(settings.title || 'Shopline Payment');
 const description = decodeEntities(settings.description || '');
 const icons = settings.icons || [];
@@ -81,7 +81,7 @@ const Edit = () => {
 
 // 註冊付款方式
 registerPaymentMethod({
-    name: 'ys_shopline_redirect',
+    name: 'ys_shopline_credit',
     label: createElement(Label, null),
     content: createElement(Content, null),
     edit: createElement(Edit, null),

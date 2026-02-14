@@ -41,6 +41,7 @@ composer.lock
 # OS
 .DS_Store
 ._*
+nul
 .Spotlight-V100
 .Trashes
 ehthumbs.db

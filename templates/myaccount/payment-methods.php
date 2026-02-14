@@ -4,7 +4,7 @@
  *
  * 自訂付款方式頁面 - 與 SHOPLINE Payment 整合
  *
- * @package YS_Shopline_Payment
+ * @package YangSheep\ShoplinePayment
  * @version 1.0.0
  */
 
@@ -14,7 +14,7 @@ $saved_methods = wc_get_customer_saved_methods_list( get_current_user_id() );
 $has_methods   = (bool) $saved_methods;
 
 // 取得 Shopline Customer ID（用於判斷是否顯示同步按鈕）
-$customer_manager = YS_Shopline_Customer::instance();
+$customer_manager = \YangSheep\ShoplinePayment\Customer\YSCustomer::instance();
 $has_shopline_customer = $customer_manager->get_customer_id( get_current_user_id() );
 
 do_action( 'woocommerce_before_account_payment_methods', $has_methods );
