@@ -11,6 +11,8 @@ namespace YangSheep\ShoplinePayment\Frontend;
 
 defined( 'ABSPATH' ) || exit;
 
+use YangSheep\ShoplinePayment\Utils\YSOrderMeta;
+
 /**
  * YSOrderDisplay Class.
  *
@@ -80,9 +82,21 @@ class YSOrderDisplay {
 
 		$status = $order->get_status();
 
+		$is_atm = ( 'ys_shopline_atm' === $order->get_payment_method() );
+
 		// 付款成功
 		if ( $order->is_paid() ) {
 			$this->render_success_notice( $order );
+			if ( $is_atm ) {
+				$this->render_atm_transfer_info( $order );
+			}
+			return;
+		}
+
+		// ATM 等待轉帳（on-hold）：顯示轉帳資訊，不顯示重新付款按鈕
+		if ( $is_atm && 'on-hold' === $status ) {
+			$this->render_atm_pending_notice( $order );
+			$this->render_atm_transfer_info( $order );
 			return;
 		}
 
@@ -99,9 +113,9 @@ class YSOrderDisplay {
 	 * @param \WC_Order $order 訂單物件
 	 */
 	private function render_success_notice( $order ) {
-		$trade_order_id = $order->get_meta( '_ys_shopline_trade_order_id' );
-		$payment_method = $order->get_meta( '_ys_shopline_payment_method' );
-		$payment_detail = $order->get_meta( '_ys_shopline_payment_detail' );
+		$trade_order_id = $order->get_meta( YSOrderMeta::TRADE_ORDER_ID );
+		$payment_method = $order->get_meta( YSOrderMeta::PAYMENT_METHOD );
+		$payment_detail = $order->get_meta( YSOrderMeta::PAYMENT_DETAIL );
 
 		// 付款方式顯示名稱
 		$method_display = $this->get_payment_method_display( $payment_method );
@@ -154,8 +168,8 @@ class YSOrderDisplay {
 		$status = $order->get_status();
 
 		// 取得錯誤資訊
-		$error_code = $order->get_meta( '_ys_shopline_error_code' );
-		$error_msg  = $order->get_meta( '_ys_shopline_error_message' );
+		$error_code = $order->get_meta( YSOrderMeta::ERROR_CODE );
+		$error_msg  = $order->get_meta( YSOrderMeta::ERROR_MESSAGE );
 
 		// 從訂單備註中取得錯誤資訊（如果 meta 中沒有）
 		if ( empty( $error_msg ) && 'failed' === $status ) {
@@ -240,15 +254,94 @@ class YSOrderDisplay {
 	 */
 	private function get_payment_method_display( $payment_method ) {
 		$methods = array(
-			'CreditCard'    => __( '信用卡', 'ys-shopline-via-woocommerce' ),
-			'LinePay'       => 'LINE Pay',
-			'JkoPay'        => __( '街口支付', 'ys-shopline-via-woocommerce' ),
-			'ApplePay'      => 'Apple Pay',
-			'VirtualAtm'    => __( '虛擬帳號', 'ys-shopline-via-woocommerce' ),
-			'ChaileaseBnpl' => __( '中租零卡分期', 'ys-shopline-via-woocommerce' ),
+			'CreditCard'     => __( '信用卡', 'ys-shopline-via-woocommerce' ),
+			'LinePay'        => 'LINE Pay',
+			'JKOPay'         => __( '街口支付', 'ys-shopline-via-woocommerce' ),
+			'JkoPay'         => __( '街口支付', 'ys-shopline-via-woocommerce' ),
+			'ApplePay'       => 'Apple Pay',
+			'VirtualAccount' => __( 'ATM 虛擬帳號', 'ys-shopline-via-woocommerce' ),
+			'VirtualAtm'     => __( 'ATM 虛擬帳號', 'ys-shopline-via-woocommerce' ),
+			'ChaileaseBNPL'  => __( '中租零卡分期', 'ys-shopline-via-woocommerce' ),
+			'ChaileaseBnpl'  => __( '中租零卡分期', 'ys-shopline-via-woocommerce' ),
 		);
 
 		return isset( $methods[ $payment_method ] ) ? $methods[ $payment_method ] : ( $payment_method ?: __( '線上付款', 'ys-shopline-via-woocommerce' ) );
+	}
+
+	/**
+	 * 渲染 ATM 等待轉帳通知
+	 *
+	 * @param \WC_Order $order 訂單物件
+	 */
+	private function render_atm_pending_notice( $order ) {
+		$pay_url = $order->get_checkout_payment_url();
+
+		?>
+		<div class="ys-shopline-notice ys-shopline-notice-warning">
+			<div class="ys-shopline-notice-icon">!</div>
+			<div class="ys-shopline-notice-content">
+				<h3><?php esc_html_e( '等待轉帳', 'ys-shopline-via-woocommerce' ); ?></h3>
+				<p>
+					<?php esc_html_e( '您的訂單已建立，請依下方轉帳資訊前往銀行或 ATM 完成轉帳。', 'ys-shopline-via-woocommerce' ); ?>
+				</p>
+				<div class="ys-shopline-notice-actions">
+					<a href="<?php echo esc_url( $pay_url ); ?>" class="button button-secondary">
+						<?php esc_html_e( '變更付款方式', 'ys-shopline-via-woocommerce' ); ?>
+					</a>
+				</div>
+			</div>
+		</div>
+		<?php
+	}
+
+	/**
+	 * 渲染 ATM 轉帳資訊區塊（醒目樣式）
+	 *
+	 * @param \WC_Order $order 訂單物件
+	 */
+	private function render_atm_transfer_info( $order ) {
+		$bank_code = $order->get_meta( YSOrderMeta::VA_BANK_CODE );
+		$account   = $order->get_meta( YSOrderMeta::VA_ACCOUNT );
+		$expire    = $order->get_meta( YSOrderMeta::VA_EXPIRE );
+
+		if ( ! $account ) {
+			return;
+		}
+
+		?>
+		<div class="ys-shopline-notice ys-shopline-notice-info">
+			<div class="ys-shopline-notice-icon">$</div>
+			<div class="ys-shopline-notice-content">
+				<h3><?php esc_html_e( 'ATM 轉帳付款', 'ys-shopline-via-woocommerce' ); ?></h3>
+				<p><?php esc_html_e( '請前往銀行櫃檯、ATM 或使用網路銀行，依下方資訊進行轉帳。', 'ys-shopline-via-woocommerce' ); ?></p>
+				<ul class="ys-shopline-payment-info ys-shopline-atm-details">
+					<?php if ( $bank_code ) : ?>
+					<li>
+						<span class="ys-shopline-atm-label"><?php esc_html_e( '銀行代碼', 'ys-shopline-via-woocommerce' ); ?></span>
+						<span class="ys-shopline-atm-value"><?php echo esc_html( $bank_code ); ?></span>
+					</li>
+					<?php endif; ?>
+					<li>
+						<span class="ys-shopline-atm-label"><?php esc_html_e( '虛擬帳號', 'ys-shopline-via-woocommerce' ); ?></span>
+						<span class="ys-shopline-atm-value ys-shopline-atm-account"><?php echo esc_html( $account ); ?></span>
+					</li>
+					<li>
+						<span class="ys-shopline-atm-label"><?php esc_html_e( '轉帳金額', 'ys-shopline-via-woocommerce' ); ?></span>
+						<span class="ys-shopline-atm-value"><?php echo wp_kses_post( $order->get_formatted_order_total() ); ?></span>
+					</li>
+					<?php if ( $expire ) : ?>
+					<li>
+						<span class="ys-shopline-atm-label"><?php esc_html_e( '繳費期限', 'ys-shopline-via-woocommerce' ); ?></span>
+						<span class="ys-shopline-atm-value"><?php echo esc_html( $expire ); ?></span>
+					</li>
+					<?php endif; ?>
+				</ul>
+				<p class="ys-shopline-atm-warning">
+					<?php esc_html_e( '請於繳費期限前完成轉帳，逾期此虛擬帳號將失效。', 'ys-shopline-via-woocommerce' ); ?>
+				</p>
+			</div>
+		</div>
+		<?php
 	}
 
 	/**
@@ -262,6 +355,12 @@ class YSOrderDisplay {
 
 		?>
 		<style>
+			/* 隱藏 WooCommerce 預設的付款失敗區塊，使用我們自訂的 */
+			.woocommerce-thankyou-order-failed,
+			.woocommerce-thankyou-order-failed-actions {
+				display: none !important;
+			}
+
 			.ys-shopline-notice {
 				display: flex;
 				align-items: flex-start;
@@ -285,6 +384,12 @@ class YSOrderDisplay {
 			.ys-shopline-notice-warning {
 				border-left: 4px solid #ffb900;
 				background: linear-gradient(135deg, #fffbf0 0%, #fff 100%);
+			}
+
+			.ys-shopline-notice-info {
+				border-left: 4px solid #0073aa;
+				background: linear-gradient(135deg, #f0f6ff 0%, #fff 100%);
+				margin-top: -20px;
 			}
 
 			.ys-shopline-notice-icon {
@@ -315,6 +420,11 @@ class YSOrderDisplay {
 				color: #fff;
 			}
 
+			.ys-shopline-notice-info .ys-shopline-notice-icon {
+				background: #0073aa;
+				color: #fff;
+			}
+
 			.ys-shopline-notice-content {
 				flex: 1;
 			}
@@ -335,6 +445,10 @@ class YSOrderDisplay {
 
 			.ys-shopline-notice-warning h3 {
 				color: #f57c00;
+			}
+
+			.ys-shopline-notice-info h3 {
+				color: #01579b;
 			}
 
 			.ys-shopline-notice-content p {
@@ -358,6 +472,43 @@ class YSOrderDisplay {
 			.ys-shopline-card-info {
 				color: #666;
 				font-size: 0.9em;
+			}
+
+			.ys-shopline-atm-details li {
+				display: flex;
+				justify-content: space-between;
+				align-items: center;
+				padding: 10px 0;
+				border-bottom: 1px dashed #d0d0d0;
+				margin: 0;
+			}
+
+			.ys-shopline-atm-details li:last-child {
+				border-bottom: none;
+			}
+
+			.ys-shopline-atm-label {
+				color: #555;
+				font-weight: 500;
+			}
+
+			.ys-shopline-atm-value {
+				font-weight: 700;
+				font-size: 1.1em;
+				color: #222;
+			}
+
+			.ys-shopline-atm-account {
+				font-family: 'Courier New', Courier, monospace;
+				font-size: 1.2em;
+				letter-spacing: 1px;
+			}
+
+			.ys-shopline-atm-warning {
+				color: #b71c1c;
+				font-weight: 500;
+				font-size: 0.9em;
+				margin-top: 10px;
 			}
 
 			.ys-shopline-error-details {
@@ -429,8 +580,8 @@ class YSOrderDisplay {
 	 * @param string   $error_msg  錯誤訊息
 	 */
 	public static function save_payment_error( $order, $error_code, $error_msg ) {
-		$order->update_meta_data( '_ys_shopline_error_code', $error_code );
-		$order->update_meta_data( '_ys_shopline_error_message', $error_msg );
+		$order->update_meta_data( YSOrderMeta::ERROR_CODE, $error_code );
+		$order->update_meta_data( YSOrderMeta::ERROR_MESSAGE, $error_msg );
 		$order->save();
 	}
 
@@ -442,8 +593,8 @@ class YSOrderDisplay {
 	 * @param \WC_Order $order 訂單物件
 	 */
 	public static function clear_payment_error( $order ) {
-		$order->delete_meta_data( '_ys_shopline_error_code' );
-		$order->delete_meta_data( '_ys_shopline_error_message' );
+		$order->delete_meta_data( YSOrderMeta::ERROR_CODE );
+		$order->delete_meta_data( YSOrderMeta::ERROR_MESSAGE );
 		$order->save();
 	}
 }

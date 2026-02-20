@@ -36,9 +36,6 @@ final class YSStatusManager {
         'ys_shopline_applepay',
         'ys_shopline_linepay',
         'ys_shopline_bnpl',
-        'ys_shopline_credit_card',
-        'ys_shopline_redirect',
-        'ys_shopline_token',
     ];
 
     /**

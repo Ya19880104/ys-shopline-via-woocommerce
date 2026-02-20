@@ -6,6 +6,56 @@
 
 ---
 
+## [2.3.1] - 2026-02-17
+
+### Fixed
+- 修正 ATM 虛擬帳號欄位名稱與 API 不符（`bankCode` → `recipientBankCode`、`account` → `recipientAccountNum`、`expireDate` → `dueDate`）
+- 修正所有非信用卡閘道（ATM、Apple Pay、LINE Pay、JKOPay、BNPL）`paymentBehavior` 從 `QuickPayment` 改為 `Regular`
+- 修正 ATM 付款流程：保留 `nextAction` 傳回前端讓 SDK 確認，確認後才產生虛擬帳號
+- 修正 ATM 訂單狀態使用管理員設定（`ys_shopline_order_status_pending`）
+- 修正 ATM 虛擬帳號 JSON 路徑錯誤（`response.virtualAccount` → `response.payment.virtualAccount`）
+- 修正 Pay-for-order 頁面 SDK 初始化錯誤 "amount is required (1004)"：AJAX 傳遞 order_id + 所有權驗證
+- 修正 Pay-for-order 頁面 "Payment session missing" 錯誤：新增 `PayForOrderHandler` + 獨立 AJAX endpoint
+- 修正感謝頁面付款失敗時出現兩組重複的重新付款按鈕（隱藏 WC 預設，保留自訂樣式）
+- 修正 Redirect handler 補抓 ATM 虛擬帳號資訊（正確的 API 回應路徑）
+- 修正 `YSRedirectHandler::sync_payment_token()` 的 `$existing_tokens` 變數作用域 bug
+- 修正 `YSCreditSubscription::save_subscription_meta_from_order()` 的 `$instrument_id` 未定義警告
+
+### Changed
+- ATM 覆寫 `handle_next_action()`：使用管理員設定的訂單狀態 + 傳回 nextAction 給前端
+- 新增 `store_virtual_account_info()` 公用方法，統一 VA 資訊儲存邏輯
+- ATM 感謝頁面和郵件加入轉帳操作提示文字 + 轉帳金額欄位
+- 新增 `PayForOrderHandler`（JS）和 `ajax_pay_for_order`（PHP）處理重新付款頁面
+- 清理 `YSGatewayBase` 殘留 TODO 注釋
+
+## [2.3.0] - 2026-02-15
+
+### Changed
+- 重寫 `YSCreditSubscription`：對齊 Shopline Recurring API 規格
+  - 續約扣款使用 `paymentBehavior: Recurring`（伺服器對伺服器）
+  - 加入必要欄位：`acquirerType`、`autoConfirm`、`autoCapture`、`client.ip`
+  - 使用 `generate_reference_order_id()` 確保 referenceOrderId 唯一
+  - 驗證 API 回應 `status` 欄位，根據狀態分流處理（SUCCEEDED→完成、CREATED/AUTHORIZED→on-hold、其他→failed）
+- 智慧 Token 查找：三層 fallback（renewal order meta → subscription meta → WC Tokens）
+- 首次付款後自動儲存 `_ys_shopline_payment_instrument_id` 到 subscription meta
+- 宣告 `woocommerce_subscription_payment_meta` 供管理員後台手動修改
+
+### Fixed
+- 修正續約扣款 referenceOrderId 不唯一（重試必定被 Shopline 拒絕）的問題
+- 修正續約扣款未驗證 API 回應狀態，可能錯誤標記為付款完成
+- 修正未使用 subscription 專屬 Token（多張卡時可能扣錯卡）
+
+### Added
+- Webhook 綁卡事件後自動更新尚未綁定 instrument 的 subscription meta
+
+### Removed
+- 移除 `YSSubscription::subscription_fail_handler()`：干擾 WC Subscriptions 內建重試機制
+- 移除 `YSSubscription::copy_meta_to_renewal()`：複製的舊 meta key 從未被使用
+- 移除 `YSSubscription::get_subscription_token()`、`can_charge_subscription()`：死代碼
+- 移除 `YSSubscription::admin_scripts()`：空方法
+- 移除 `YSCreditSubscription::get_customer_default_token()`：被智慧 Token 查找取代
+- 移除 `YSCreditSubscription::process_zero_amount_subscription()`：統一走 SDK CardBindPayment
+
 ## [2.2.0] - 2026-02-15
 
 ### Changed

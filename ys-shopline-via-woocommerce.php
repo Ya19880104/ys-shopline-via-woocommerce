@@ -3,7 +3,7 @@
  * Plugin Name: YS Shopline via WooCommerce
  * Plugin URI: https://yangsheep.com.tw
  * Description: Support Shopline Payments for WooCommerce, including HPOS and Subscriptions. Supports Credit Card, ATM, JKOPay, Apple Pay, LINE Pay, and Chailease BNPL.
- * Version: 2.2.0
+ * Version: 2.3.3
  * Author: YangSheep
  * Author URI: https://yangsheep.com.tw
  * Text Domain: ys-shopline-via-woocommerce
@@ -17,7 +17,7 @@
 defined( 'ABSPATH' ) || exit;
 
 // Define plugin constants
-define( 'YS_SHOPLINE_VERSION', '2.2.0' );
+define( 'YS_SHOPLINE_VERSION', '2.3.3' );
 define( 'YS_SHOPLINE_PLUGIN_FILE', __FILE__ );
 define( 'YS_SHOPLINE_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 define( 'YS_SHOPLINE_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
@@ -203,6 +203,9 @@ final class YSShoplinePayment {
         // SDK config AJAX - will be handled by individual gateways
         add_action( 'wp_ajax_ys_shopline_get_sdk_config', array( $this, 'ajax_get_sdk_config' ) );
         add_action( 'wp_ajax_nopriv_ys_shopline_get_sdk_config', array( $this, 'ajax_get_sdk_config' ) );
+
+        // Pay-for-order AJAX（重新付款頁面用）
+        add_action( 'wp_ajax_ys_shopline_pay_for_order', array( $this, 'ajax_pay_for_order' ) );
     }
 
     /**
@@ -244,7 +247,7 @@ final class YSShoplinePayment {
             return;
         }
 
-        $next_action = $order->get_meta( '_ys_shopline_next_action' );
+        $next_action = $order->get_meta( \YangSheep\ShoplinePayment\Utils\YSOrderMeta::NEXT_ACTION );
 
         YSLogger::debug( 'Next action check', array(
             'has_next_action' => ! empty( $next_action ) ? 'yes' : 'no',
@@ -511,6 +514,62 @@ final class YSShoplinePayment {
 
         $config = $gateway->get_sdk_config();
         wp_send_json_success( $config );
+    }
+
+    /**
+     * AJAX handler for pay-for-order（重新付款頁面）.
+     *
+     * Pay-for-order 頁面使用 #order_review 表單，無法走 WooCommerce checkout AJAX，
+     * 需要獨立的 AJAX endpoint 來呼叫 process_payment() 並回傳 nextAction。
+     */
+    public function ajax_pay_for_order() {
+        check_ajax_referer( 'ys_shopline_nonce', 'nonce' );
+
+        // phpcs:ignore WordPress.Security.NonceVerification.Missing
+        $order_id       = isset( $_POST['order_id'] ) ? absint( $_POST['order_id'] ) : 0;
+        // phpcs:ignore WordPress.Security.NonceVerification.Missing
+        $payment_method = isset( $_POST['payment_method'] ) ? sanitize_text_field( wp_unslash( $_POST['payment_method'] ) ) : '';
+
+        $order = wc_get_order( $order_id );
+
+        if ( ! $order || ! $order->needs_payment() ) {
+            wp_send_json( array(
+                'result'   => 'failure',
+                'messages' => __( '訂單不存在或不需要付款。', 'ys-shopline-via-woocommerce' ),
+            ) );
+            return;
+        }
+
+        // 驗證訂單所有權
+        $current_user_id = get_current_user_id();
+        if ( ! $current_user_id || (int) $order->get_user_id() !== $current_user_id ) {
+            wp_send_json( array(
+                'result'   => 'failure',
+                'messages' => __( '無權存取此訂單。', 'ys-shopline-via-woocommerce' ),
+            ) );
+            return;
+        }
+
+        // 取得閘道
+        $gateways = WC()->payment_gateways()->payment_gateways();
+        if ( ! isset( $gateways[ $payment_method ] ) ) {
+            wp_send_json( array(
+                'result'   => 'failure',
+                'messages' => __( '無效的付款方式。', 'ys-shopline-via-woocommerce' ),
+            ) );
+            return;
+        }
+
+        $gateway = $gateways[ $payment_method ];
+
+        // 更新訂單的付款方式（可能已變更）
+        $order->set_payment_method( $gateway );
+        $order->save();
+
+        // 執行付款
+        $result = $gateway->process_payment( $order_id );
+
+        wp_send_json( $result );
     }
 
     /**

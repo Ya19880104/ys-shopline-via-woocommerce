@@ -18,6 +18,7 @@ namespace YangSheep\ShoplinePayment\Handlers;
 defined( 'ABSPATH' ) || exit;
 
 use YangSheep\ShoplinePayment\Utils\YSLogger;
+use YangSheep\ShoplinePayment\Utils\YSOrderMeta;
 use YangSheep\ShoplinePayment\Customer\YSCustomer;
 use WC_Payment_Tokens;
 use WC_Payment_Token_CC;
@@ -79,7 +80,7 @@ class YSRedirectHandler {
         }
 
         // 取得 trade order ID
-        $trade_order_id = $order->get_meta( '_ys_shopline_trade_order_id' );
+        $trade_order_id = $order->get_meta( YSOrderMeta::TRADE_ORDER_ID );
 
         if ( ! $trade_order_id ) {
             YSLogger::warning( 'Redirect handler: No trade_order_id', array(
@@ -177,11 +178,11 @@ class YSRedirectHandler {
                 ) );
 
                 if ( $payment_method ) {
-                    $order->update_meta_data( '_ys_shopline_payment_method', $payment_method );
+                    $order->update_meta_data( YSOrderMeta::PAYMENT_METHOD, $payment_method );
                 }
                 if ( ! empty( $credit_card ) ) {
-                    $order->update_meta_data( '_ys_shopline_card_last4', $credit_card['last4'] ?? $credit_card['last'] ?? '' );
-                    $order->update_meta_data( '_ys_shopline_card_brand', $credit_card['brand'] ?? '' );
+                    $order->update_meta_data( YSOrderMeta::CARD_LAST4, $credit_card['last4'] ?? $credit_card['last'] ?? '' );
+                    $order->update_meta_data( YSOrderMeta::CARD_BRAND, $credit_card['brand'] ?? '' );
                 }
 
                 // 同步付款工具到 WooCommerce Payment Tokens
@@ -192,17 +193,21 @@ class YSRedirectHandler {
                         $credit_card,
                         $payment_customer_id
                     );
+
+                    // 如果此訂單有關聯 subscription，將 instrument_id 寫入 subscription meta
+                    // 放在 sync_payment_token 外面，因為不管 token 是新建還是已存在都要執行
+                    self::update_subscription_instrument( $order, $payment_instrument_id );
                 }
 
                 // 儲存完整的付款詳情
-                $order->update_meta_data( '_ys_shopline_payment_detail', array(
+                $order->update_meta_data( YSOrderMeta::PAYMENT_DETAIL, array(
                     'paymentMethod'       => $payment_method,
                     'paymentInstrument'   => $payment_instrument,
                     'creditCard'          => $credit_card,
                     'paymentCustomerId'   => $payment_customer_id,
                 ) );
 
-                $order->update_meta_data( '_ys_shopline_payment_status', $status );
+                $order->update_meta_data( YSOrderMeta::PAYMENT_STATUS, $status );
                 $order->save();
 
                 YSLogger::info( 'Redirect handler: Order completed', array(
@@ -213,16 +218,31 @@ class YSRedirectHandler {
         } elseif ( 'AUTHORIZED' === $status ) {
             // 已授權但未請款（手動請款模式）
             $order->update_status( 'on-hold', __( 'SHOPLINE 付款已授權，等待請款。', 'ys-shopline-via-woocommerce' ) );
-            $order->update_meta_data( '_ys_shopline_payment_status', 'AUTHORIZED' );
+            $order->update_meta_data( YSOrderMeta::PAYMENT_STATUS, 'AUTHORIZED' );
             $order->save();
         } elseif ( 'FAILED' === $status ) {
             // 付款失敗
             $error_msg = isset( $response['paymentMsg']['msg'] ) ? $response['paymentMsg']['msg'] : __( '付款失敗', 'ys-shopline-via-woocommerce' );
             $order->update_status( 'failed', $error_msg );
-            $order->update_meta_data( '_ys_shopline_payment_status', 'FAILED' );
+            $order->update_meta_data( YSOrderMeta::PAYMENT_STATUS, 'FAILED' );
             $order->save();
         }
         // 其他狀態（CREATED, PROCESSING）暫不處理，等待 Webhook 或用戶重試
+
+        // 補抓 ATM 虛擬帳號資訊（API 回傳 VA 在 payment 物件內）
+        $va_data = $response['payment']['virtualAccount'] ?? null;
+        if ( 'ys_shopline_atm' === $order->get_payment_method() && $va_data ) {
+            if ( ! $order->get_meta( YSOrderMeta::VA_ACCOUNT ) ) {
+                $order->update_meta_data( YSOrderMeta::VA_BANK_CODE, $va_data['recipientBankCode'] ?? '' );
+                $order->update_meta_data( YSOrderMeta::VA_ACCOUNT, $va_data['recipientAccountNum'] ?? '' );
+                $order->update_meta_data( YSOrderMeta::VA_EXPIRE, $va_data['dueDate'] ?? '' );
+                $order->save();
+
+                YSLogger::info( 'Redirect handler: ATM VA info supplemented from query', array(
+                    'order_id' => $order->get_id(),
+                ) );
+            }
+        }
 
         // 清除 next_action
         self::clear_next_action( $order );
@@ -234,10 +254,38 @@ class YSRedirectHandler {
      * @param \WC_Order $order Order object.
      */
     private static function clear_next_action( $order ) {
-        $next_action = $order->get_meta( '_ys_shopline_next_action' );
+        $next_action = $order->get_meta( YSOrderMeta::NEXT_ACTION );
         if ( $next_action ) {
-            $order->delete_meta_data( '_ys_shopline_next_action' );
+            $order->delete_meta_data( YSOrderMeta::NEXT_ACTION );
             $order->save();
+        }
+    }
+
+    /**
+     * Update subscription instrument ID from order.
+     *
+     * 在付款成功後，將 instrument_id 寫入關聯的 subscription meta。
+     * 此方法獨立於 sync_payment_token()，因為不管 token 是新建還是已存在都需要執行。
+     *
+     * @param \WC_Order $order                 Order object.
+     * @param string    $payment_instrument_id SHOPLINE payment instrument ID.
+     */
+    private static function update_subscription_instrument( $order, $payment_instrument_id ) {
+        if ( ! function_exists( 'wcs_get_subscriptions_for_order' ) ) {
+            return;
+        }
+
+        $subscriptions = wcs_get_subscriptions_for_order( $order );
+
+        foreach ( $subscriptions as $subscription ) {
+            $existing = $subscription->get_meta( YSOrderMeta::PAYMENT_INSTRUMENT_ID );
+            if ( empty( $existing ) || $existing !== $payment_instrument_id ) {
+                $subscription->update_meta_data( YSOrderMeta::PAYMENT_INSTRUMENT_ID, $payment_instrument_id );
+                $subscription->save();
+                YSLogger::info( "Redirect handler: Updated subscription #{$subscription->get_id()} instrument ID", array(
+                    'instrument_id' => $payment_instrument_id,
+                ) );
+            }
         }
     }
 
@@ -266,30 +314,22 @@ class YSRedirectHandler {
             return;
         }
 
-        // 決定 gateway ID
-        // 優先使用訂單的付款方式（例如 ys_shopline_credit）
-        $gateway_id = $order->get_payment_method();
-        if ( empty( $gateway_id ) || strpos( $gateway_id, 'ys_shopline' ) !== 0 ) {
-            // 預設使用 ys_shopline_credit（主要信用卡 gateway）
-            $gateway_id = 'ys_shopline_credit';
-        }
+        // 信用卡 Token 統一存在同一個 gateway ID 下
+        $gateway_id = YSOrderMeta::CREDIT_GATEWAY_ID;
 
-        // 檢查 token 是否已存在（檢查所有相關 gateway）
-        $all_gateway_ids = array( $gateway_id, 'ys_shopline_credit', 'ys_shopline_credit_subscription', 'ys_shopline_credit_card' );
-        $all_gateway_ids = array_unique( $all_gateway_ids );
+        // 檢查 token 是否已存在
+        $all_existing_tokens = array();
+        $tokens = WC_Payment_Tokens::get_customer_tokens( $user_id, $gateway_id );
 
-        foreach ( $all_gateway_ids as $check_gateway_id ) {
-            $existing_tokens = WC_Payment_Tokens::get_customer_tokens( $user_id, $check_gateway_id );
-
-            foreach ( $existing_tokens as $existing_token ) {
-                if ( $existing_token->get_token() === $payment_instrument_id ) {
-                    YSLogger::debug( 'Redirect handler: Token already exists', array(
-                        'token_id'              => $existing_token->get_id(),
-                        'payment_instrument_id' => $payment_instrument_id,
-                    ) );
-                    return;
-                }
+        foreach ( $tokens as $existing_token ) {
+            if ( $existing_token->get_token() === $payment_instrument_id ) {
+                YSLogger::debug( 'Redirect handler: Token already exists', array(
+                    'token_id'              => $existing_token->get_id(),
+                    'payment_instrument_id' => $payment_instrument_id,
+                ) );
+                return;
             }
+            $all_existing_tokens[] = $existing_token;
         }
 
         // 取得卡片資訊（支援多種 API 回傳格式）
@@ -353,7 +393,7 @@ class YSRedirectHandler {
         $token->set_user_id( $user_id );
 
         // 如果是第一張卡，設為預設
-        if ( empty( $existing_tokens ) ) {
+        if ( empty( $all_existing_tokens ) ) {
             $token->set_default( true );
         }
 
@@ -371,11 +411,12 @@ class YSRedirectHandler {
 
                 // 同時儲存 SHOPLINE customer ID 到用戶 meta（如果還沒有）
                 if ( $payment_customer_id ) {
-                    $existing_customer_id = get_user_meta( $user_id, '_ys_shopline_customer_id', true );
+                    $existing_customer_id = get_user_meta( $user_id, YSOrderMeta::CUSTOMER_ID, true );
                     if ( empty( $existing_customer_id ) ) {
-                        update_user_meta( $user_id, '_ys_shopline_customer_id', $payment_customer_id );
+                        update_user_meta( $user_id, YSOrderMeta::CUSTOMER_ID, $payment_customer_id );
                     }
                 }
+
             } else {
                 YSLogger::error( 'Redirect handler: Failed to save payment token (save returned false)', array(
                     'user_id'               => $user_id,

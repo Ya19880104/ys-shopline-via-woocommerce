@@ -10,6 +10,7 @@ namespace YangSheep\ShoplinePayment\Gateways;
 defined( 'ABSPATH' ) || exit;
 
 use WC_HTTPS;
+use YangSheep\ShoplinePayment\Utils\YSOrderMeta;
 
 /**
  * YSCreditCard Class.
@@ -172,7 +173,7 @@ class YSCreditCard extends YSGatewayBase {
 
         if ( $installment > 0 ) {
             $data['confirm']['installment'] = $installment;
-            $order->update_meta_data( '_ys_shopline_installment', $installment );
+            $order->update_meta_data( YSOrderMeta::INSTALLMENT, $installment );
             $order->save();
         }
 

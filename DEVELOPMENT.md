@@ -137,7 +137,7 @@ use YangSheep\ShoplinePayment\Customer\YSCustomer;
 
 ```php
 // 版本
-YS_SHOPLINE_VERSION = '2.2.0'
+YS_SHOPLINE_VERSION = '2.3.1'
 
 // 路徑
 YS_SHOPLINE_PLUGIN_FILE      // 主檔完整路徑
@@ -166,7 +166,11 @@ $order->save();
 | `_ys_shopline_payment_method` | 付款方式 |
 | `_ys_shopline_payment_detail` | 完整付款資訊 |
 | `_ys_shopline_refund_detail` | 退款詳情 |
-| `_ys_shopline_next_action` | 3DS 下一步動作 |
+| `_ys_shopline_next_action` | 3DS/Confirm 下一步動作 |
+| `_ys_shopline_va_bank_code` | ATM 銀行代碼 |
+| `_ys_shopline_va_account` | ATM 虛擬帳號 |
+| `_ys_shopline_va_expire` | ATM 繳費期限 |
+| `_ys_shopline_payment_instrument_id` | 綁定卡片 Instrument ID |
 
 ---
 
@@ -182,6 +186,7 @@ $order->save();
 | `ys_shopline_sandbox_merchant_id` | 沙盒 Merchant ID |
 | `ys_shopline_sandbox_api_key` | 沙盒 API Key |
 | `ys_shopline_sandbox_sign_key` | 沙盒簽章金鑰 |
+| `ys_shopline_order_status_pending` | ATM 等待付款的訂單狀態（預設 `on-hold`） |
 
 ---
 
@@ -241,44 +246,54 @@ echo $payment->amount->value;    // 金額
 
 ## 支付流程
 
-### 跳轉支付流程
+### 站內付款流程（信用卡、Apple Pay 等）
 
 ```
-1. 顧客選擇付款方式，點擊結帳
-2. 呼叫 process_payment()
-   ├─ 建立 WC 訂單
-   ├─ 呼叫 Shopline API 建立 Session
-   └─ 儲存 session_id 至訂單 Meta
-
-3. 跳轉至 Shopline 付款頁面 (session.redirectUrl)
-
-4. 顧客完成付款，跳回 return URL
-   └─ YSRedirectHandler 處理
-
-5. 查詢 Session 狀態，更新訂單
-   ├─ 成功：設為 processing
-   └─ 失敗：設為 failed
-
-6. Webhook 通知（非同步）
-   └─ YSWebhookHandler 處理狀態確認
+1. 前端 SDK 初始化（AJAX 取得 SDK config）
+2. 顧客輸入卡號 / 選擇付款方式
+3. 前端呼叫 SDK createPayment() → 取得 paySession
+4. paySession 隨表單提交至 process_payment()
+5. 後端呼叫 Shopline API create_payment_trade()
+6. 根據回應：
+   ├─ 有 nextAction → 傳回前端，SDK 處理（3DS / Confirm）
+   ├─ 無 nextAction + 成功 → payment_complete()
+   └─ 失敗 → 訂單設為 failed
+7. nextAction 處理完成後，跳轉至感謝頁
+8. YSRedirectHandler 查詢交易狀態，更新訂單
+9. Webhook 非同步確認
 ```
 
-### 3D Secure 處理
+### ATM 虛擬帳號流程
 
-```php
-// nextAction 類型處理
-switch ( $next_action['type'] ) {
-    case 'Redirect':
-        // 跳轉至 3DS 驗證頁
-        break;
-    case 'Confirm':
-        // 需要重新確認
-        break;
-    case 'WAIT':
-        // 等待中
-        break;
-}
 ```
+1. 前端 SDK 初始化 → paySession
+2. process_payment() → create_payment_trade()
+3. API 回傳 nextAction(Confirm) → 傳回前端
+4. 前端 SDK payment.pay(nextAction) → 產生虛擬帳號
+5. 跳轉感謝頁，顯示銀行代碼 + 虛擬帳號 + 繳費期限
+6. 訂單設為 on-hold，等待轉帳
+7. 客戶轉帳 → Webhook trade.succeeded → 訂單完成
+8. 帳號過期 → Webhook trade.expired → 訂單設為 failed
+```
+
+### Pay-for-order 流程（重新付款）
+
+```
+1. 偵測 pay-for-order 頁面（URL 含 order-pay）
+2. PayForOrderHandler 攔截 #order_review 表單提交
+3. 前端 SDK createPayment() → paySession
+4. AJAX 呼叫 ys_shopline_pay_for_order endpoint
+5. 後端驗證訂單所有權 + 呼叫 process_payment()
+6. 處理 nextAction / redirect
+```
+
+### nextAction 類型
+
+| 類型 | 說明 | 處理方式 |
+|------|------|---------|
+| `Redirect` | 3DS 驗證 | 跳轉至驗證頁面 |
+| `Confirm` | 需要 SDK 確認（ATM 等）| 前端 `payment.pay(nextAction)` |
+| `WAIT` | 等待中 | 等待 Webhook |
 
 ---
 
@@ -309,6 +324,9 @@ add_action( 'woocommerce_thankyou_ys_shopline_credit', [ $this, 'thankyou_page' 
 ```php
 // SDK 配置取得
 add_action( 'wp_ajax_ys_shopline_get_sdk_config', [ $this, 'get_sdk_config' ] );
+
+// Pay-for-order 頁面付款處理
+add_action( 'wp_ajax_ys_shopline_pay_for_order', [ $this, 'ajax_pay_for_order' ] );
 
 // 刪除儲存卡
 add_action( 'wp_ajax_ys_shopline_delete_card', [ $this, 'delete_card' ] );
@@ -381,6 +399,18 @@ YSLogger::error( 'API Error', [ 'response' => $response ] );
 
 ## 版本歷史
 
+### 2.3.1
+- 修正所有非信用卡閘道 `paymentBehavior` 從 `QuickPayment` 改為 `Regular`
+- 修正 ATM 虛擬帳號 API 欄位映射和 JSON 路徑
+- 修正 Pay-for-order 頁面 SDK 初始化和 paySession 缺失
+- 新增 `PayForOrderHandler`（JS）和 `ajax_pay_for_order`（PHP）
+- 修正感謝頁面重複的重新付款按鈕
+
+### 2.3.0
+- 重寫 `YSCreditSubscription`：對齊 Shopline Recurring API 規格
+- 智慧 Token 查找：三層 fallback 機制
+- 移除多個死代碼方法
+
 ### 2.2.0
 - 統一所有命名為 PSR-4 風格（PascalCase + namespace）
 - 消除所有 `require_once`，全部由 autoloader 載入
@@ -390,25 +420,10 @@ YSLogger::error( 'API Error', [ 'response' => $response ] );
 ### 2.1.0
 - 統一所有程式碼至 `src/` 目錄
 - 合併 Logger 和 Webhook Handler，統一使用 PSR-4 類別
-- 所有檔案透過 `use` 語句直接引用 `YSLogger`（移除 class_alias）
-- 移除死代碼，PHP 最低需求升級至 8.0
+- PHP 最低需求升級至 8.0
 
-### 2.0.7
-- 將所有程式碼統一到 `includes/`
-
-### 2.0.6
-- 改善儲存卡頁面使用 AJAX 更新
-- 修正兩位數年份導致 WC Token 建立失敗
-- 修正儲存卡同步和刪除功能
-
-### 2.0.5
-- 整合儲存卡管理和訂單頁面顯示功能
-- 增強 3DS 付款處理
-
-### 2.0.0
-- 導入 PSR-4 新架構
-- 新增 DTO 資料物件
-- 改善 Block Checkout 支援
+### 2.0.7 以前
+- 儲存卡管理、3DS 處理、PSR-4 架構導入
 
 ---
 

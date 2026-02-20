@@ -11,6 +11,8 @@ namespace YangSheep\ShoplinePayment\DTOs;
 
 defined( 'ABSPATH' ) || exit;
 
+use YangSheep\ShoplinePayment\Utils\YSOrderMeta;
+
 /**
  * 付款交易資料傳輸物件
  */
@@ -75,7 +77,7 @@ final class YSPaymentDTO {
      * @return self|null
      */
     public static function from_order( \WC_Order $order ): ?self {
-        $payment_detail = $order->get_meta( '_ys_shopline_payment_detail' );
+        $payment_detail = $order->get_meta( YSOrderMeta::PAYMENT_DETAIL );
 
         if ( empty( $payment_detail ) || ! is_array( $payment_detail ) ) {
             return null;

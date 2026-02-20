@@ -10,6 +10,7 @@ namespace YangSheep\ShoplinePayment\Gateways;
 defined( 'ABSPATH' ) || exit;
 
 use YangSheep\ShoplinePayment\Utils\YSLogger;
+use YangSheep\ShoplinePayment\Utils\YSOrderMeta;
 use YangSheep\ShoplinePayment\Api\YSApi;
 use YangSheep\ShoplinePayment\Customer\YSCustomer;
 use WC_Payment_Gateway;
@@ -118,7 +119,7 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
             return;
         }
 
-        $next_action = $order->get_meta( '_ys_shopline_next_action' );
+        $next_action = $order->get_meta( YSOrderMeta::NEXT_ACTION );
 
         YSLogger::debug( 'Next action status', array(
             'has_next_action' => ! empty( $next_action ) ? 'yes' : 'no',
@@ -394,11 +395,29 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
         $amount_raw = 0;
         $currency   = get_woocommerce_currency();
 
+        // AJAX 傳入的 order_id（pay-for-order 頁面的 SDK config 請求）
+        // phpcs:ignore WordPress.Security.NonceVerification.Missing
+        $ajax_order_id = isset( $_POST['order_id'] ) ? absint( $_POST['order_id'] ) : 0;
+
         // 新增卡片頁面使用 0 金額
         if ( $is_add_payment_method ) {
             $amount_raw = 0;
         }
-        // 檢查是否是訂單付款頁面（pay for order）
+        // Pay-for-order（AJAX 來源）
+        elseif ( $ajax_order_id ) {
+            $order = wc_get_order( $ajax_order_id );
+            if ( $order && $order->needs_payment() ) {
+                // 驗證訂單所有權
+                $current_user_id = get_current_user_id();
+                $is_owner        = $current_user_id && (int) $order->get_user_id() === $current_user_id;
+
+                if ( $is_owner ) {
+                    $amount_raw = $order->get_total();
+                    $currency   = $order->get_currency();
+                }
+            }
+        }
+        // 檢查是否是訂單付款頁面（直接渲染，非 AJAX）
         // phpcs:ignore WordPress.Security.NonceVerification.Recommended
         elseif ( isset( $_GET['pay_for_order'] ) && isset( $_GET['key'] ) ) {
             global $wp;
@@ -547,7 +566,7 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
      * @return string|false Customer ID or false on failure.
      */
     protected function get_shopline_customer_id( $user_id ) {
-        $customer_id = get_user_meta( $user_id, '_ys_shopline_customer_id', true );
+        $customer_id = get_user_meta( $user_id, YSOrderMeta::CUSTOMER_ID, true );
 
         if ( $customer_id ) {
             return $customer_id;
@@ -586,7 +605,7 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
 
         // 新版 API 回應欄位為 customerId
         if ( isset( $response['customerId'] ) ) {
-            update_user_meta( $user_id, '_ys_shopline_customer_id', $response['customerId'] );
+            update_user_meta( $user_id, YSOrderMeta::CUSTOMER_ID, $response['customerId'] );
             return $response['customerId'];
         }
 
@@ -641,12 +660,6 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
             'decoded_keys'  => $decoded !== null ? array_keys( $decoded ) : array(),
         ) );
 
-        // 根據測試：API 1999 錯誤可能是因為 paySession 格式問題
-        // 嘗試傳遞 JSON 字串（保持原樣）或解析後的陣列
-        // 先用解析後的陣列嘗試（如果 API 期望物件而非字串）
-        // TODO: 如果這樣可以運作，確認這是正確的方式
-        // $pay_session = $decoded; // 解析為陣列
-
         // Check API
         if ( ! $this->api ) {
             wc_add_notice( __( 'Payment gateway not configured.', 'ys-shopline-via-woocommerce' ), 'error' );
@@ -674,7 +687,7 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
 
         // Store trade order ID
         if ( isset( $response['tradeOrderId'] ) ) {
-            $order->update_meta_data( '_ys_shopline_trade_order_id', $response['tradeOrderId'] );
+            $order->update_meta_data( YSOrderMeta::TRADE_ORDER_ID, $response['tradeOrderId'] );
             $order->save();
         }
 
@@ -991,19 +1004,14 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
         $order_id = $order->get_id();
 
         // 取得目前的付款嘗試次數
-        $attempt = (int) $order->get_meta( '_ys_shopline_payment_attempt' );
+        $attempt = (int) $order->get_meta( YSOrderMeta::PAYMENT_ATTEMPT );
         $attempt++;
 
-        // 更新嘗試次數
-        $order->update_meta_data( '_ys_shopline_payment_attempt', $attempt );
-        $order->save();
-
-        // 產生唯一 ID：訂單ID_嘗試次數
-        // 例如：1022_1, 1022_2, 1022_3
+        // 產生唯一 ID：訂單ID_嘗試次數（例如：1022_1, 1022_2）
         $reference_id = sprintf( '%d_%d', $order_id, $attempt );
 
-        // 記錄 referenceOrderId 以便後續查詢
-        $order->update_meta_data( '_ys_shopline_reference_order_id', $reference_id );
+        $order->update_meta_data( YSOrderMeta::PAYMENT_ATTEMPT, $attempt );
+        $order->update_meta_data( YSOrderMeta::REFERENCE_ORDER_ID, $reference_id );
         $order->save();
 
         return $reference_id;
@@ -1322,7 +1330,7 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
      * @return array
      */
     protected function handle_next_action( $order, $response ) {
-        $order->update_meta_data( '_ys_shopline_next_action', $response['nextAction'] );
+        $order->update_meta_data( YSOrderMeta::NEXT_ACTION, $response['nextAction'] );
         $order->update_status( 'pending', __( 'Awaiting Shopline payment completion.', 'ys-shopline-via-woocommerce' ) );
         $order->save();
 
@@ -1371,7 +1379,7 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
             return new WP_Error( 'invalid_order', __( 'Order not found.', 'ys-shopline-via-woocommerce' ) );
         }
 
-        $trade_order_id = $order->get_meta( '_ys_shopline_trade_order_id' );
+        $trade_order_id = $order->get_meta( YSOrderMeta::TRADE_ORDER_ID );
 
         if ( empty( $trade_order_id ) ) {
             return new WP_Error( 'no_trade_id', __( 'Trade order ID not found.', 'ys-shopline-via-woocommerce' ) );
@@ -1433,9 +1441,9 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
         }
 
         // 清除 next_action（付款完成後不再需要）
-        $next_action = $order->get_meta( '_ys_shopline_next_action' );
+        $next_action = $order->get_meta( YSOrderMeta::NEXT_ACTION );
         if ( $next_action ) {
-            $order->delete_meta_data( '_ys_shopline_next_action' );
+            $order->delete_meta_data( YSOrderMeta::NEXT_ACTION );
             $order->save();
         }
     }
@@ -1484,7 +1492,7 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
                         $trade_order_id
                     )
                 );
-                $order->update_meta_data( '_ys_shopline_payment_status', $status );
+                $order->update_meta_data( YSOrderMeta::PAYMENT_STATUS, $status );
                 $order->save();
 
                 YSLogger::info( 'Order marked as paid via status check: ' . $order->get_id() );
@@ -1494,7 +1502,7 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
             if ( ! $order->has_status( 'failed' ) ) {
                 $error_msg = isset( $response['paymentMsg']['msg'] ) ? $response['paymentMsg']['msg'] : __( 'Payment failed', 'ys-shopline-via-woocommerce' );
                 $order->update_status( 'failed', $error_msg );
-                $order->update_meta_data( '_ys_shopline_payment_status', 'FAILED' );
+                $order->update_meta_data( YSOrderMeta::PAYMENT_STATUS, 'FAILED' );
                 $order->save();
             }
         }
@@ -1641,7 +1649,7 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
         }
 
         // 儲存綁卡資訊到 user meta（供 3DS 完成後使用）
-        update_user_meta( $user_id, '_ys_shopline_pending_bind', array(
+        update_user_meta( $user_id, YSOrderMeta::PENDING_BIND, array(
             'reference_order_id' => $reference_order_id,
             'trade_order_id'     => isset( $response['tradeOrderId'] ) ? $response['tradeOrderId'] : '',
             'customer_id'        => $customer_id,
@@ -1655,7 +1663,7 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
             ) );
 
             // 儲存 nextAction 供前端處理
-            update_user_meta( $user_id, '_ys_shopline_add_method_next_action', $response['nextAction'] );
+            update_user_meta( $user_id, YSOrderMeta::ADD_METHOD_NEXT_ACTION, $response['nextAction'] );
 
             return array(
                 'result'     => 'success',
@@ -1670,7 +1678,7 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
         ) );
 
         // 清理暫存資料
-        delete_user_meta( $user_id, '_ys_shopline_pending_bind' );
+        delete_user_meta( $user_id, YSOrderMeta::PENDING_BIND );
 
         // 同步 Token（從 API 或 Webhook）
         $customer_manager = YSCustomer::instance();
