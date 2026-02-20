@@ -481,6 +481,22 @@ class YSCreditSubscription extends YSGatewayBase {
     }
 
     /**
+     * Get customer payment tokens.
+     *
+     * 覆寫父類別方法，因為信用卡 Token 統一存在 ys_shopline_credit 閘道下，
+     * 但本閘道 ID 是 ys_shopline_credit_subscription，父類 get_tokens() 會查不到。
+     *
+     * @return \WC_Payment_Token[]
+     */
+    public function get_tokens() {
+        if ( ! is_user_logged_in() ) {
+            return array();
+        }
+
+        return \WC_Payment_Tokens::get_customer_tokens( get_current_user_id(), YSOrderMeta::CREDIT_GATEWAY_ID );
+    }
+
+    /**
      * Payment fields.
      */
     public function payment_fields() {
