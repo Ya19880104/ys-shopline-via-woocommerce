@@ -10,6 +10,7 @@ namespace YangSheep\ShoplinePayment\Gateways;
 defined( 'ABSPATH' ) || exit;
 
 use WC_HTTPS;
+use YangSheep\ShoplinePayment\Utils\YSOrderMeta;
 
 /**
  * YSChaileaseBNPL Class.
@@ -158,16 +159,16 @@ class YSChaileaseBNPL extends YSGatewayBase {
     protected function prepare_payment_data( $order, $pay_session ) {
         $data = parent::prepare_payment_data( $order, $pay_session );
 
-        // BNPL doesn't support card binding
-        $data['confirm']['paymentBehavior'] = 'QuickPayment';
-        unset( $data['confirm']['paymentInstrument']['savePaymentInstrument'] );
+        // BNPL 使用一般付款，不需要卡片綁定
+        $data['confirm']['paymentBehavior'] = 'Regular';
+        unset( $data['confirm']['paymentInstrument'] );
 
         // Add installment data if selected
         $installment = isset( $_POST['ys_shopline_bnpl_installment'] ) ? absint( $_POST['ys_shopline_bnpl_installment'] ) : 0;
 
         if ( $installment > 0 ) {
             $data['confirm']['installment'] = $installment;
-            $order->update_meta_data( '_ys_shopline_bnpl_installment', $installment );
+            $order->update_meta_data( YSOrderMeta::BNPL_INSTALLMENT, $installment );
             $order->save();
         }
 

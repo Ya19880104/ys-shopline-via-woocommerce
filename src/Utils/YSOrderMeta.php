@@ -37,6 +37,60 @@ final class YSOrderMeta {
     /** @var string Next Action */
     public const NEXT_ACTION = '_ys_shopline_next_action';
 
+    /** @var string Shopline Customer ID（user meta / subscription meta 共用） */
+    public const CUSTOMER_ID = '_ys_shopline_customer_id';
+
+    /** @var string 付款工具 ID（subscription meta） */
+    public const PAYMENT_INSTRUMENT_ID = '_ys_shopline_payment_instrument_id';
+
+    /** @var string 付款嘗試次數 */
+    public const PAYMENT_ATTEMPT = '_ys_shopline_payment_attempt';
+
+    /** @var string Reference Order ID */
+    public const REFERENCE_ORDER_ID = '_ys_shopline_reference_order_id';
+
+    /** @var string 信用卡末四碼 */
+    public const CARD_LAST4 = '_ys_shopline_card_last4';
+
+    /** @var string 信用卡品牌 */
+    public const CARD_BRAND = '_ys_shopline_card_brand';
+
+    /** @var string 錯誤代碼 */
+    public const ERROR_CODE = '_ys_shopline_error_code';
+
+    /** @var string 錯誤訊息 */
+    public const ERROR_MESSAGE = '_ys_shopline_error_message';
+
+    /** @var string ATM 銀行代碼 */
+    public const VA_BANK_CODE = '_ys_shopline_va_bank_code';
+
+    /** @var string ATM 虛擬帳號 */
+    public const VA_ACCOUNT = '_ys_shopline_va_account';
+
+    /** @var string ATM 繳費期限 */
+    public const VA_EXPIRE = '_ys_shopline_va_expire';
+
+    /** @var string 信用卡分期期數 */
+    public const INSTALLMENT = '_ys_shopline_installment';
+
+    /** @var string BNPL 分期期數 */
+    public const BNPL_INSTALLMENT = '_ys_shopline_bnpl_installment';
+
+    /** @var string 待綁定付款工具 */
+    public const PENDING_BIND = '_ys_shopline_pending_bind';
+
+    /** @var string 新增付款方式 next action */
+    public const ADD_METHOD_NEXT_ACTION = '_ys_shopline_add_method_next_action';
+
+    /** @var string 付款工具快取（user meta） */
+    public const INSTRUMENTS_CACHE = '_ys_shopline_instruments_cache';
+
+    /** @var string Token 的 instrument ID（token meta） */
+    public const TOKEN_INSTRUMENT_ID = '_ys_shopline_instrument_id';
+
+    /** @var string 信用卡 Token 統一 gateway ID */
+    public const CREDIT_GATEWAY_ID = 'ys_shopline_credit';
+
     /**
      * 根據交易訂單 ID 取得 WC 訂單
      *

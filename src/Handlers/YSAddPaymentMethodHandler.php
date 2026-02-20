@@ -20,6 +20,7 @@ namespace YangSheep\ShoplinePayment\Handlers;
 defined( 'ABSPATH' ) || exit;
 
 use YangSheep\ShoplinePayment\Utils\YSLogger;
+use YangSheep\ShoplinePayment\Utils\YSOrderMeta;
 use YangSheep\ShoplinePayment\Customer\YSCustomer;
 use WC_Payment_Tokens;
 use WC_Payment_Token_CC;
@@ -69,7 +70,7 @@ class YSAddPaymentMethodHandler {
 		) );
 
 		// 取得暫存的綁卡資訊
-		$pending_bind = get_user_meta( $user_id, '_ys_shopline_pending_bind', true );
+		$pending_bind = get_user_meta( $user_id, YSOrderMeta::PENDING_BIND, true );
 
 		if ( empty( $pending_bind ) ) {
 			YSLogger::warning( 'Add payment method redirect: No pending bind data', array(
@@ -191,7 +192,7 @@ class YSAddPaymentMethodHandler {
 		}
 
 		// 取得 nextAction
-		$next_action = get_user_meta( $user_id, '_ys_shopline_add_method_next_action', true );
+		$next_action = get_user_meta( $user_id, YSOrderMeta::ADD_METHOD_NEXT_ACTION, true );
 
 		if ( empty( $next_action ) ) {
 			wp_safe_redirect( wc_get_account_endpoint_url( 'payment-methods' ) );
@@ -199,7 +200,7 @@ class YSAddPaymentMethodHandler {
 		}
 
 		// 清除 nextAction（只用一次）
-		delete_user_meta( $user_id, '_ys_shopline_add_method_next_action' );
+		delete_user_meta( $user_id, YSOrderMeta::ADD_METHOD_NEXT_ACTION );
 
 		// 渲染 3DS 頁面
 		self::render_3ds_page( $next_action );
@@ -356,17 +357,13 @@ class YSAddPaymentMethodHandler {
 		}
 
 		// 檢查 token 是否已存在
-		$gateway_ids = array( 'ys_shopline_credit', 'ys_shopline_credit_card', 'ys_shopline_credit_subscription' );
-
-		foreach ( $gateway_ids as $gw_id ) {
-			$existing_tokens = WC_Payment_Tokens::get_customer_tokens( $user_id, $gw_id );
-			foreach ( $existing_tokens as $existing_token ) {
-				if ( $existing_token->get_token() === $instrument_id ) {
-					YSLogger::debug( 'Token already exists', array(
-						'instrument_id' => $instrument_id,
-					) );
-					return true;
-				}
+		$existing_tokens = WC_Payment_Tokens::get_customer_tokens( $user_id, YSOrderMeta::CREDIT_GATEWAY_ID );
+		foreach ( $existing_tokens as $existing_token ) {
+			if ( $existing_token->get_token() === $instrument_id ) {
+				YSLogger::debug( 'Token already exists', array(
+					'instrument_id' => $instrument_id,
+				) );
+				return true;
 			}
 		}
 
@@ -395,7 +392,7 @@ class YSAddPaymentMethodHandler {
 		// 建立新 token
 		$token = new WC_Payment_Token_CC();
 		$token->set_token( $instrument_id );
-		$token->set_gateway_id( 'ys_shopline_credit' );
+		$token->set_gateway_id( YSOrderMeta::CREDIT_GATEWAY_ID );
 		$token->set_card_type( $card_type );
 		$token->set_last4( $last4 );
 		$token->set_expiry_month( $expiry_month );
@@ -470,7 +467,7 @@ class YSAddPaymentMethodHandler {
 	 * @param int $user_id WordPress user ID.
 	 */
 	private static function clear_pending_data( $user_id ) {
-		delete_user_meta( $user_id, '_ys_shopline_pending_bind' );
-		delete_user_meta( $user_id, '_ys_shopline_add_method_next_action' );
+		delete_user_meta( $user_id, YSOrderMeta::PENDING_BIND );
+		delete_user_meta( $user_id, YSOrderMeta::ADD_METHOD_NEXT_ACTION );
 	}
 }

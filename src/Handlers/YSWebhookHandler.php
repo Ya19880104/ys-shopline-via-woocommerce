@@ -466,7 +466,7 @@ final class YSWebhookHandler {
 
         // 透過 Customer ID 找到使用者
         $users = get_users( [
-            'meta_key'   => '_ys_shopline_customer_id',
+            'meta_key'   => YSOrderMeta::CUSTOMER_ID,
             'meta_value' => $payment_customer_id,
             'number'     => 1,
         ] );
@@ -479,10 +479,7 @@ final class YSWebhookHandler {
         $user_id = $users[0]->ID;
 
         // 檢查 Token 是否已存在
-        $existing_tokens = [];
-        foreach ( [ 'ys_shopline_credit', 'ys_shopline_credit_card', 'ys_shopline_credit_subscription' ] as $gateway_id ) {
-            $existing_tokens = array_merge( $existing_tokens, \WC_Payment_Tokens::get_customer_tokens( $user_id, $gateway_id ) );
-        }
+        $existing_tokens = \WC_Payment_Tokens::get_customer_tokens( $user_id, YSOrderMeta::CREDIT_GATEWAY_ID );
 
         foreach ( $existing_tokens as $existing_token ) {
             if ( $existing_token->get_token() === $payment_instrument_id ) {
@@ -493,7 +490,7 @@ final class YSWebhookHandler {
         // 建立新的 Token（欄位名稱依 API 文件: brand, last, expireMonth, expireYear）
         $token = new \WC_Payment_Token_CC();
         $token->set_token( $payment_instrument_id );
-        $token->set_gateway_id( 'ys_shopline_credit' );
+        $token->set_gateway_id( YSOrderMeta::CREDIT_GATEWAY_ID );
         $token->set_card_type( strtolower( $card_info['brand'] ?? 'card' ) );
         $token->set_last4( $card_info['last'] ?? '0000' );
         $token->set_expiry_month( $card_info['expireMonth'] ?? '12' );
@@ -507,6 +504,44 @@ final class YSWebhookHandler {
         $token->save();
 
         YSLogger::info( "Webhook: 為使用者 {$user_id} 建立了 Payment Token" );
+
+        // 綁卡成功後，更新尚未綁定 instrument 的 subscription
+        $this->update_pending_subscriptions_instrument( $user_id, $payment_instrument_id );
+    }
+
+    /**
+     * 更新尚未綁定 instrument ID 的 subscription。
+     *
+     * 在綁卡 Webhook 觸發時，將新的 instrument ID 寫入
+     * 使用本閘道但尚未設定 instrument 的 subscription。
+     *
+     * @param int    $user_id       WordPress user ID.
+     * @param string $instrument_id Shopline payment instrument ID.
+     */
+    private function update_pending_subscriptions_instrument( int $user_id, string $instrument_id ): void {
+        if ( ! function_exists( 'wcs_get_users_subscriptions' ) ) {
+            return;
+        }
+
+        $subscriptions = wcs_get_users_subscriptions( $user_id );
+
+        foreach ( $subscriptions as $subscription ) {
+            if ( 'ys_shopline_credit_subscription' !== $subscription->get_payment_method() ) {
+                continue;
+            }
+
+            // 只更新尚未綁定的 subscription
+            if ( ! empty( $subscription->get_meta( YSOrderMeta::PAYMENT_INSTRUMENT_ID ) ) ) {
+                continue;
+            }
+
+            $subscription->update_meta_data( YSOrderMeta::PAYMENT_INSTRUMENT_ID, $instrument_id );
+            $subscription->save();
+
+            YSLogger::info( "Webhook: 更新 subscription #{$subscription->get_id()} 的 instrument ID", [
+                'instrument_id' => $instrument_id,
+            ] );
+        }
     }
 
     /**

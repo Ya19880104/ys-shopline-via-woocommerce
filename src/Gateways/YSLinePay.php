@@ -80,9 +80,9 @@ class YSLinePay extends YSGatewayBase {
     protected function prepare_payment_data( $order, $pay_session ) {
         $data = parent::prepare_payment_data( $order, $pay_session );
 
-        // LINE Pay doesn't support card binding
-        $data['confirm']['paymentBehavior'] = 'QuickPayment';
-        unset( $data['confirm']['paymentInstrument']['savePaymentInstrument'] );
+        // LINE Pay 使用一般付款，不需要卡片綁定
+        $data['confirm']['paymentBehavior'] = 'Regular';
+        unset( $data['confirm']['paymentInstrument'] );
 
         return $data;
     }

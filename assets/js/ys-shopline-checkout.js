@@ -240,14 +240,22 @@ jQuery(function ($) {
             $container.html('<div class="ys-shopline-loading" style="text-align: center; padding: 20px;"><span class="spinner is-active" style="float: none;"></span></div>');
 
             // Fetch SDK config from server
+            var ajaxData = {
+                action: 'ys_shopline_get_sdk_config',
+                nonce: ys_shopline_params.nonce,
+                gateway: gatewayId
+            };
+
+            // Pay-for-order 頁面：傳遞 order_id 讓後端取得正確金額
+            var orderPayMatch = window.location.pathname.match(/order-pay\/(\d+)/);
+            if (orderPayMatch) {
+                ajaxData.order_id = orderPayMatch[1];
+            }
+
             $.ajax({
                 type: 'POST',
                 url: ys_shopline_params.ajax_url,
-                data: {
-                    action: 'ys_shopline_get_sdk_config',
-                    nonce: ys_shopline_params.nonce,
-                    gateway: gatewayId
-                },
+                data: ajaxData,
                 success: function (response) {
                     if (response.success) {
                         self.renderPayment(gatewayId, response.data);
@@ -975,8 +983,183 @@ jQuery(function ($) {
         }
     };
 
+    /**
+     * Pay-for-Order Page Handler
+     *
+     * 處理 /checkout/order-pay/{id}/ 頁面的 SDK 付款。
+     * 該頁面使用 #order_review 表單（非 form.checkout），
+     * 需要獨立攔截表單提交並透過 AJAX 呼叫 process_payment。
+     */
+    var PayForOrderHandler = {
+
+        /**
+         * Initialize handler
+         */
+        init: function () {
+            if (!this.isPayForOrderPage()) {
+                return;
+            }
+
+            var $form = $('#order_review');
+            if (!$form.length) {
+                return;
+            }
+
+            console.log('[YS Shopline] Pay-for-order page detected');
+
+            var self = this;
+
+            // 初始化當前選中的閘道 SDK
+            var gatewayId = $('input[name="payment_method"]:checked').val();
+            if (gatewayId && GATEWAY_CONFIG[gatewayId]) {
+                ShoplineCheckout.initSDK(gatewayId);
+            }
+
+            // 監聽付款方式變更
+            $form.on('change', 'input[name="payment_method"]', function () {
+                var newGatewayId = $(this).val();
+                if (newGatewayId && GATEWAY_CONFIG[newGatewayId]) {
+                    ShoplineCheckout.initSDK(newGatewayId);
+                }
+            });
+
+            // 攔截表單提交
+            $form.on('submit', function (e) {
+                var selectedGateway = $('input[name="payment_method"]:checked').val();
+
+                // 非 Shopline 閘道，正常提交
+                if (!selectedGateway || !GATEWAY_CONFIG[selectedGateway]) {
+                    return true;
+                }
+
+                // 已有 paySession（避免重複攔截）
+                if ($form.find('input[name="ys_shopline_pay_session"]').val()) {
+                    return true;
+                }
+
+                e.preventDefault();
+                self.processPayment($form, selectedGateway);
+                return false;
+            });
+        },
+
+        /**
+         * 偵測是否為 pay-for-order 頁面
+         */
+        isPayForOrderPage: function () {
+            return window.location.pathname.indexOf('order-pay') !== -1;
+        },
+
+        /**
+         * 取得 order_id（從 URL 路徑）
+         */
+        getOrderId: function () {
+            var match = window.location.pathname.match(/order-pay\/(\d+)/);
+            return match ? match[1] : '';
+        },
+
+        /**
+         * 處理付款：取得 paySession 後透過 AJAX 提交
+         */
+        processPayment: function ($form, gatewayId) {
+            var self = this;
+            var paymentInstance = paymentInstances[gatewayId];
+
+            if (!paymentInstance) {
+                alert(ys_shopline_params.i18n.payment_not_ready || 'Payment not ready. Please wait and try again.');
+                return;
+            }
+
+            // Block UI
+            $form.addClass('processing').block({
+                message: null,
+                overlayCSS: { background: '#fff', opacity: 0.6 }
+            });
+
+            // 呼叫 SDK 取得 paySession
+            paymentInstance.createPayment().then(function (result) {
+                console.log('[YS Shopline] Pay-for-order createPayment result:', result);
+
+                if (result.error) {
+                    $form.removeClass('processing').unblock();
+                    alert(result.error.message || 'Payment failed');
+                    return;
+                }
+
+                if (!result.paySession) {
+                    $form.removeClass('processing').unblock();
+                    alert('Payment session creation failed. Please try again.');
+                    return;
+                }
+
+                // 準備 AJAX 資料
+                var paySessionValue = typeof result.paySession === 'object'
+                    ? JSON.stringify(result.paySession)
+                    : result.paySession;
+
+                var ajaxData = {
+                    action: 'ys_shopline_pay_for_order',
+                    nonce: ys_shopline_params.nonce,
+                    order_id: self.getOrderId(),
+                    payment_method: gatewayId,
+                    ys_shopline_pay_session: paySessionValue,
+                    ys_shopline_bind_card_enabled: ShoplineCheckout.isBindCardEnabled(gatewayId) ? '1' : '0'
+                };
+
+                // 加入裝置資訊
+                var clientInfo = {
+                    'ys_shopline_screen_width': String(window.screen.width || ''),
+                    'ys_shopline_screen_height': String(window.screen.height || ''),
+                    'ys_shopline_color_depth': String(window.screen.colorDepth || ''),
+                    'ys_shopline_timezone_offset': String(new Date().getTimezoneOffset() || ''),
+                    'ys_shopline_java_enabled': String(navigator.javaEnabled ? navigator.javaEnabled() : false),
+                    'ys_shopline_browser_language': navigator.language || navigator.userLanguage || ''
+                };
+                $.extend(ajaxData, clientInfo);
+
+                // 透過 AJAX 呼叫 process_payment
+                $.ajax({
+                    type: 'POST',
+                    url: ys_shopline_params.ajax_url,
+                    data: ajaxData,
+                    dataType: 'json',
+                    success: function (response) {
+                        console.log('[YS Shopline] Pay-for-order response:', response);
+
+                        if (response.result === 'success') {
+                            if (response.nextAction) {
+                                // 需要 SDK 處理 nextAction（3DS/Confirm）
+                                console.log('[YS Shopline] Pay-for-order: processing nextAction');
+                                ShoplineCheckout.processNextAction(gatewayId, response.nextAction, response.returnUrl);
+                            } else if (response.redirect) {
+                                window.location.href = response.redirect;
+                            }
+                        } else {
+                            $form.removeClass('processing').unblock();
+                            var errorMsg = response.messages || response.message || '付款處理失敗，請重試。';
+                            alert(errorMsg);
+                        }
+                    },
+                    error: function (xhr, status, error) {
+                        console.error('[YS Shopline] Pay-for-order AJAX error:', status, error);
+                        $form.removeClass('processing').unblock();
+                        alert('網路錯誤，請檢查連線後重試。');
+                    }
+                });
+
+            }).catch(function (error) {
+                console.error('[YS Shopline] Pay-for-order createPayment error:', error);
+                $form.removeClass('processing').unblock();
+                alert(error.message || 'Payment error occurred');
+            });
+        }
+    };
+
     // Initialize on document ready
     ShoplineCheckout.init();
+
+    // Initialize pay-for-order handler
+    PayForOrderHandler.init();
 
     // Expose to global scope for extensions
     window.ShoplineCheckout = ShoplineCheckout;

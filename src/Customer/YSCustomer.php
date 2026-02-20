@@ -12,6 +12,7 @@ namespace YangSheep\ShoplinePayment\Customer;
 defined( 'ABSPATH' ) || exit;
 
 use YangSheep\ShoplinePayment\Utils\YSLogger;
+use YangSheep\ShoplinePayment\Utils\YSOrderMeta;
 use YangSheep\ShoplinePayment\Api\YSApi;
 use WC_Payment_Tokens;
 use WC_Payment_Token_CC;
@@ -27,12 +28,12 @@ class YSCustomer {
 	/**
 	 * User Meta Key - Shopline Customer ID
 	 */
-	const META_CUSTOMER_ID = '_ys_shopline_customer_id';
+	const META_CUSTOMER_ID = YSOrderMeta::CUSTOMER_ID;
 
 	/**
 	 * User Meta Key - 付款工具快取
 	 */
-	const META_INSTRUMENTS_CACHE = '_ys_shopline_instruments_cache';
+	const META_INSTRUMENTS_CACHE = YSOrderMeta::INSTRUMENTS_CACHE;
 
 	/**
 	 * 快取有效時間（秒）- 1 小時
@@ -323,13 +324,10 @@ class YSCustomer {
 			return;
 		}
 
-		// 取得現有的 WC Tokens（兼容舊 gateway ID）
-		$gateway_ids = array( 'ys_shopline_credit', 'ys_shopline_credit_card' );
-		foreach ( $gateway_ids as $gw_id ) {
-			$tokens = WC_Payment_Tokens::get_customer_tokens( $user_id, $gw_id );
-			if ( ! empty( $tokens ) ) {
-				return;
-			}
+		// 檢查是否已有 WC Tokens
+		$tokens = WC_Payment_Tokens::get_customer_tokens( $user_id, YSOrderMeta::CREDIT_GATEWAY_ID );
+		if ( ! empty( $tokens ) ) {
+			return;
 		}
 
 		// 從 API 取得付款工具
@@ -376,7 +374,7 @@ class YSCustomer {
 
 		$token = new WC_Payment_Token_CC();
 		$token->set_token( $instrument_id );
-		$token->set_gateway_id( 'ys_shopline_credit' );
+		$token->set_gateway_id( YSOrderMeta::CREDIT_GATEWAY_ID );
 		$token->set_user_id( $user_id );
 		$token->set_card_type( strtolower( $card_info['brand'] ?? 'visa' ) );
 		$token->set_last4( $card_info['last'] ?? '****' );
@@ -384,7 +382,7 @@ class YSCustomer {
 		$token->set_expiry_year( $card_info['expireYear'] ?? gmdate( 'Y' ) );
 
 		// 儲存 Shopline 付款工具 ID
-		$token->add_meta_data( '_ys_shopline_instrument_id', $instrument_id, true );
+		$token->add_meta_data( YSOrderMeta::TOKEN_INSTRUMENT_ID, $instrument_id, true );
 
 		if ( $token->save() ) {
 			YSLogger::debug( 'WC Token created from instrument', array(
@@ -406,13 +404,10 @@ class YSCustomer {
 	 * @return \WC_Payment_Token_CC|false
 	 */
 	private function get_wc_token_by_instrument_id( $user_id, $instrument_id ) {
-		$gateway_ids = array( 'ys_shopline_credit', 'ys_shopline_credit_card', 'ys_shopline_credit_subscription' );
-		foreach ( $gateway_ids as $gw_id ) {
-			$tokens = WC_Payment_Tokens::get_customer_tokens( $user_id, $gw_id );
-			foreach ( $tokens as $token ) {
-				if ( $token->get_token() === $instrument_id ) {
-					return $token;
-				}
+		$tokens = WC_Payment_Tokens::get_customer_tokens( $user_id, YSOrderMeta::CREDIT_GATEWAY_ID );
+		foreach ( $tokens as $token ) {
+			if ( $token->get_token() === $instrument_id ) {
+				return $token;
 			}
 		}
 
@@ -689,15 +684,11 @@ class YSCustomer {
 			return 0;
 		}
 
-		// 取得現有的 WC Tokens（檢查多個 gateway）
-		$gateway_ids = array( 'ys_shopline_credit', 'ys_shopline_credit_card', 'ys_shopline_credit_subscription' );
+		// 取得現有的 WC Tokens
 		$existing_instrument_ids = array();
-
-		foreach ( $gateway_ids as $gw_id ) {
-			$tokens = WC_Payment_Tokens::get_customer_tokens( $user_id, $gw_id );
-			foreach ( $tokens as $token ) {
-				$existing_instrument_ids[] = $token->get_token();
-			}
+		$tokens = WC_Payment_Tokens::get_customer_tokens( $user_id, YSOrderMeta::CREDIT_GATEWAY_ID );
+		foreach ( $tokens as $token ) {
+			$existing_instrument_ids[] = $token->get_token();
 		}
 
 		// 同步到 WC Tokens
@@ -750,11 +741,8 @@ class YSCustomer {
 			) );
 		}
 
-		// 取得現有的 WC Tokens（兼容舊 gateway ID）
-		$existing_tokens = array();
-		foreach ( array( 'ys_shopline_credit', 'ys_shopline_credit_card', 'ys_shopline_credit_subscription' ) as $gw_id ) {
-			$existing_tokens = array_merge( $existing_tokens, WC_Payment_Tokens::get_customer_tokens( $user_id, $gw_id ) );
-		}
+		// 取得現有的 WC Tokens
+		$existing_tokens = WC_Payment_Tokens::get_customer_tokens( $user_id, YSOrderMeta::CREDIT_GATEWAY_ID );
 		$existing_instrument_ids = array();
 		foreach ( $existing_tokens as $token ) {
 			$existing_instrument_ids[] = $token->get_token();
