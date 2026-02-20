@@ -4,7 +4,7 @@
 
 ## 版本資訊
 
-- **目前版本**：2.3.3
+- **目前版本**：2.3.4
 - **PHP 需求**：>= 8.0
 - **WordPress 需求**：>= 6.0
 - **WooCommerce 需求**：7.0 - 9.0
@@ -64,6 +64,11 @@ https://your-domain.com/wp-json/ys-shopline/v1/webhook
 ---
 
 ## 變更紀錄
+
+### 2.3.4 - 2026-02-21
+
+**修正**
+- 覆寫 `YSCreditSubscription::get_tokens()` 查詢 `CREDIT_GATEWAY_ID` 下的 token，修正訂閱閘道看不到已儲存卡片的問題
 
 ### 2.3.3 - 2026-02-20
 
