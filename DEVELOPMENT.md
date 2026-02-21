@@ -137,7 +137,7 @@ use YangSheep\ShoplinePayment\Customer\YSCustomer;
 
 ```php
 // 版本
-YS_SHOPLINE_VERSION = '2.3.1'
+YS_SHOPLINE_VERSION = '2.3.4'
 
 // 路徑
 YS_SHOPLINE_PLUGIN_FILE      // 主檔完整路徑
