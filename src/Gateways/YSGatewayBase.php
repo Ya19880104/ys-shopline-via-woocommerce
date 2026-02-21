@@ -361,6 +361,11 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
             true
         );
 
+        // 確保 Shopline SDK 容器內的卡片品牌圖示不被其他外掛隱藏
+        wp_register_style( 'ys-shopline-checkout', false );
+        wp_enqueue_style( 'ys-shopline-checkout' );
+        wp_add_inline_style( 'ys-shopline-checkout', '#payment .ys-shopline-payment-container img { display: block !important; }' );
+
         // Localize script
         wp_localize_script(
             'ys-shopline-checkout',

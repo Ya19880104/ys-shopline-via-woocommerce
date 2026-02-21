@@ -504,12 +504,7 @@ class YSCreditSubscription extends YSGatewayBase {
             echo wpautop( wp_kses_post( $this->description ) );
         }
 
-        // Show saved cards only if user has tokens (avoid phantom radio button)
-        if ( is_user_logged_in() && count( $this->get_tokens() ) > 0 ) {
-            $this->saved_payment_methods();
-        }
-
-        // Container for SDK
+        // SDK 容器已內建卡片選擇功能，不需要 WC 原生的 saved_payment_methods() radio buttons
         printf(
             '<div id="%s_container" class="ys-shopline-payment-container" data-gateway="%s" data-payment-method="%s" data-force-save="true" style="min-height: 150px;"></div>',
             esc_attr( $this->id ),
@@ -517,7 +512,6 @@ class YSCreditSubscription extends YSGatewayBase {
             esc_attr( $this->get_payment_method() )
         );
 
-        // Info message
         echo '<p class="ys-shopline-subscription-notice">';
         echo '<small>';
         esc_html_e( '此付款方式會儲存您的信用卡資訊以供定期扣款使用。', 'ys-shopline-via-woocommerce' );

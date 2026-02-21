@@ -6,6 +6,34 @@
 
 ---
 
+## [2.3.4] - 2026-02-21
+
+### Fixed
+- 覆寫 `YSCreditSubscription::get_tokens()` 查詢 `CREDIT_GATEWAY_ID` 下的 token，修正訂閱閘道看不到已儲存卡片的問題
+
+## [2.3.3] - 2026-02-20
+
+### Fixed
+- 修正訂閱續扣 "No saved payment method" 錯誤：Token 已存在時 `sync_payment_token()` 提前 return，導致 subscription instrument_id 未被寫入
+- 提取獨立方法 `update_subscription_instrument()`，在 `sync_payment_token()` 之外執行，不受 token 是否新建影響
+- 統一 Token Gateway ID：所有信用卡 Token 統一存在 `YSOrderMeta::CREDIT_GATEWAY_ID`，移除所有多 gateway 搜尋邏輯
+- 消除所有硬編碼 Meta Key：新增 6 個常數（`INSTALLMENT`、`BNPL_INSTALLMENT`、`PENDING_BIND`、`ADD_METHOD_NEXT_ACTION`、`INSTRUMENTS_CACHE`、`TOKEN_INSTRUMENT_ID`）
+- 修正 `generate_reference_order_id()` 雙重 `$order->save()` 合併為一次
+- 清理 `YSStatusManager` 中不存在的 legacy gateway ID
+
+## [2.3.2] - 2026-02-19
+
+### Changed
+- 重構 `YSCreditSubscription::process_subscription_payment()` 為三個獨立方法
+- 提取 `build_recurring_payment_data()` — Recurring 專用的 API 請求建構
+- 提取 `handle_recurring_response()` — 使用 `YSOrderMeta` 常數處理 API 回應
+- 統一 Token 查找：移除三層 fallback，改為只從 subscription meta 取得
+- `save_subscription_meta_from_order()` 精簡為只存 `customer_id`
+- 統一 Meta Key 常數：將所有硬編碼 `_ys_shopline_*` 改用 `YSOrderMeta::*` 常數，影響 8 個檔案
+
+### Removed
+- 移除 `find_latest_instrument_id()` — 多閘道掃描的 fallback 邏輯不再需要
+
 ## [2.3.1] - 2026-02-17
 
 ### Fixed
