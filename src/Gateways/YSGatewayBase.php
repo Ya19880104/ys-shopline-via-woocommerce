@@ -699,8 +699,9 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
         // Prepare payment data
         $payment_data = $this->prepare_payment_data( $order, $pay_session );
 
-        // Create payment trade
-        $response = $this->api->create_payment_trade( $payment_data );
+        // Create payment trade（帶冪等鍵，同一次 attempt 重送不會重複扣款）
+        $idempotent_key = (string) $order->get_meta( YSOrderMeta::REFERENCE_ORDER_ID );
+        $response       = $this->api->create_payment_trade( $payment_data, $idempotent_key );
 
         if ( is_wp_error( $response ) ) {
             $raw_error    = $response->get_error_message();
@@ -1026,15 +1027,6 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
     }
 
     /**
-     * Generate unique reference order ID for Shopline.
-     *
-     * Shopline 不允許重複使用相同的 referenceOrderId，
-     * 所以需要加上嘗試次數來產生唯一 ID。
-     *
-     * @param WC_Order $order Order object.
-     * @return string
-     */
-    /**
      * 查詢前一筆交易狀態，決定是否允許重新付款。
      *
      * - SUCCEEDED/CAPTURED → 導向感謝頁（已成功）
@@ -1079,44 +1071,45 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
             'status'         => $status,
         ) );
 
-        // 前一筆已成功 → 更新訂單並導向感謝頁
+        // 終態白名單：只有這些狀態才允許建立新交易
+        $terminal_failed = array( 'FAILED', 'EXPIRED', 'CANCELLED' );
+
+        // 前一筆已成功 → 導向感謝頁（RedirectHandler 會查 API 補齊所有 meta）
         if ( in_array( $status, array( 'SUCCEEDED', 'SUCCESS', 'CAPTURED' ), true ) ) {
-            $order->payment_complete( $existing_trade_id );
-            $order->add_order_note(
-                sprintf(
-                    /* translators: %s: trade order ID */
-                    __( '重複提交時查詢到前次交易已成功。交易編號：%s', 'ys-shopline-via-woocommerce' ),
-                    $existing_trade_id
-                )
-            );
             return array(
                 'result'   => 'success',
                 'redirect' => $this->get_return_url( $order ),
             );
         }
 
-        // 前一筆仍在處理中（3DS 未完成、等待確認等）→ 提示使用者
-        if ( in_array( $status, array( 'CREATED', 'PENDING', 'AUTHORIZED' ), true ) ) {
-            wc_add_notice(
-                __( '前次付款流程尚未完成，請稍候片刻後重新整理頁面。若持續出現此訊息，請聯繫客服。', 'ys-shopline-via-woocommerce' ),
-                'error'
-            );
-            return array( 'result' => 'failure' );
+        // 前一筆已失敗/過期/取消 → 清除舊 tradeOrderId，允許重新付款
+        if ( in_array( $status, $terminal_failed, true ) ) {
+            $order->delete_meta_data( YSOrderMeta::TRADE_ORDER_ID );
+            $order->save();
+
+            YSLogger::info( 'Prior trade failed/expired, allowing retry', array(
+                'order_id'          => $order->get_id(),
+                'old_trade_order_id' => $existing_trade_id,
+                'old_status'        => $status,
+            ) );
+
+            return null;
         }
 
-        // 前一筆已失敗/過期 → 清除舊 tradeOrderId，允許重新付款
-        $order->delete_meta_data( YSOrderMeta::TRADE_ORDER_ID );
-        $order->save();
-
-        YSLogger::info( 'Prior trade failed/expired, allowing retry', array(
-            'order_id'          => $order->get_id(),
-            'old_trade_order_id' => $existing_trade_id,
-            'old_status'        => $status,
-        ) );
-
-        return null;
+        // 其他所有狀態（CREATED/PENDING/AUTHORIZED/PROCESSING/未知）→ 進行中，禁止新交易
+        wc_add_notice(
+            __( '前次付款流程尚未完成，請稍候片刻後重新整理頁面。若持續出現此訊息，請聯繫客服。', 'ys-shopline-via-woocommerce' ),
+            'error'
+        );
+        return array( 'result' => 'failure' );
     }
 
+    /**
+     * Generate unique reference order ID for Shopline.
+     *
+     * @param WC_Order $order Order object.
+     * @return string
+     */
     protected function generate_reference_order_id( $order ) {
         $order_id = $order->get_id();
 

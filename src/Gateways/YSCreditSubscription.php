@@ -193,8 +193,9 @@ class YSCreditSubscription extends YSGatewayBase {
             'instrument_id' => $instrument_id,
         ) );
 
-        // 3. 呼叫 API + 處理回應
-        $response = $this->api->create_payment_trade( $data );
+        // 3. 呼叫 API + 處理回應（帶冪等鍵）
+        $idempotent_key = (string) $order->get_meta( YSOrderMeta::REFERENCE_ORDER_ID );
+        $response       = $this->api->create_payment_trade( $data, $idempotent_key );
         $this->handle_recurring_response( $order, $response );
     }
 

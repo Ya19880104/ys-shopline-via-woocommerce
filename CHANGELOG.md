@@ -6,6 +6,16 @@
 
 ---
 
+## [2.3.8] - 2026-03-05
+
+### Changed
+- 前次交易狀態判斷改為「終態白名單」：只有 FAILED/EXPIRED/CANCELLED 允許重試，其餘（含 PROCESSING、未知）一律視為進行中
+- 前次交易已成功時不再自行 `payment_complete()`，改為導向感謝頁由 `YSRedirectHandler` 統一補齊所有 meta
+
+### Added
+- Idempotent Key：`create_payment_trade()` API 呼叫帶入 `idempotentKey` header，同一筆 attempt 重送 Shopline 只處理一次
+- 續扣 `process_subscription_payment()` 同步支援 idempotent key
+
 ## [2.3.7] - 2026-03-05
 
 ### Fixed

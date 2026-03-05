@@ -4,7 +4,7 @@
 
 ## 版本資訊
 
-- **目前版本**：2.3.7
+- **目前版本**：2.3.8
 - **PHP 需求**：>= 8.0
 - **WordPress 需求**：>= 6.0
 - **WooCommerce 需求**：7.0 - 9.0
@@ -64,6 +64,12 @@ https://your-domain.com/wp-json/ys-shopline/v1/webhook
 ---
 
 ## 變更紀錄
+
+### 2.3.8 - 2026-03-05
+
+**改進**
+- 嚴格狀態機：只有終態（FAILED/EXPIRED/CANCELLED）允許重新付款
+- Idempotent Key：API 呼叫帶冪等鍵，防止 Shopline 端重複扣款
 
 ### 2.3.7 - 2026-03-05
 
