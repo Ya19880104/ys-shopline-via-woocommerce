@@ -326,10 +326,14 @@ final class YSWebhookHandler {
             return;
         }
 
-        $error_message = $data['errorMessage'] ?? ( $data['paymentMsg']['msg'] ?? __( 'Payment failed', 'ys-shopline-via-woocommerce' ) );
+        $raw_msg      = $data['errorMessage'] ?? ( $data['paymentMsg']['msg'] ?? __( 'Payment failed', 'ys-shopline-via-woocommerce' ) );
+        $error_code   = $data['paymentMsg']['code'] ?? '';
+        $friendly_msg = YSRedirectHandler::humanize_error_message( $raw_msg );
 
-        $order->update_status( 'failed', $error_message );
+        $order->update_status( 'failed', $raw_msg );
         $order->update_meta_data( YSOrderMeta::PAYMENT_STATUS, 'FAILED' );
+        $order->update_meta_data( YSOrderMeta::ERROR_CODE, $error_code );
+        $order->update_meta_data( YSOrderMeta::ERROR_MESSAGE, $friendly_msg );
         $order->update_meta_data( YSOrderMeta::PAYMENT_DETAIL, $data );
         $order->save();
     }

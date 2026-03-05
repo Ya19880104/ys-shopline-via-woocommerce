@@ -4,7 +4,7 @@
 
 ## 版本資訊
 
-- **目前版本**：2.3.6
+- **目前版本**：2.3.7
 - **PHP 需求**：>= 8.0
 - **WordPress 需求**：>= 6.0
 - **WooCommerce 需求**：7.0 - 9.0
@@ -64,6 +64,13 @@ https://your-domain.com/wp-json/ys-shopline/v1/webhook
 ---
 
 ## 變更紀錄
+
+### 2.3.7 - 2026-03-05
+
+**修正**
+- 防呆：3DS pending 訂單已有 tradeOrderId 時阻擋重複 API 呼叫
+- 防呆：Pay-for-order 頁面加入 `_isSubmitting` flag，防止重複扣款
+- ERROR meta 統一：Webhook 失敗、API 錯誤皆寫入 ERROR_CODE / ERROR_MESSAGE
 
 ### 2.3.6 - 2026-03-05
 

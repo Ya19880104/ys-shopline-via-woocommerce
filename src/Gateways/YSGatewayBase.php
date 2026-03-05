@@ -12,6 +12,7 @@ defined( 'ABSPATH' ) || exit;
 use YangSheep\ShoplinePayment\Utils\YSLogger;
 use YangSheep\ShoplinePayment\Utils\YSOrderMeta;
 use YangSheep\ShoplinePayment\Api\YSApi;
+use YangSheep\ShoplinePayment\Handlers\YSRedirectHandler;
 use YangSheep\ShoplinePayment\Customer\YSCustomer;
 use WC_Payment_Gateway;
 use WC_Order;
@@ -633,7 +634,7 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
 
         // 防呆：訂單已付款成功，不再重複呼叫 API
         if ( in_array( $order->get_status(), array( 'processing', 'completed', 'on-hold' ), true ) ) {
-            YSLogger::warning( 'Duplicate payment attempt blocked', array(
+            YSLogger::warning( 'Duplicate payment attempt blocked (status)', array(
                 'order_id' => $order_id,
                 'status'   => $order->get_status(),
             ) );
@@ -642,6 +643,17 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
                 'result'   => 'success',
                 'redirect' => $this->get_return_url( $order ),
             );
+        }
+
+        // 防呆：訂單已有 tradeOrderId 代表 API 已呼叫過（含 3DS pending 流程）
+        // 查詢前一筆交易狀態，決定是否允許重新付款
+        $existing_trade_id = $order->get_meta( YSOrderMeta::TRADE_ORDER_ID );
+        if ( ! empty( $existing_trade_id ) && 'pending' === $order->get_status() ) {
+            $prior_result = $this->check_prior_trade_status( $order, $existing_trade_id );
+            if ( null !== $prior_result ) {
+                return $prior_result;
+            }
+            // prior trade 已失敗/過期 → 清除舊 tradeOrderId，繼續建立新交易
         }
 
         // Get pay session from POST
@@ -691,17 +703,19 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
         $response = $this->api->create_payment_trade( $payment_data );
 
         if ( is_wp_error( $response ) ) {
-            $raw_error = $response->get_error_message();
+            $raw_error    = $response->get_error_message();
+            $friendly_msg = YSRedirectHandler::humanize_error_message( $raw_error );
             YSLogger::error( 'Payment failed: ' . $raw_error );
 
             // 訂單備註保留原始錯誤供管理員除錯
             $order->update_status( 'failed', __( 'Shopline payment failed: ', 'ys-shopline-via-woocommerce' ) . $raw_error );
+            $order->update_meta_data( YSOrderMeta::PAYMENT_STATUS, 'FAILED' );
+            $order->update_meta_data( YSOrderMeta::ERROR_CODE, $response->get_error_code() );
+            $order->update_meta_data( YSOrderMeta::ERROR_MESSAGE, $friendly_msg );
+            $order->save();
 
             // 前端顯示友善訊息
-            wc_add_notice(
-                __( '付款失敗，請重試或使用其他付款方式。如持續失敗，請聯繫客服。', 'ys-shopline-via-woocommerce' ),
-                'error'
-            );
+            wc_add_notice( $friendly_msg, 'error' );
             return array( 'result' => 'failure' );
         }
 
@@ -1020,6 +1034,89 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
      * @param WC_Order $order Order object.
      * @return string
      */
+    /**
+     * 查詢前一筆交易狀態，決定是否允許重新付款。
+     *
+     * - SUCCEEDED/CAPTURED → 導向感謝頁（已成功）
+     * - CREATED/PENDING/AUTHORIZED → 顯示「付款尚未完成」錯誤
+     * - FAILED/EXPIRED/其他 → 清除舊 tradeOrderId，return null 讓流程繼續
+     * - API 查詢失敗 → 顯示錯誤，不冒險建立新交易
+     *
+     * @param WC_Order $order            訂單物件。
+     * @param string   $existing_trade_id 已存在的 tradeOrderId。
+     * @return array|null 回傳 process_payment 格式陣列或 null（允許繼續）。
+     */
+    protected function check_prior_trade_status( $order, $existing_trade_id ) {
+        if ( ! $this->api ) {
+            wc_add_notice( __( '付款閘道未設定，請聯繫客服。', 'ys-shopline-via-woocommerce' ), 'error' );
+            return array( 'result' => 'failure' );
+        }
+
+        YSLogger::info( 'Checking prior trade status before retry', array(
+            'order_id'       => $order->get_id(),
+            'trade_order_id' => $existing_trade_id,
+        ) );
+
+        $response = $this->api->get_payment_trade( $existing_trade_id );
+
+        if ( is_wp_error( $response ) ) {
+            YSLogger::error( 'Prior trade query failed', array(
+                'order_id' => $order->get_id(),
+                'error'    => $response->get_error_message(),
+            ) );
+            wc_add_notice(
+                __( '無法確認前次付款狀態，請稍後再試或聯繫客服。', 'ys-shopline-via-woocommerce' ),
+                'error'
+            );
+            return array( 'result' => 'failure' );
+        }
+
+        $status = isset( $response['status'] ) ? strtoupper( $response['status'] ) : '';
+
+        YSLogger::info( 'Prior trade status result', array(
+            'order_id'       => $order->get_id(),
+            'trade_order_id' => $existing_trade_id,
+            'status'         => $status,
+        ) );
+
+        // 前一筆已成功 → 更新訂單並導向感謝頁
+        if ( in_array( $status, array( 'SUCCEEDED', 'SUCCESS', 'CAPTURED' ), true ) ) {
+            $order->payment_complete( $existing_trade_id );
+            $order->add_order_note(
+                sprintf(
+                    /* translators: %s: trade order ID */
+                    __( '重複提交時查詢到前次交易已成功。交易編號：%s', 'ys-shopline-via-woocommerce' ),
+                    $existing_trade_id
+                )
+            );
+            return array(
+                'result'   => 'success',
+                'redirect' => $this->get_return_url( $order ),
+            );
+        }
+
+        // 前一筆仍在處理中（3DS 未完成、等待確認等）→ 提示使用者
+        if ( in_array( $status, array( 'CREATED', 'PENDING', 'AUTHORIZED' ), true ) ) {
+            wc_add_notice(
+                __( '前次付款流程尚未完成，請稍候片刻後重新整理頁面。若持續出現此訊息，請聯繫客服。', 'ys-shopline-via-woocommerce' ),
+                'error'
+            );
+            return array( 'result' => 'failure' );
+        }
+
+        // 前一筆已失敗/過期 → 清除舊 tradeOrderId，允許重新付款
+        $order->delete_meta_data( YSOrderMeta::TRADE_ORDER_ID );
+        $order->save();
+
+        YSLogger::info( 'Prior trade failed/expired, allowing retry', array(
+            'order_id'          => $order->get_id(),
+            'old_trade_order_id' => $existing_trade_id,
+            'old_status'        => $status,
+        ) );
+
+        return null;
+    }
+
     protected function generate_reference_order_id( $order ) {
         $order_id = $order->get_id();
 

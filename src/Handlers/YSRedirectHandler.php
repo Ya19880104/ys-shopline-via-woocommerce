@@ -500,7 +500,7 @@ class YSRedirectHandler {
      * @param string $raw_msg Shopline API 原始錯誤訊息。
      * @return string 友善的中文錯誤訊息。
      */
-    private static function humanize_error_message( $raw_msg ) {
+    public static function humanize_error_message( $raw_msg ) {
         $msg = strtolower( $raw_msg );
 
         if ( strpos( $msg, 'instrument' ) !== false && strpos( $msg, 'invalid' ) !== false ) {
