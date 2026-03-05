@@ -71,7 +71,7 @@ class YSApi {
      * @param string $method   HTTP method.
      * @return array|WP_Error
      */
-    private function request( $endpoint, $data = array(), $method = 'POST' ) {
+    private function request( $endpoint, $data = array(), $method = 'POST', $idempotent_key = '' ) {
         $url = $this->api_url . $endpoint;
 
         $request_id = $this->generate_request_id();
@@ -82,6 +82,10 @@ class YSApi {
             'apiKey'       => $this->api_key,
             'requestId'    => $request_id,
         );
+
+        if ( '' !== $idempotent_key ) {
+            $headers['idempotentKey'] = substr( $idempotent_key, 0, 32 );
+        }
 
         $args = array(
             'method'  => $method,
@@ -187,11 +191,12 @@ class YSApi {
     /**
      * Create payment trade.
      *
-     * @param array $data Payment data.
+     * @param array  $data           Payment data.
+     * @param string $idempotent_key Idempotent key（同一筆重送相同 key，API 只處理一次）。
      * @return array|WP_Error
      */
-    public function create_payment_trade( $data ) {
-        return $this->request( '/trade/payment/create', $data );
+    public function create_payment_trade( $data, $idempotent_key = '' ) {
+        return $this->request( '/trade/payment/create', $data, 'POST', $idempotent_key );
     }
 
     /**
