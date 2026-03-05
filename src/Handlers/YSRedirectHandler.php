@@ -221,11 +221,21 @@ class YSRedirectHandler {
             $order->update_meta_data( YSOrderMeta::PAYMENT_STATUS, 'AUTHORIZED' );
             $order->save();
         } elseif ( 'FAILED' === $status ) {
-            // 付款失敗
-            $error_msg = isset( $response['paymentMsg']['msg'] ) ? $response['paymentMsg']['msg'] : __( '付款失敗', 'ys-shopline-via-woocommerce' );
-            $order->update_status( 'failed', $error_msg );
+            // 付款失敗：保留原始訊息供管理員除錯，顯示友善訊息給客戶
+            $raw_msg      = isset( $response['paymentMsg']['msg'] ) ? $response['paymentMsg']['msg'] : '';
+            $friendly_msg = self::humanize_error_message( $raw_msg );
+
+            $order->update_status( 'failed', $raw_msg ?: __( '付款失敗', 'ys-shopline-via-woocommerce' ) );
             $order->update_meta_data( YSOrderMeta::PAYMENT_STATUS, 'FAILED' );
+            $order->update_meta_data( YSOrderMeta::ERROR_CODE, $response['paymentMsg']['code'] ?? '' );
+            $order->update_meta_data( YSOrderMeta::ERROR_MESSAGE, $friendly_msg );
             $order->save();
+
+            YSLogger::info( 'Redirect handler: Payment failed', array(
+                'order_id' => $order->get_id(),
+                'raw_msg'  => $raw_msg,
+                'friendly' => $friendly_msg,
+            ) );
         }
         // 其他狀態（CREATED, PROCESSING）暫不處理，等待 Webhook 或用戶重試
 
@@ -482,5 +492,42 @@ class YSRedirectHandler {
         ) );
 
         return null;
+    }
+
+    /**
+     * 將 Shopline API 錯誤訊息轉為使用者友善的中文提示。
+     *
+     * @param string $raw_msg Shopline API 原始錯誤訊息。
+     * @return string 友善的中文錯誤訊息。
+     */
+    private static function humanize_error_message( $raw_msg ) {
+        $msg = strtolower( $raw_msg );
+
+        if ( strpos( $msg, 'instrument' ) !== false && strpos( $msg, 'invalid' ) !== false ) {
+            return __( '您選擇的信用卡已失效，請重新綁定卡片或使用其他卡片付款。', 'ys-shopline-via-woocommerce' );
+        }
+
+        if ( strpos( $msg, 'insufficient' ) !== false || strpos( $msg, 'balance' ) !== false ) {
+            return __( '卡片餘額不足，請確認額度後重試或使用其他卡片。', 'ys-shopline-via-woocommerce' );
+        }
+
+        if ( strpos( $msg, 'expired' ) !== false ) {
+            return __( '卡片已過期，請使用其他卡片付款。', 'ys-shopline-via-woocommerce' );
+        }
+
+        if ( strpos( $msg, 'declined' ) !== false || strpos( $msg, 'reject' ) !== false ) {
+            return __( '交易被發卡銀行拒絕，請聯繫發卡銀行或使用其他卡片。', 'ys-shopline-via-woocommerce' );
+        }
+
+        if ( strpos( $msg, '3ds' ) !== false || strpos( $msg, 'authentication' ) !== false ) {
+            return __( '3D 驗證失敗，請重試並完成銀行驗證步驟。', 'ys-shopline-via-woocommerce' );
+        }
+
+        if ( strpos( $msg, 'duplicate' ) !== false ) {
+            return __( '此筆交易已處理過，請勿重複提交。', 'ys-shopline-via-woocommerce' );
+        }
+
+        // 無法辨識的錯誤，回傳通用提示
+        return __( '付款失敗，請重試或使用其他付款方式。', 'ys-shopline-via-woocommerce' );
     }
 }

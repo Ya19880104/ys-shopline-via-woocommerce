@@ -6,6 +6,22 @@
 
 ---
 
+## [2.3.6] - 2026-03-05
+
+### Fixed
+- 錯誤訊息友善化：Shopline API 原始錯誤訊息（如 instrument invalid）轉為可讀中文提示，原始錯誤保留在管理員訂單備註
+- 防呆：`process_payment()` 加入訂單狀態檢查，已付款成功的訂單不再重複呼叫 API
+- 防呆：前端 JS 加入 `_isSubmitting` flag，防止瀏覽器慢或連點導致重複扣款
+- `process_payment()` API 錯誤改為顯示友善中文訊息給客戶，管理員訂單備註保留原始錯誤
+
+## [2.3.5] - 2026-03-05
+
+### Fixed
+- 移除訂閱結帳頁 `saved_payment_methods()` 呼叫，消除 WC radio buttons 與 SDK 卡片選擇器的雙重 UI
+- 新增 inline CSS 強制顯示 SDK 容器內卡片品牌圖示（覆蓋外部 `#payment li img` 隱藏規則）
+- CHANGELOG.md 補齊 v2.3.2 ~ v2.3.4 記錄
+- DEVELOPMENT.md 版本號同步
+
 ## [2.3.4] - 2026-02-21
 
 ### Fixed
