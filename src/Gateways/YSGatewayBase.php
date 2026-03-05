@@ -631,6 +631,19 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
             return array( 'result' => 'failure' );
         }
 
+        // 防呆：訂單已付款成功，不再重複呼叫 API
+        if ( in_array( $order->get_status(), array( 'processing', 'completed', 'on-hold' ), true ) ) {
+            YSLogger::warning( 'Duplicate payment attempt blocked', array(
+                'order_id' => $order_id,
+                'status'   => $order->get_status(),
+            ) );
+
+            return array(
+                'result'   => 'success',
+                'redirect' => $this->get_return_url( $order ),
+            );
+        }
+
         // Get pay session from POST
         // paySession 從 SDK createPayment() 返回，可能是 JSON 字串或已序列化的物件
         // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
@@ -678,13 +691,15 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
         $response = $this->api->create_payment_trade( $payment_data );
 
         if ( is_wp_error( $response ) ) {
-            YSLogger::error( 'Payment failed: ' . $response->get_error_message() );
+            $raw_error = $response->get_error_message();
+            YSLogger::error( 'Payment failed: ' . $raw_error );
 
-            // 將訂單標記為失敗，這樣下次結帳會建立新訂單
-            $order->update_status( 'failed', __( 'Shopline payment failed: ', 'ys-shopline-via-woocommerce' ) . $response->get_error_message() );
+            // 訂單備註保留原始錯誤供管理員除錯
+            $order->update_status( 'failed', __( 'Shopline payment failed: ', 'ys-shopline-via-woocommerce' ) . $raw_error );
 
+            // 前端顯示友善訊息
             wc_add_notice(
-                __( 'Payment failed: ', 'ys-shopline-via-woocommerce' ) . $response->get_error_message(),
+                __( '付款失敗，請重試或使用其他付款方式。如持續失敗，請聯繫客服。', 'ys-shopline-via-woocommerce' ),
                 'error'
             );
             return array( 'result' => 'failure' );

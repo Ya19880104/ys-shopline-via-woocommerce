@@ -106,6 +106,11 @@ jQuery(function ($) {
                 self.onUpdatedCheckout();
             });
 
+            // 重置提交 flag：WC 在錯誤或頁面更新時觸發
+            $(document.body).on('checkout_error updated_checkout', function () {
+                self._isSubmitting = false;
+            });
+
             // Bind checkout events
             this.bindCheckoutEvents();
 
@@ -477,6 +482,12 @@ jQuery(function ($) {
             var self = this;
             var $form = $('form.checkout');
 
+            // 防呆：防止重複提交（瀏覽器慢、連點等情況）
+            if (self._isSubmitting) {
+                console.log('[YS Shopline] Duplicate submission blocked');
+                return false;
+            }
+
             console.log('[YS Shopline] placeOrder called for:', gatewayId);
 
             // 驗證帳單電話格式（台灣手機 09XXXXXXXX）
@@ -519,7 +530,8 @@ jQuery(function ($) {
                 return false;
             }
 
-            // Block UI
+            // 設定提交中 flag + Block UI
+            self._isSubmitting = true;
             $form.addClass('processing').block({
                 message: null,
                 overlayCSS: {

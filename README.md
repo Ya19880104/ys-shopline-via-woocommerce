@@ -4,7 +4,7 @@
 
 ## 版本資訊
 
-- **目前版本**：2.3.4
+- **目前版本**：2.3.6
 - **PHP 需求**：>= 8.0
 - **WordPress 需求**：>= 6.0
 - **WooCommerce 需求**：7.0 - 9.0
@@ -64,6 +64,20 @@ https://your-domain.com/wp-json/ys-shopline/v1/webhook
 ---
 
 ## 變更紀錄
+
+### 2.3.6 - 2026-03-05
+
+**修正**
+- 錯誤訊息友善化：Shopline API 原始錯誤訊息（如 instrument invalid）轉為可讀的中文提示，原始錯誤保留在管理員訂單備註供除錯
+- 防呆：`process_payment()` 加入訂單狀態檢查，已付款成功的訂單不再重複呼叫 API
+- 防呆：前端 JS 加入 `_isSubmitting` flag，防止瀏覽器慢或連點導致重複提交
+
+### 2.3.5 - 2026-03-05
+
+**修正**
+- 移除訂閱結帳頁 `saved_payment_methods()` 呼叫，消除 WC radio buttons 與 SDK 卡片選擇器的雙重 UI
+- 新增 inline CSS 強制顯示 SDK 容器內卡片品牌圖示（覆蓋外部 `#payment li img` 隱藏規則）
+- CHANGELOG.md 補齊 v2.3.2 ~ v2.3.4 記錄
 
 ### 2.3.4 - 2026-02-21
 
