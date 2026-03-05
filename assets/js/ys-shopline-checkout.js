@@ -552,6 +552,7 @@ jQuery(function ($) {
                     // Payment creation failed
                     var msg = result.error.message || ys_shopline_params.i18n.payment_failed || 'Payment failed';
                     console.error('createPayment error:', result.error);
+                    self._isSubmitting = false;
                     $form.removeClass('processing').unblock();
                     self.showFormError(msg);
                     return false;
@@ -560,6 +561,7 @@ jQuery(function ($) {
                 // Check if paySession exists
                 if (!result.paySession) {
                     console.error('createPayment: No paySession returned', result);
+                    self._isSubmitting = false;
                     $form.removeClass('processing').unblock();
                     self.showFormError('付款資訊建立失敗，請重新輸入卡片資訊。');
                     return false;
@@ -642,6 +644,7 @@ jQuery(function ($) {
 
             }).catch(function (error) {
                 console.error('Shopline createPayment error:', error);
+                self._isSubmitting = false;
                 $form.removeClass('processing').unblock();
                 self.showFormError(error.message || ys_shopline_params.i18n.payment_error || 'Payment error occurred');
             });
@@ -663,6 +666,7 @@ jQuery(function ($) {
             // 確認 wc_checkout_params 存在
             if (typeof wc_checkout_params === 'undefined') {
                 console.error('[YS Shopline] wc_checkout_params is not defined');
+                self._isSubmitting = false;
                 $form.removeClass('processing').unblock();
                 self.showFormError('結帳設定錯誤，請重新整理頁面。');
                 return;
@@ -713,6 +717,7 @@ jQuery(function ($) {
                         $(document.body).trigger('checkout_error', [response.messages]);
                     } else {
                         console.warn('[YS Shopline] Unexpected response:', response);
+                        self._isSubmitting = false;
                         $form.removeClass('processing').unblock();
                         self.showFormError('發生未預期的錯誤，請重試。');
                     }
@@ -720,6 +725,7 @@ jQuery(function ($) {
                 error: function (xhr, status, error) {
                     console.error('[YS Shopline] AJAX error:', status, error);
                     console.error('[YS Shopline] Response:', xhr.responseText);
+                    self._isSubmitting = false;
                     $form.removeClass('processing').unblock();
                     self.showFormError('網路錯誤，請檢查連線後重試。');
                 }
