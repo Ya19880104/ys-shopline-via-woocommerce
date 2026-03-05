@@ -1075,12 +1075,21 @@ jQuery(function ($) {
          */
         processPayment: function ($form, gatewayId) {
             var self = this;
+
+            // 防呆：防止重複提交
+            if (self._isSubmitting) {
+                console.log('[YS Shopline] Pay-for-order duplicate submission blocked');
+                return;
+            }
+
             var paymentInstance = paymentInstances[gatewayId];
 
             if (!paymentInstance) {
                 alert(ys_shopline_params.i18n.payment_not_ready || 'Payment not ready. Please wait and try again.');
                 return;
             }
+
+            self._isSubmitting = true;
 
             // Block UI
             $form.addClass('processing').block({
@@ -1093,12 +1102,14 @@ jQuery(function ($) {
                 console.log('[YS Shopline] Pay-for-order createPayment result:', result);
 
                 if (result.error) {
+                    self._isSubmitting = false;
                     $form.removeClass('processing').unblock();
                     alert(result.error.message || 'Payment failed');
                     return;
                 }
 
                 if (!result.paySession) {
+                    self._isSubmitting = false;
                     $form.removeClass('processing').unblock();
                     alert('Payment session creation failed. Please try again.');
                     return;
@@ -1147,6 +1158,7 @@ jQuery(function ($) {
                                 window.location.href = response.redirect;
                             }
                         } else {
+                            self._isSubmitting = false;
                             $form.removeClass('processing').unblock();
                             var errorMsg = response.messages || response.message || '付款處理失敗，請重試。';
                             alert(errorMsg);
@@ -1154,6 +1166,7 @@ jQuery(function ($) {
                     },
                     error: function (xhr, status, error) {
                         console.error('[YS Shopline] Pay-for-order AJAX error:', status, error);
+                        self._isSubmitting = false;
                         $form.removeClass('processing').unblock();
                         alert('網路錯誤，請檢查連線後重試。');
                     }
@@ -1161,6 +1174,7 @@ jQuery(function ($) {
 
             }).catch(function (error) {
                 console.error('[YS Shopline] Pay-for-order createPayment error:', error);
+                self._isSubmitting = false;
                 $form.removeClass('processing').unblock();
                 alert(error.message || 'Payment error occurred');
             });

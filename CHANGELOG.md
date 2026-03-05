@@ -6,6 +6,15 @@
 
 ---
 
+## [2.3.7] - 2026-03-05
+
+### Fixed
+- 防呆：`pending` 訂單已有 `tradeOrderId` 時，先查詢 Shopline API 確認前次交易狀態（成功→完成訂單、處理中→提示未完成、失敗→允許重試）
+- 防呆：Pay-for-order 頁面（`PayForOrderHandler.processPayment()`）加入 `_isSubmitting` flag，防止重複扣款
+- ERROR_CODE / ERROR_MESSAGE meta 統一寫入：Webhook 失敗、`process_payment()` API 錯誤皆補齊
+- `humanize_error_message()` 改為 `public static`，供 Webhook 和 Gateway 共用
+- `process_payment()` API 錯誤前端訊息改用 `humanize_error_message()` 動態對應
+
 ## [2.3.6] - 2026-03-05
 
 ### Fixed
