@@ -17,6 +17,12 @@ jQuery(function ($) {
             paymentMethod: 'CreditCard',
             containerId: 'ys_shopline_credit_container',
             supportsBindCard: true,
+            supportsInstallment: false
+        },
+        'ys_shopline_credit_installment': {
+            paymentMethod: 'CreditCard',
+            containerId: 'ys_shopline_credit_installment_container',
+            supportsBindCard: true,
             supportsInstallment: true
         },
         'ys_shopline_credit_subscription': {

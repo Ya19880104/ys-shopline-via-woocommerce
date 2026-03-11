@@ -30,6 +30,7 @@ final class YSStatusManager {
      */
     private const SHOPLINE_GATEWAY_IDS = [
         'ys_shopline_credit',
+        'ys_shopline_credit_installment',
         'ys_shopline_credit_subscription',
         'ys_shopline_atm',
         'ys_shopline_jkopay',

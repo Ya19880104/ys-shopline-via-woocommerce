@@ -111,6 +111,7 @@ class YSAdminSettings {
 
 			// 支付方式
 			'ys_shopline_credit_enabled',
+			'ys_shopline_credit_installment_enabled',
 			'ys_shopline_credit_subscription_enabled',
 			'ys_shopline_atm_enabled',
 			'ys_shopline_jkopay_enabled',
@@ -235,6 +236,7 @@ class YSAdminSettings {
 			'ys_shopline_enabled',
 			'ys_shopline_testmode',
 			'ys_shopline_credit_enabled',
+			'ys_shopline_credit_installment_enabled',
 			'ys_shopline_credit_subscription_enabled',
 			'ys_shopline_atm_enabled',
 			'ys_shopline_jkopay_enabled',
@@ -494,7 +496,18 @@ class YSAdminSettings {
 					</th>
 					<td>
 						<?php $this->render_toggle( 'ys_shopline_credit_enabled', 'yes' ); ?>
-						<span class="ys-toggle-desc"><?php _e( '支援國內外信用卡、分期付款', 'ys-shopline-via-woocommerce' ); ?></span>
+						<span class="ys-toggle-desc"><?php _e( '信用卡一次付清', 'ys-shopline-via-woocommerce' ); ?></span>
+					</td>
+				</tr>
+
+				<tr>
+					<th scope="row">
+						<span class="ys-gateway-icon dashicons dashicons-calendar-alt"></span>
+						<?php _e( '信用卡分期', 'ys-shopline-via-woocommerce' ); ?>
+					</th>
+					<td>
+						<?php $this->render_toggle( 'ys_shopline_credit_installment_enabled', 'no' ); ?>
+						<span class="ys-toggle-desc"><?php _e( '信用卡分期付款（獨立付款方式）', 'ys-shopline-via-woocommerce' ); ?></span>
 					</td>
 				</tr>
 

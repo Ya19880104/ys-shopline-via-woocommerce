@@ -33,6 +33,7 @@ use YangSheep\ShoplinePayment\Api\YSApi;
 use YangSheep\ShoplinePayment\Admin\YSAdminSettings;
 use YangSheep\ShoplinePayment\Gateways\YSSubscription;
 use YangSheep\ShoplinePayment\Gateways\YSCreditCard;
+use YangSheep\ShoplinePayment\Gateways\YSCreditInstallment;
 use YangSheep\ShoplinePayment\Gateways\YSCreditSubscription;
 use YangSheep\ShoplinePayment\Gateways\YSVirtualAccount;
 use YangSheep\ShoplinePayment\Gateways\YSJKOPay;
@@ -579,9 +580,14 @@ final class YSShoplinePayment {
      * @return array
      */
     public function register_gateways( $gateways ) {
-        // Credit Card
+        // Credit Card (single payment)
         if ( 'yes' === get_option( 'ys_shopline_credit_enabled', 'yes' ) ) {
             $gateways[] = YSCreditCard::class;
+        }
+
+        // Credit Card Installment
+        if ( 'yes' === get_option( 'ys_shopline_credit_installment_enabled', 'no' ) ) {
+            $gateways[] = YSCreditInstallment::class;
         }
 
         // Credit Card Subscription
