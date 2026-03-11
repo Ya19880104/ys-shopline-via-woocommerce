@@ -47,23 +47,14 @@ class YSVirtualAccount extends YSGatewayBase {
 	}
 
 	/**
-	 * Initialize gateway settings form fields.
+	 * 取得 ATM 繳費期限（分鐘）。
+	 *
+	 * 從全域 option 讀取（SHOPLINE 金流 > 支付方式頁面設定）。
+	 *
+	 * @return int
 	 */
-	public function init_form_fields() {
-		parent::init_form_fields();
-
-		$this->form_fields['expire_days'] = array(
-			'title'       => __( '繳費期限（天）', 'ys-shopline-via-woocommerce' ),
-			'type'        => 'number',
-			'description' => __( '虛擬帳號繳費期限天數，預設 3 天。', 'ys-shopline-via-woocommerce' ),
-			'default'     => '3',
-			'desc_tip'    => true,
-			'custom_attributes' => array(
-				'min'  => '1',
-				'max'  => '30',
-				'step' => '1',
-			),
-		);
+	public function get_expire_time() {
+		return (int) get_option( 'ys_shopline_atm_expire_time', '4320' );
 	}
 
 	/**
@@ -75,12 +66,13 @@ class YSVirtualAccount extends YSGatewayBase {
 		}
 
 		// Info message
-		$expire_days = $this->get_option( 'expire_days', '3' );
+		$expire_minutes = $this->get_expire_time();
+		$expire_label   = $this->get_expire_label( $expire_minutes );
 		echo '<p class="ys-shopline-atm-notice">';
 		printf(
-			/* translators: %d: Number of days for payment */
-			esc_html__( '下單後將產生虛擬帳號，請於 %d 天內完成轉帳。', 'ys-shopline-via-woocommerce' ),
-			absint( $expire_days )
+			/* translators: %s: Expire time label (e.g. "72 小時（3 天）") */
+			esc_html__( '下單後將產生虛擬帳號，請於 %s 內完成轉帳。', 'ys-shopline-via-woocommerce' ),
+			esc_html( $expire_label )
 		);
 		echo '</p>';
 
@@ -107,7 +99,27 @@ class YSVirtualAccount extends YSGatewayBase {
 		$data['confirm']['paymentBehavior'] = 'Regular';
 		unset( $data['confirm']['paymentInstrument'] );
 
+		// 設定繳費期限（分鐘）
+		$data['expireTime'] = $this->get_expire_time();
+
 		return $data;
+	}
+
+	/**
+	 * 取得到期時間的顯示文字。
+	 *
+	 * @param int $minutes 到期分鐘數。
+	 * @return string
+	 */
+	private function get_expire_label( $minutes ) {
+		$labels = array(
+			360   => __( '6 小時', 'ys-shopline-via-woocommerce' ),
+			1440  => __( '24 小時（1 天）', 'ys-shopline-via-woocommerce' ),
+			2880  => __( '48 小時（2 天）', 'ys-shopline-via-woocommerce' ),
+			4320  => __( '72 小時（3 天）', 'ys-shopline-via-woocommerce' ),
+		);
+
+		return $labels[ $minutes ] ?? sprintf( __( '%d 分鐘', 'ys-shopline-via-woocommerce' ), $minutes );
 	}
 
 	/**

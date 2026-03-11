@@ -110,6 +110,8 @@ class YSAdminSettings {
 			'ys_shopline_sign_key',
 
 			// 支付方式
+			'ys_shopline_atm_expire_time',
+			'ys_shopline_bnpl_expire_time',
 			'ys_shopline_credit_enabled',
 			'ys_shopline_credit_installment_enabled',
 			'ys_shopline_credit_subscription_enabled',
@@ -253,6 +255,8 @@ class YSAdminSettings {
 
 		// 文字欄位
 		$text_fields = array(
+			'ys_shopline_atm_expire_time',
+			'ys_shopline_bnpl_expire_time',
 			'ys_shopline_store_address',
 			'ys_shopline_store_city',
 			'ys_shopline_store_postcode',
@@ -532,6 +536,28 @@ class YSAdminSettings {
 					<td>
 						<?php $this->render_toggle( 'ys_shopline_atm_enabled', 'yes' ); ?>
 						<span class="ys-toggle-desc"><?php _e( 'ATM 虛擬帳號付款', 'ys-shopline-via-woocommerce' ); ?></span>
+						<div class="ys-sub-setting" style="margin-top:10px;margin-left:62px;">
+							<label><?php _e( '繳費期限：', 'ys-shopline-via-woocommerce' ); ?></label>
+							<select name="ys_shopline_atm_expire_time" style="width:auto;">
+								<?php
+								$atm_options = array(
+									'360'  => __( '6 小時', 'ys-shopline-via-woocommerce' ),
+									'1440' => __( '24 小時（1 天）', 'ys-shopline-via-woocommerce' ),
+									'2880' => __( '48 小時（2 天）', 'ys-shopline-via-woocommerce' ),
+									'4320' => __( '72 小時（3 天）', 'ys-shopline-via-woocommerce' ),
+								);
+								$atm_current = get_option( 'ys_shopline_atm_expire_time', '4320' );
+								foreach ( $atm_options as $val => $label ) {
+									printf(
+										'<option value="%s" %s>%s</option>',
+										esc_attr( $val ),
+										selected( $atm_current, $val, false ),
+										esc_html( $label )
+									);
+								}
+								?>
+							</select>
+						</div>
 					</td>
 				</tr>
 
@@ -576,6 +602,28 @@ class YSAdminSettings {
 					<td>
 						<?php $this->render_toggle( 'ys_shopline_bnpl_enabled', 'yes' ); ?>
 						<span class="ys-toggle-desc"><?php _e( 'Chailease BNPL 先買後付', 'ys-shopline-via-woocommerce' ); ?></span>
+						<div class="ys-sub-setting" style="margin-top:10px;margin-left:62px;">
+							<label><?php _e( '付款期限：', 'ys-shopline-via-woocommerce' ); ?></label>
+							<select name="ys_shopline_bnpl_expire_time" style="width:auto;">
+								<?php
+								$bnpl_options = array(
+									'2880'  => __( '2 天', 'ys-shopline-via-woocommerce' ),
+									'4320'  => __( '3 天', 'ys-shopline-via-woocommerce' ),
+									'7200'  => __( '5 天', 'ys-shopline-via-woocommerce' ),
+									'10080' => __( '7 天', 'ys-shopline-via-woocommerce' ),
+								);
+								$bnpl_current = get_option( 'ys_shopline_bnpl_expire_time', '4320' );
+								foreach ( $bnpl_options as $val => $label ) {
+									printf(
+										'<option value="%s" %s>%s</option>',
+										esc_attr( $val ),
+										selected( $bnpl_current, $val, false ),
+										esc_html( $label )
+									);
+								}
+								?>
+							</select>
+						</div>
 					</td>
 				</tr>
 			</table>

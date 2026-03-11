@@ -527,6 +527,10 @@ class YSRedirectHandler {
             return __( '此筆交易已處理過，請勿重複提交。', 'ys-shopline-via-woocommerce' );
         }
 
+        if ( strpos( $msg, 'invalid store url' ) !== false ) {
+            return __( '商店網域驗證失敗，此付款方式目前無法使用，請選擇其他付款方式或聯繫商店客服。', 'ys-shopline-via-woocommerce' );
+        }
+
         // 無法辨識的錯誤，回傳通用提示
         return __( '付款失敗，請重試或使用其他付款方式。', 'ys-shopline-via-woocommerce' );
     }

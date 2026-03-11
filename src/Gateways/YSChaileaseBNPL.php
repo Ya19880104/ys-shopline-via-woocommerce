@@ -48,6 +48,17 @@ class YSChaileaseBNPL extends YSGatewayBase {
     }
 
     /**
+     * 取得 BNPL 付款期限（分鐘）。
+     *
+     * 從全域 option 讀取（SHOPLINE 金流 > 支付方式頁面設定）。
+     *
+     * @return int
+     */
+    public function get_expire_time() {
+        return (int) get_option( 'ys_shopline_bnpl_expire_time', '4320' );
+    }
+
+    /**
      * Initialize gateway settings form fields.
      */
     public function init_form_fields() {
@@ -171,6 +182,9 @@ class YSChaileaseBNPL extends YSGatewayBase {
             $order->update_meta_data( YSOrderMeta::BNPL_INSTALLMENT, $installment );
             $order->save();
         }
+
+        // 設定付款期限（分鐘）— 從全域 option 讀取
+        $data['expireTime'] = $this->get_expire_time();
 
         return $data;
     }

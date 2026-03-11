@@ -709,7 +709,15 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
             YSLogger::error( 'Payment failed: ' . $raw_error );
 
             // 訂單備註保留原始錯誤供管理員除錯
-            $order->update_status( 'failed', __( 'Shopline payment failed: ', 'ys-shopline-via-woocommerce' ) . $raw_error );
+            $order->update_status(
+                'failed',
+                sprintf(
+                    /* translators: 1: Payment method name (e.g. Apple Pay), 2: Error message */
+                    __( 'Shopline payment failed (%1$s): %2$s', 'ys-shopline-via-woocommerce' ),
+                    $this->get_payment_method(),
+                    $raw_error
+                )
+            );
             $order->update_meta_data( YSOrderMeta::PAYMENT_STATUS, 'FAILED' );
             $order->update_meta_data( YSOrderMeta::ERROR_CODE, $response->get_error_code() );
             $order->update_meta_data( YSOrderMeta::ERROR_MESSAGE, $friendly_msg );

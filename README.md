@@ -4,7 +4,7 @@
 
 ## 版本資訊
 
-- **目前版本**：2.3.8
+- **目前版本**：2.4.3
 - **PHP 需求**：>= 8.0
 - **WordPress 需求**：>= 6.0
 - **WooCommerce 需求**：7.0 - 9.0
@@ -13,13 +13,14 @@
 
 | 付款方式 | Gateway ID | 說明 |
 |----------|-----------|------|
-| 信用卡 | `ys_shopline_credit` | 支援分期付款 |
+| 信用卡 | `ys_shopline_credit` | 信用卡一次付清 |
+| 信用卡分期 | `ys_shopline_credit_installment` | 信用卡分期付款 |
 | 信用卡訂閱 | `ys_shopline_credit_subscription` | 訂閱制付款，整合 WC Subscriptions |
-| ATM 虛擬帳號 | `ys_shopline_atm` | ATM 轉帳付款 |
+| ATM 虛擬帳號 | `ys_shopline_atm` | ATM 轉帳付款（可設繳費期限） |
 | JKOPay | `ys_shopline_jkopay` | 街口支付 |
 | Apple Pay | `ys_shopline_applepay` | Apple Pay |
 | LINE Pay | `ys_shopline_linepay` | LINE Pay |
-| Chailease BNPL | `ys_shopline_bnpl` | 中租零卡分期 |
+| Chailease BNPL | `ys_shopline_bnpl` | 中租零卡分期（可設付款期限） |
 
 ## 主要功能
 
@@ -65,6 +66,43 @@ https://your-domain.com/wp-json/ys-shopline/v1/webhook
 
 ## 變更紀錄
 
+### 2.4.3 - 2026-03-11
+
+**新增**
+- ATM 銀行轉帳後台新增「繳費期限」下拉設定（6 小時 / 1 天 / 2 天 / 3 天），並將 `expireTime` 送至 Shopline API
+- 中租 zingla 銀角零卡後台新增「付款期限」下拉設定（2 天 / 3 天 / 5 天 / 7 天），並將 `expireTime` 送至 Shopline API
+
+**修正**
+- 付款失敗訂單備註現在包含付款方式名稱，例如 `Shopline payment failed (ApplePay): Invalid store url`
+- 新增 "Invalid store url" 友善錯誤訊息對應（商店網域驗證失敗提示）
+
+### 2.4.2 - 2026-03-11
+
+**修正**
+- 退款與取消 API 補齊 `referenceOrderId`（P0）：Shopline API 要求此欄位，缺漏導致所有退款/取消回傳 400 錯誤
+- Apple Pay 圖示改用本地 SVG，移除失效的 Shopline CDN 連結
+
+### 2.4.1 - 2026-03-11
+
+**修正**
+- 修正分期付款 SDK 無法渲染：Shopline SDK 不允許同頁面同時掛載多個相同 paymentMethod 實例，新增 `clearConflictingInstances()` 切換時清除舊實例
+- checkout 更新時（DOM 替換）新增 `clearAllInstances()` 重置所有 SDK 狀態
+
+### 2.4.0 - 2026-03-11
+
+**新增**
+- 信用卡分期付款獨立為新付款方式 `YSCreditInstallment`（Gateway ID: `ys_shopline_credit_installment`）
+- SHOPLINE 設定頁新增「信用卡分期」啟用開關
+- 分期付款最低金額未達時自動隱藏該付款方式（`is_available()`）
+
+**變更**
+- `YSCreditCard` 簡化為純信用卡一次付清（移除分期設定與邏輯）
+
+### 2.3.9 - 2026-03-11
+
+**新增**
+- 信用卡分期設定新增「一次付清」選項（`installmentCounts` 含 `'0'`）
+
 ### 2.3.8 - 2026-03-05
 
 **改進**
@@ -81,111 +119,61 @@ https://your-domain.com/wp-json/ys-shopline/v1/webhook
 ### 2.3.6 - 2026-03-05
 
 **修正**
-- 錯誤訊息友善化：Shopline API 原始錯誤訊息（如 instrument invalid）轉為可讀的中文提示，原始錯誤保留在管理員訂單備註供除錯
+- 錯誤訊息友善化：Shopline API 原始錯誤訊息轉為可讀中文提示
 - 防呆：`process_payment()` 加入訂單狀態檢查，已付款成功的訂單不再重複呼叫 API
-- 防呆：前端 JS 加入 `_isSubmitting` flag，防止瀏覽器慢或連點導致重複提交
+- 防呆：前端 JS 加入 `_isSubmitting` flag，防止重複提交
 
 ### 2.3.5 - 2026-03-05
 
 **修正**
-- 移除訂閱結帳頁 `saved_payment_methods()` 呼叫，消除 WC radio buttons 與 SDK 卡片選擇器的雙重 UI
-- 新增 inline CSS 強制顯示 SDK 容器內卡片品牌圖示（覆蓋外部 `#payment li img` 隱藏規則）
-- CHANGELOG.md 補齊 v2.3.2 ~ v2.3.4 記錄
+- 移除訂閱結帳頁雙重 UI（WC radio buttons 與 SDK 卡片選擇器）
+- 新增 inline CSS 強制顯示 SDK 容器內卡片品牌圖示
 
 ### 2.3.4 - 2026-02-21
 
 **修正**
-- 覆寫 `YSCreditSubscription::get_tokens()` 查詢 `CREDIT_GATEWAY_ID` 下的 token，修正訂閱閘道看不到已儲存卡片的問題
+- 修正訂閱閘道看不到已儲存卡片的問題
 
 ### 2.3.3 - 2026-02-20
 
 **修正**
-- 修正訂閱續扣 "No saved payment method" 錯誤：Token 已存在時 `sync_payment_token()` 提前 return，導致 subscription instrument_id 未被寫入
-- 提取獨立方法 `update_subscription_instrument()`，在 `sync_payment_token()` 之外執行，不受 token 是否新建影響
-- **統一 Token Gateway ID**：所有信用卡 Token 統一存在 `YSOrderMeta::CREDIT_GATEWAY_ID`（`ys_shopline_credit`），移除所有多 gateway 搜尋邏輯
-- **消除所有硬編碼 Meta Key**：新增 6 個常數（`INSTALLMENT`、`BNPL_INSTALLMENT`、`PENDING_BIND`、`ADD_METHOD_NEXT_ACTION`、`INSTRUMENTS_CACHE`、`TOKEN_INSTRUMENT_ID`），影響 `YSCreditCard`、`YSChaileaseBNPL`、`YSAddPaymentMethodHandler`、`YSGatewayBase`、`YSCustomer`
-- 修正 `generate_reference_order_id()` 雙重 `$order->save()` 合併為一次
-- 清理 `YSStatusManager` 中不存在的 legacy gateway ID（`ys_shopline_redirect`、`ys_shopline_token`）
+- 修正訂閱續扣 "No saved payment method" 錯誤
+- 統一 Token Gateway ID + 消除所有硬編碼 Meta Key
 
 ### 2.3.2 - 2026-02-19
 
 **重構**
-- 重構 `YSCreditSubscription::process_subscription_payment()` 為三個獨立方法：流程控制、資料建構、回應處理
-- 提取 `build_recurring_payment_data()` — Recurring 專用的 API 請求建構
-- 提取 `handle_recurring_response()` — 使用 `YSOrderMeta` 常數處理 API 回應
-- 統一 Token 查找：移除三層 fallback，改為只從 subscription meta 取得（唯一正確來源）
-- `save_subscription_meta_from_order()` 精簡為只存 `customer_id`，`instrument_id` 由 Redirect/Webhook Handler 負責
-- **統一 Meta Key 常數**：將所有硬編碼 `_ys_shopline_*` 字串改用 `YSOrderMeta::*` 常數
-  - 新增 13 個常數至 `YSOrderMeta`（含 `CUSTOMER_ID`、`PAYMENT_INSTRUMENT_ID`、`VA_*`、`CARD_*`、`ERROR_*` 等）
-  - 影響 8 個檔案：`YSGatewayBase`、`YSRedirectHandler`、`YSOrderDisplay`、`YSPaymentDTO`、`YSWebhookHandler`、`YSCreditSubscription`、`YSVirtualAccount`、`YSCustomer`
-  - `YSCustomer::META_CUSTOMER_ID` 改為指向 `YSOrderMeta::CUSTOMER_ID`，消除重複定義
-
-**移除**
-- 移除 `find_latest_instrument_id()` — 多閘道掃描的 fallback 邏輯不再需要
+- 重構 `YSCreditSubscription::process_subscription_payment()` 為三個獨立方法
+- 統一 Meta Key 常數：所有硬編碼 `_ys_shopline_*` 改用 `YSOrderMeta::*` 常數
 
 ### 2.3.1 - 2026-02-17
 
 **修正**
-- 修正所有非信用卡閘道（ATM、Apple Pay、LINE Pay、JKOPay、BNPL）`paymentBehavior` 從 `QuickPayment` 改為 `Regular`
-- 修正 ATM 虛擬帳號欄位名稱與 API 不符（`bankCode` → `recipientBankCode`、`account` → `recipientAccountNum`、`expireDate` → `dueDate`）
-- 修正 ATM 付款流程：保留 `nextAction` 傳回前端讓 SDK 確認，確認後才產生虛擬帳號
-- 修正 ATM 虛擬帳號 JSON 路徑（`response.payment.virtualAccount`）
-- 修正 Pay-for-order 頁面 SDK 初始化錯誤 "amount is required (1004)"
-- 修正 Pay-for-order 頁面 "Payment session missing" 錯誤：新增 `PayForOrderHandler` + 獨立 AJAX endpoint
-- 修正感謝頁面付款失敗時出現兩組重複的重新付款按鈕
-- 修正 Redirect handler 補抓 ATM 虛擬帳號資訊
-- 修正 `YSRedirectHandler::sync_payment_token()` 變數作用域 bug
-- 修正 `YSCreditSubscription::save_subscription_meta_from_order()` 未定義變數警告
-
-**變更**
-- ATM 覆寫 `handle_next_action()`：使用管理員設定的訂單狀態 + 傳回 nextAction 給前端
-- 新增 `store_virtual_account_info()` 公用方法，統一 VA 資訊儲存邏輯
-- ATM 感謝頁面和郵件加入轉帳操作提示文字 + 轉帳金額欄位
-- 新增 `PayForOrderHandler`（JS）和 `ajax_pay_for_order`（PHP）處理重新付款頁面
+- 修正所有非信用卡閘道 `paymentBehavior` 從 `QuickPayment` 改為 `Regular`
+- 修正 ATM 虛擬帳號欄位名稱與 API 不符
+- 修正 Pay-for-order 頁面多項錯誤
+- 新增 `PayForOrderHandler` 處理重新付款頁面
 
 ### 2.3.0 - 2026-02-15
 
 **變更**
 - 重寫 `YSCreditSubscription`：對齊 Shopline Recurring API 規格
 - 續約扣款使用 `paymentBehavior: Recurring`（伺服器對伺服器）
-- Token 查找從 subscription meta 取得 instrument ID
-- 首次付款後自動儲存 `_ys_shopline_payment_instrument_id` 到 subscription meta
-
-**修正**
-- 修正續約扣款 referenceOrderId 不唯一的問題
-- 修正續約扣款未驗證 API 回應狀態
-- 修正未使用 subscription 專屬 Token
-
-**移除**
-- 移除多個死代碼方法（`subscription_fail_handler`、`copy_meta_to_renewal` 等）
 
 ### 2.2.0 - 2026-02-15
 
 **變更**
-- 統一所有命名為 PSR-4 風格（PascalCase 檔名 + 命名空間）
-- 類別名稱統一：`YS_Shopline_*` → `YS*`
+- 統一所有命名為 PSR-4 風格（PascalCase 檔名 + namespace）
 - 消除所有 `require_once`，全部由 PSR-4 autoloader 載入
-
-**修正**
-- Webhook 事件名稱對齊 API 文件
-- 卡片同步欄位映射修正
-- 簽章驗證移除本地環境繞過
 
 ### 2.1.0 - 2026-02-14
 
 - 統一所有程式碼至 `src/` 目錄
-- 合併 Logger 和 Webhook Handler
 - PHP 最低需求升級至 8.0
 
-### 2.0.7 - 2026-02-10
+### 2.0.7 以前
 
-- 將所有程式碼統一到 `includes/`
-- 移除死代碼
-
-### 2.0.6 以前
-
-- 改善儲存卡管理和 3DS 付款處理
-- 導入 PSR-4 架構和 Block Checkout 支援
+- 儲存卡管理、3DS 處理、PSR-4 架構導入、Block Checkout 支援
 
 ---
 
