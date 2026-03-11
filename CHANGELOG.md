@@ -6,6 +6,12 @@
 
 ---
 
+## [2.4.2] - 2026-03-11
+
+### Fixed
+- 退款與取消 API 補齊 `referenceOrderId`（P0）：Shopline API 要求此欄位，缺漏導致所有退款/取消回傳 400 錯誤
+- Apple Pay 圖示改用本地 SVG，移除失效的 Shopline CDN 連結
+
 ## [2.4.1] - 2026-03-11
 
 ### Fixed
