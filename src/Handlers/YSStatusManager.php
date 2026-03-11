@@ -217,7 +217,8 @@ final class YSStatusManager {
      * @param \WC_Order $order Order object.
      */
     private function cancel_payment( \WC_Order $order ): void {
-        $trade_order_id = (string) $order->get_meta( YSOrderMeta::TRADE_ORDER_ID );
+        $trade_order_id     = (string) $order->get_meta( YSOrderMeta::TRADE_ORDER_ID );
+        $reference_order_id = (string) $order->get_meta( YSOrderMeta::REFERENCE_ORDER_ID );
 
         if ( '' === $trade_order_id ) {
             return;
@@ -225,7 +226,10 @@ final class YSStatusManager {
 
         try {
             $client   = $this->get_api_client( $order );
-            $response = $client->cancel_payment( $trade_order_id );
+            $response = $client->cancel_payment(
+                $trade_order_id,
+                '' !== $reference_order_id ? $reference_order_id : (string) $order->get_id()
+            );
 
             $status = '';
             if ( isset( $response['status'] ) && is_string( $response['status'] ) ) {

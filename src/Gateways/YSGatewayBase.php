@@ -1499,9 +1499,12 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
             return new WP_Error( 'api_error', __( 'API not configured.', 'ys-shopline-via-woocommerce' ) );
         }
 
+        $reference_order_id = (string) $order->get_meta( YSOrderMeta::REFERENCE_ORDER_ID );
+
         $refund_data = array(
-            'tradeOrderId' => $trade_order_id,
-            'amount'       => array(
+            'tradeOrderId'     => $trade_order_id,
+            'referenceOrderId' => '' !== $reference_order_id ? $reference_order_id : (string) $order->get_id(),
+            'amount'           => array(
                 'value'    => \YSShoplinePayment::get_formatted_amount( $amount, $order->get_currency() ),
                 'currency' => $order->get_currency(),
             ),

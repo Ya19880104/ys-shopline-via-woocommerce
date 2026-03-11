@@ -138,10 +138,16 @@ final class YSShoplineClient {
      *
      * @see https://docs.shoplinepayments.com/api/trade/cancel/
      */
-    public function cancel_payment( string $trade_order_id ): array {
-        return $this->requester->post( '/trade/payment/cancel', [
+    public function cancel_payment( string $trade_order_id, string $reference_order_id = '' ): array {
+        $data = [
             'tradeOrderId' => $trade_order_id,
-        ] );
+        ];
+
+        if ( '' !== $reference_order_id ) {
+            $data['referenceOrderId'] = $reference_order_id;
+        }
+
+        return $this->requester->post( '/trade/payment/cancel', $data );
     }
 
     /**
@@ -185,7 +191,8 @@ final class YSShoplineClient {
         string $trade_order_id,
         float $amount,
         string $reason = '',
-        string $currency = 'TWD'
+        string $currency = 'TWD',
+        string $reference_order_id = ''
     ): YSRefundDTO {
         $amount_value = YSAmountDTO::format_amount( $amount, $currency );
 
@@ -196,6 +203,10 @@ final class YSShoplineClient {
                 'currency' => $currency,
             ],
         ];
+
+        if ( '' !== $reference_order_id ) {
+            $data['referenceOrderId'] = $reference_order_id;
+        }
 
         if ( ! empty( $reason ) ) {
             $data['reason'] = $reason;
