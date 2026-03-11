@@ -60,9 +60,10 @@ class YSCreditCard extends YSGatewayBase {
             'title'       => __( '分期期數', 'ys-shopline-via-woocommerce' ),
             'type'        => 'multiselect',
             'class'       => 'wc-enhanced-select',
-            'description' => __( '選擇要提供的分期期數選項。', 'ys-shopline-via-woocommerce' ),
+            'description' => __( '選擇要提供的分期期數選項。啟用分期時建議加入「一次付清」讓客戶保有選擇。', 'ys-shopline-via-woocommerce' ),
             'default'     => array(),
             'options'     => array(
+                '0'  => __( '一次付清', 'ys-shopline-via-woocommerce' ),
                 '3'  => __( '3 期', 'ys-shopline-via-woocommerce' ),
                 '6'  => __( '6 期', 'ys-shopline-via-woocommerce' ),
                 '9'  => __( '9 期', 'ys-shopline-via-woocommerce' ),
