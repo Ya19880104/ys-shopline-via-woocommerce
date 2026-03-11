@@ -164,16 +164,51 @@ jQuery(function ($) {
 
         /**
          * Handle payment method change
+         *
+         * 同類型 paymentMethod（如 CreditCard）切換時，需先清除舊實例，
+         * 因為 Shopline SDK 不允許同頁面同時掛載多個相同 paymentMethod 的實例。
          */
         onPaymentMethodChange: function () {
             var gatewayId = this.getSelectedGateway();
 
             if (gatewayId) {
+                this.clearConflictingInstances(gatewayId);
                 activeGateway = gatewayId;
                 this.initSDK(gatewayId);
             } else {
                 activeGateway = null;
             }
+        },
+
+        /**
+         * Clear SDK instances that share the same paymentMethod as the target gateway.
+         *
+         * @param {string} targetGatewayId The gateway about to be initialized
+         */
+        clearConflictingInstances: function (targetGatewayId) {
+            var targetConfig = GATEWAY_CONFIG[targetGatewayId];
+            if (!targetConfig) return;
+
+            var targetMethod = targetConfig.paymentMethod;
+
+            $.each(GATEWAY_CONFIG, function (existingId, existingConfig) {
+                if (existingId === targetGatewayId) return; // 跳過自己
+                if (existingConfig.paymentMethod !== targetMethod) return; // 不同類型不衝突
+
+                // 有舊實例存在 → 清除
+                if (paymentInstances[existingId]) {
+                    console.log('[YS Shopline] Clearing conflicting SDK instance:', existingId, '→', targetGatewayId);
+                    delete paymentInstances[existingId];
+                    sdkInitializing[existingId] = false;
+
+                    var $oldContainer = $('#' + existingConfig.containerId);
+                    if ($oldContainer.length) {
+                        $oldContainer.empty();
+                        $oldContainer.removeData('sdk-initialized');
+                        $oldContainer.removeData('sdk-initializing');
+                    }
+                }
+            });
         },
 
         /**
@@ -186,17 +221,34 @@ jQuery(function ($) {
             // 清除舊的 paySession（購物車更新後需要重新建立）
             $('form.checkout').find('input[name="ys_shopline_pay_session"]').remove();
 
+            // checkout 更新時 DOM 被替換，所有舊的 SDK 實例都需要清除重建
+            this.clearAllInstances();
+
             var gatewayId = this.getSelectedGateway();
 
             if (gatewayId) {
                 activeGateway = gatewayId;
-
-                // 只有在沒有已存在的實例且沒有正在初始化時才重新初始化
-                // 注意：購物車金額變更時需要重新初始化 SDK
-                if (!paymentInstances[gatewayId] && !sdkInitializing[gatewayId]) {
-                    this.initSDK(gatewayId);
-                }
+                this.initSDK(gatewayId);
             }
+        },
+
+        /**
+         * Clear all SDK instances (used when checkout DOM is replaced).
+         */
+        clearAllInstances: function () {
+            $.each(GATEWAY_CONFIG, function (gatewayId, config) {
+                if (paymentInstances[gatewayId]) {
+                    console.log('[YS Shopline] Clearing SDK instance on checkout update:', gatewayId);
+                    delete paymentInstances[gatewayId];
+                }
+                sdkInitializing[gatewayId] = false;
+
+                var $container = $('#' + config.containerId);
+                if ($container.length) {
+                    $container.removeData('sdk-initialized');
+                    $container.removeData('sdk-initializing');
+                }
+            });
         },
 
         /**
