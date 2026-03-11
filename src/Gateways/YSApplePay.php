@@ -114,8 +114,8 @@ class YSApplePay extends YSGatewayBase {
         $icon_url = $this->icon;
 
         if ( ! $icon_url ) {
-            // Default Apple Pay icon
-            $icon_url = 'https://cdn.shoplinepayments.com/assets/images/apple-pay-mark.svg';
+            // Apple Pay mark — 使用外掛本地 SVG
+            $icon_url = YS_SHOPLINE_PLUGIN_URL . 'assets/images/apple-pay-mark.svg';
         }
 
         $icon = '<img src="' . WC_HTTPS::force_https_url( $icon_url ) . '" alt="Apple Pay" style="max-height: 32px; margin-right: 5px;" />';
