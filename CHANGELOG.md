@@ -6,6 +6,30 @@
 
 ---
 
+## [2.4.1] - 2026-03-11
+
+### Fixed
+- 修正分期付款 SDK 無法渲染：Shopline SDK 不允許同頁面同時掛載多個相同 paymentMethod 實例，新增 `clearConflictingInstances()` 切換時清除舊實例
+- checkout 更新時（DOM 替換）新增 `clearAllInstances()` 重置所有 SDK 狀態
+
+## [2.4.0] - 2026-03-11
+
+### Added
+- 信用卡分期付款獨立為新付款方式 `YSCreditInstallment`（Gateway ID: `ys_shopline_credit_installment`）
+- SHOPLINE 設定頁新增「信用卡分期」啟用開關
+- 分期付款最低金額未達時自動隱藏該付款方式（`is_available()`）
+- JS `GATEWAY_CONFIG` 新增分期付款 Gateway 配置
+- `YSStatusManager` 新增分期付款 Gateway ID
+
+### Changed
+- `YSCreditCard` 簡化為純信用卡一次付清（移除分期設定與邏輯）
+- 設定頁「信用卡」說明改為「信用卡一次付清」
+
+## [2.3.9] - 2026-03-11
+
+### Added
+- 信用卡分期設定新增「一次付清」選項（`installmentCounts` 含 `'0'`）
+
 ## [2.3.8] - 2026-03-05
 
 ### Changed
