@@ -121,7 +121,7 @@ class YSAddPaymentMethodHandler {
 		$status = isset( $response['status'] ) ? $response['status'] : '';
 
 		// CardBind 的成功狀態可能是 SUCCEEDED 或 SUCCESS
-		if ( 'SUCCEEDED' === $status || 'SUCCESS' === $status || 'CREATED' === $status ) {
+		if ( 'SUCCEEDED' === $status || 'SUCCESS' === $status ) {
 			// 綁卡成功，同步 Token
 			YSLogger::info( 'Add payment method success', array(
 				'user_id'          => $user_id,
