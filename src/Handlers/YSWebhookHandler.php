@@ -152,7 +152,7 @@ final class YSWebhookHandler {
             YSLogger::error( "Webhook 處理失敗: {$e->getMessage()}", [
                 'event_type' => $event_type,
             ] );
-            return [ 'success' => false, 'message' => $e->getMessage() ];
+            return [ 'success' => false, 'message' => 'Internal processing error' ];
         }
     }
 
@@ -565,8 +565,9 @@ final class YSWebhookHandler {
 
         $token_id = $wpdb->get_var(
             $wpdb->prepare(
-                "SELECT token_id FROM {$wpdb->prefix}woocommerce_payment_tokens WHERE token = %s",
-                $payment_instrument_id
+                "SELECT token_id FROM {$wpdb->prefix}woocommerce_payment_tokens WHERE token = %s AND gateway_id LIKE %s",
+                $payment_instrument_id,
+                'ys_shopline_%'
             )
         );
 
