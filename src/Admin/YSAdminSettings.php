@@ -50,6 +50,9 @@ class YSAdminSettings {
 		add_action( 'admin_menu', array( $this, 'add_admin_menu' ) );
 		add_action( 'admin_init', array( $this, 'register_settings' ) );
 		add_action( 'admin_enqueue_scripts', array( $this, 'enqueue_scripts' ) );
+
+		// Apple Pay 驗證檔案 AJAX
+		add_action( 'wp_ajax_ys_shopline_apple_verify', array( $this, 'ajax_apple_verify' ) );
 	}
 
 	/**
@@ -469,7 +472,182 @@ class YSAdminSettings {
 				</button>
 			</div>
 		</div>
+
+		<!-- Apple Pay 網域驗證 -->
+		<div class="ys-section-card">
+			<h3 class="ys-section-title"><span class="dashicons dashicons-shield"></span> <?php _e( 'Apple Pay 網域驗證', 'ys-shopline-via-woocommerce' ); ?></h3>
+			<p class="ys-section-desc">
+				<?php _e( 'Apple Pay 需要在網站根目錄放置驗證檔案，SHOPLINE 才能完成網域註冊。', 'ys-shopline-via-woocommerce' ); ?>
+				<br>
+				<?php _e( '正式環境與沙盒環境的驗證檔案內容不同，請根據目前使用的環境產生對應檔案。', 'ys-shopline-via-woocommerce' ); ?>
+				<br><br>
+				<span class="dashicons dashicons-info" style="color:#0073aa;"></span>
+				<?php
+				printf(
+					/* translators: %s: Documentation URL */
+					__( '詳細說明請參考 <a href="%s" target="_blank">SHOPLINE Apple Pay 整合文件</a>', 'ys-shopline-via-woocommerce' ),
+					'https://docs.shoplinepayments.com/sdk/example/ApplePay/'
+				);
+				?>
+			</p>
+
+			<div id="ys-apple-verify-status">
+			<?php $this->render_apple_verify_status(); ?>
+		</div>
+
+			<div class="ys-apple-verify-actions" style="display:flex;gap:10px;margin-top:15px;">
+				<button type="button" class="button button-primary ys-apple-verify-btn" data-env="production">
+					<span class="dashicons dashicons-admin-site-alt3" style="vertical-align:middle;margin-top:-2px;"></span>
+					<?php _e( '產生正式環境驗證檔案', 'ys-shopline-via-woocommerce' ); ?>
+				</button>
+				<button type="button" class="button button-secondary ys-apple-verify-btn" data-env="sandbox">
+					<span class="dashicons dashicons-admin-network" style="vertical-align:middle;margin-top:-2px;"></span>
+					<?php _e( '產生沙盒環境驗證檔案', 'ys-shopline-via-woocommerce' ); ?>
+				</button>
+			</div>
+
+			<div id="ys-apple-verify-result" style="margin-top:10px;"></div>
+		</div>
 		<?php
+	}
+
+	/**
+	 * 渲染 Apple Pay 驗證檔案狀態。
+	 */
+	private function render_apple_verify_status() {
+		$file_path = ABSPATH . '.well-known/apple-developer-merchantid-domain-association';
+		$env       = get_option( 'ys_shopline_apple_verify_env', '' );
+
+		if ( ! file_exists( $file_path ) || empty( $env ) ) {
+			echo '<div class="ys-notice-item ys-notice-info">';
+			echo '<span class="dashicons dashicons-info"></span> ';
+			esc_html_e( '尚未產生 Apple Pay 驗證檔案。', 'ys-shopline-via-woocommerce' );
+			echo '</div>';
+			return;
+		}
+
+		$env_label = 'production' === $env
+			? __( '正式環境', 'ys-shopline-via-woocommerce' )
+			: __( '沙盒環境', 'ys-shopline-via-woocommerce' );
+
+		$verify_url = home_url( '.well-known/apple-developer-merchantid-domain-association' );
+
+		echo '<div class="ys-notice-item ys-notice-success">';
+		echo '<span class="dashicons dashicons-yes-alt"></span> ';
+		printf(
+			/* translators: %s: Environment label */
+			esc_html__( '已產生 Apple Pay %s驗證檔案', 'ys-shopline-via-woocommerce' ),
+			esc_html( $env_label )
+		);
+		echo '</div>';
+		echo '<div style="margin-top:8px;">';
+		echo '<span class="dashicons dashicons-external" style="color:#0073aa;"></span> ';
+		printf(
+			__( '驗證網址：<a href="%1$s" target="_blank">%1$s</a>', 'ys-shopline-via-woocommerce' ),
+			esc_url( $verify_url )
+		);
+		echo '</div>';
+	}
+
+	/**
+	 * AJAX：產生 Apple Pay 網域驗證檔案。
+	 */
+	public function ajax_apple_verify() {
+		check_ajax_referer( 'ys_shopline_apple_verify', 'nonce' );
+
+		if ( ! current_user_can( 'manage_options' ) ) {
+			wp_send_json_error( array( 'message' => __( '權限不足。', 'ys-shopline-via-woocommerce' ) ) );
+		}
+
+		$env = isset( $_POST['env'] ) ? sanitize_key( $_POST['env'] ) : '';
+
+		if ( ! in_array( $env, array( 'production', 'sandbox' ), true ) ) {
+			wp_send_json_error( array( 'message' => __( '無效的環境參數。', 'ys-shopline-via-woocommerce' ) ) );
+		}
+
+		// 來源 URL
+		$urls = array(
+			'production' => 'https://cdn.shoplinepayments.com/docs/product/apple-developer-merchantid-domain-association.txt',
+			'sandbox'    => 'https://cdn.shoplinepayments.com/docs/sandbox/apple-developer-merchantid-domain-association.txt',
+		);
+
+		// 下載驗證檔案內容
+		$response = wp_remote_get( $urls[ $env ], array( 'timeout' => 30 ) );
+
+		if ( is_wp_error( $response ) ) {
+			wp_send_json_error( array(
+				'message' => sprintf(
+					/* translators: %s: Error message */
+					__( '下載驗證檔案失敗：%s', 'ys-shopline-via-woocommerce' ),
+					$response->get_error_message()
+				),
+			) );
+		}
+
+		$status_code = wp_remote_retrieve_response_code( $response );
+		if ( 200 !== $status_code ) {
+			wp_send_json_error( array(
+				'message' => sprintf(
+					/* translators: %d: HTTP status code */
+					__( '下載驗證檔案失敗，HTTP 狀態碼：%d', 'ys-shopline-via-woocommerce' ),
+					$status_code
+				),
+			) );
+		}
+
+		$content = wp_remote_retrieve_body( $response );
+
+		if ( empty( $content ) ) {
+			wp_send_json_error( array( 'message' => __( '下載的驗證檔案內容為空。', 'ys-shopline-via-woocommerce' ) ) );
+		}
+
+		// 建立 .well-known 目錄
+		$dir = ABSPATH . '.well-known';
+
+		if ( ! file_exists( $dir ) ) {
+			if ( ! wp_mkdir_p( $dir ) ) {
+				wp_send_json_error( array(
+					'message' => sprintf(
+						/* translators: %s: Directory path */
+						__( '無法建立目錄：%s，請確認伺服器檔案寫入權限。', 'ys-shopline-via-woocommerce' ),
+						$dir
+					),
+				) );
+			}
+		}
+
+		// 寫入檔案（覆蓋既有檔案）
+		$file_path = $dir . '/apple-developer-merchantid-domain-association';
+		$result    = file_put_contents( $file_path, $content );
+
+		if ( false === $result ) {
+			wp_send_json_error( array(
+				'message' => sprintf(
+					/* translators: %s: File path */
+					__( '無法寫入檔案：%s，請確認伺服器檔案寫入權限。', 'ys-shopline-via-woocommerce' ),
+					$file_path
+				),
+			) );
+		}
+
+		// 記錄目前環境
+		update_option( 'ys_shopline_apple_verify_env', $env );
+
+		$env_label  = 'production' === $env
+			? __( '正式環境', 'ys-shopline-via-woocommerce' )
+			: __( '沙盒環境', 'ys-shopline-via-woocommerce' );
+		$verify_url = home_url( '.well-known/apple-developer-merchantid-domain-association' );
+
+		wp_send_json_success( array(
+			'message'    => sprintf(
+				/* translators: %s: Environment label */
+				__( '已成功產生 Apple Pay %s驗證檔案', 'ys-shopline-via-woocommerce' ),
+				$env_label
+			),
+			'env'        => $env,
+			'env_label'  => $env_label,
+			'verify_url' => $verify_url,
+		) );
 	}
 
 	/**
@@ -1053,6 +1231,12 @@ class YSAdminSettings {
 			color: #c62828;
 		}
 
+		/* Spinning animation */
+		@keyframes rotation {
+			from { transform: rotate(0deg); }
+			to { transform: rotate(360deg); }
+		}
+
 		/* Submit */
 		.ys-submit-wrap {
 			margin-top: 20px;
@@ -1144,6 +1328,61 @@ class YSAdminSettings {
 				var text = $(this).data('copy');
 				navigator.clipboard.writeText(text).then(function() {
 					alert('<?php echo esc_js( __( '已複製到剪貼簿', 'ys-shopline-via-woocommerce' ) ); ?>');
+				});
+			});
+
+			// Apple Pay 驗證檔案
+			$('.ys-apple-verify-btn').on('click', function() {
+				var $btn = $(this);
+				var env = $btn.data('env');
+				var $result = $('#ys-apple-verify-result');
+
+				$btn.prop('disabled', true).css('opacity', '0.6');
+				$result.html('<span style="color:#666;"><span class="dashicons dashicons-update" style="animation:rotation 1s linear infinite;"></span> <?php echo esc_js( __( '正在下載並建立驗證檔案…', 'ys-shopline-via-woocommerce' ) ); ?></span>');
+
+				$.ajax({
+					url: ajaxurl,
+					type: 'POST',
+					data: {
+						action: 'ys_shopline_apple_verify',
+						nonce: '<?php echo wp_create_nonce( 'ys_shopline_apple_verify' ); ?>',
+						env: env
+					},
+					success: function(response) {
+						$btn.prop('disabled', false).css('opacity', '1');
+						if (response.success) {
+							// 更新上方狀態區
+							$('#ys-apple-verify-status').html(
+								'<div class="ys-notice-item ys-notice-success">' +
+								'<span class="dashicons dashicons-yes-alt"></span> ' +
+								response.data.message +
+								'</div>' +
+								'<div style="margin-top:8px;">' +
+								'<span class="dashicons dashicons-external" style="color:#0073aa;"></span> ' +
+								'<?php echo esc_js( __( '驗證網址：', 'ys-shopline-via-woocommerce' ) ); ?>' +
+								'<a href="' + response.data.verify_url + '" target="_blank">' + response.data.verify_url + '</a>' +
+								'</div>'
+							);
+							// 清除下方結果區
+							$result.empty();
+						} else {
+							$result.html(
+								'<div class="ys-notice-item ys-notice-error" style="margin-top:10px;">' +
+								'<span class="dashicons dashicons-dismiss"></span> ' +
+								response.data.message +
+								'</div>'
+							);
+						}
+					},
+					error: function() {
+						$btn.prop('disabled', false).css('opacity', '1');
+						$result.html(
+							'<div class="ys-notice-item ys-notice-error" style="margin-top:10px;">' +
+							'<span class="dashicons dashicons-dismiss"></span> ' +
+							'<?php echo esc_js( __( 'AJAX 請求失敗，請重新整理頁面後再試。', 'ys-shopline-via-woocommerce' ) ); ?>' +
+							'</div>'
+						);
+					}
 				});
 			});
 		});
