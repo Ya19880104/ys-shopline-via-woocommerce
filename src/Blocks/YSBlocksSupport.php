@@ -16,7 +16,7 @@ defined( 'ABSPATH' ) || exit;
 /**
  * WooCommerce Blocks 支援
  *
- * 註冊 Block Checkout 付款方式
+ * 自動註冊所有已啟用的 ys_shopline_* gateway 到 Block Checkout
  */
 final class YSBlocksSupport {
 
@@ -31,7 +31,6 @@ final class YSBlocksSupport {
      * 註冊付款方式
      */
     public static function register_payment_methods(): void {
-        // 檢查是否有 Block 支援
         if ( ! class_exists( 'Automattic\WooCommerce\Blocks\Payments\Integrations\AbstractPaymentMethodType' ) ) {
             return;
         }
@@ -39,11 +38,14 @@ final class YSBlocksSupport {
         add_action(
             'woocommerce_blocks_payment_method_type_registration',
             function ( PaymentMethodRegistry $registry ) {
-                // 註冊跳轉支付
-                $registry->register( new YSBlocksIntegration() );
+                // 註冊所有 ys_shopline_ 開頭的已啟用 gateway
+                $all_gateways = WC()->payment_gateways()->payment_gateways();
 
-                // 未來可註冊 Token 支付
-                // $registry->register( new YSTokenBlocksIntegration() );
+                foreach ( $all_gateways as $gateway_id => $gateway ) {
+                    if ( str_starts_with( $gateway_id, 'ys_shopline_' ) && 'yes' === $gateway->enabled ) {
+                        $registry->register( new YSBlocksIntegration( $gateway_id ) );
+                    }
+                }
             }
         );
     }

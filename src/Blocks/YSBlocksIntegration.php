@@ -16,16 +16,10 @@ defined( 'ABSPATH' ) || exit;
 /**
  * Block Checkout 整合
  *
- * 為 WooCommerce Block Checkout 提供 Shopline Payment 支援
+ * 為 WooCommerce Block Checkout 提供 Shopline Payment 支援。
+ * 每個已啟用的 gateway 各建一個實例。
  */
 final class YSBlocksIntegration extends AbstractPaymentMethodType {
-
-    /**
-     * 付款方式名稱
-     *
-     * @var string
-     */
-    protected $name = 'ys_shopline_credit';
 
     /**
      * 閘道實例
@@ -33,6 +27,30 @@ final class YSBlocksIntegration extends AbstractPaymentMethodType {
      * @var \WC_Payment_Gateway|null
      */
     private $gateway = null;
+
+    /**
+     * 已註冊的 gateway ID 列表（跨實例共用）
+     *
+     * @var array
+     */
+    private static array $registered_ids = [];
+
+    /**
+     * 腳本是否已註冊
+     *
+     * @var bool
+     */
+    private static bool $script_registered = false;
+
+    /**
+     * Constructor.
+     *
+     * @param string $gateway_id Gateway ID.
+     */
+    public function __construct( string $gateway_id = 'ys_shopline_credit' ) {
+        $this->name = $gateway_id;
+        self::$registered_ids[] = $gateway_id;
+    }
 
     /**
      * 初始化
@@ -64,29 +82,41 @@ final class YSBlocksIntegration extends AbstractPaymentMethodType {
     /**
      * 取得腳本 handles
      *
+     * 所有 gateway 共用同一個 JS 檔案，只需註冊一次。
+     * 透過 localize 傳遞所有已註冊的 gateway ID 給前端。
+     *
      * @return array
      */
     public function get_payment_method_script_handles(): array {
-        $asset_path = YS_SHOPLINE_PLUGIN_DIR . 'assets/js/blocks/ys-shopline-blocks.asset.php';
+        $handle = 'ys-shopline-blocks';
 
-        $version      = YS_SHOPLINE_VERSION;
-        $dependencies = [];
+        if ( ! self::$script_registered ) {
+            $asset_path = YS_SHOPLINE_PLUGIN_DIR . 'assets/js/blocks/ys-shopline-blocks.asset.php';
 
-        if ( file_exists( $asset_path ) ) {
-            $asset        = require $asset_path;
-            $version      = $asset['version'] ?? $version;
-            $dependencies = $asset['dependencies'] ?? $dependencies;
+            $version      = YS_SHOPLINE_VERSION;
+            $dependencies = [];
+
+            if ( file_exists( $asset_path ) ) {
+                $asset        = require $asset_path;
+                $version      = $asset['version'] ?? $version;
+                $dependencies = $asset['dependencies'] ?? $dependencies;
+            }
+
+            wp_register_script(
+                $handle,
+                YS_SHOPLINE_PLUGIN_URL . 'assets/js/blocks/ys-shopline-blocks.js',
+                $dependencies,
+                $version,
+                true
+            );
+
+            self::$script_registered = true;
         }
 
-        wp_register_script(
-            'ys-shopline-blocks',
-            YS_SHOPLINE_PLUGIN_URL . 'assets/js/blocks/ys-shopline-blocks.js',
-            $dependencies,
-            $version,
-            true
-        );
+        // 每次都更新 gateway 列表（最後一次呼叫包含所有 ID）
+        wp_localize_script( $handle, 'ysShoplineBlocksGateways', self::$registered_ids );
 
-        return [ 'ys-shopline-blocks' ];
+        return [ $handle ];
     }
 
     /**
@@ -118,22 +148,27 @@ final class YSBlocksIntegration extends AbstractPaymentMethodType {
      * @return array
      */
     private function get_payment_icons(): array {
-        return [
-            [
-                'id'  => 'visa',
-                'alt' => 'Visa',
-                'src' => YS_SHOPLINE_PLUGIN_URL . 'assets/images/visa.svg',
-            ],
-            [
-                'id'  => 'mastercard',
-                'alt' => 'Mastercard',
-                'src' => YS_SHOPLINE_PLUGIN_URL . 'assets/images/mastercard.svg',
-            ],
-            [
-                'id'  => 'jcb',
-                'alt' => 'JCB',
-                'src' => YS_SHOPLINE_PLUGIN_URL . 'assets/images/jcb.svg',
-            ],
-        ];
+        $icons_map = array(
+            'ys_shopline_credit' => array(
+                array( 'id' => 'visa', 'alt' => 'Visa', 'src' => YS_SHOPLINE_PLUGIN_URL . 'assets/images/visa.svg' ),
+                array( 'id' => 'mastercard', 'alt' => 'Mastercard', 'src' => YS_SHOPLINE_PLUGIN_URL . 'assets/images/mastercard.svg' ),
+                array( 'id' => 'jcb', 'alt' => 'JCB', 'src' => YS_SHOPLINE_PLUGIN_URL . 'assets/images/jcb.svg' ),
+            ),
+            'ys_shopline_credit_installment' => array(
+                array( 'id' => 'visa', 'alt' => 'Visa', 'src' => YS_SHOPLINE_PLUGIN_URL . 'assets/images/visa.svg' ),
+                array( 'id' => 'mastercard', 'alt' => 'Mastercard', 'src' => YS_SHOPLINE_PLUGIN_URL . 'assets/images/mastercard.svg' ),
+                array( 'id' => 'jcb', 'alt' => 'JCB', 'src' => YS_SHOPLINE_PLUGIN_URL . 'assets/images/jcb.svg' ),
+            ),
+            'ys_shopline_credit_subscription' => array(
+                array( 'id' => 'visa', 'alt' => 'Visa', 'src' => YS_SHOPLINE_PLUGIN_URL . 'assets/images/visa.svg' ),
+                array( 'id' => 'mastercard', 'alt' => 'Mastercard', 'src' => YS_SHOPLINE_PLUGIN_URL . 'assets/images/mastercard.svg' ),
+                array( 'id' => 'jcb', 'alt' => 'JCB', 'src' => YS_SHOPLINE_PLUGIN_URL . 'assets/images/jcb.svg' ),
+            ),
+            'ys_shopline_applepay' => array(
+                array( 'id' => 'applepay', 'alt' => 'Apple Pay', 'src' => YS_SHOPLINE_PLUGIN_URL . 'assets/images/apple-pay-mark.svg' ),
+            ),
+        );
+
+        return $icons_map[ $this->name ] ?? array();
     }
 }
