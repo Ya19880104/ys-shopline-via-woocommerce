@@ -207,6 +207,7 @@ final class YSShoplinePayment {
 
         // Pay-for-order AJAX（重新付款頁面用）
         add_action( 'wp_ajax_ys_shopline_pay_for_order', array( $this, 'ajax_pay_for_order' ) );
+        add_action( 'wp_ajax_nopriv_ys_shopline_pay_for_order', array( $this, 'ajax_pay_for_order' ) );
     }
 
     /**
@@ -541,9 +542,14 @@ final class YSShoplinePayment {
             return;
         }
 
-        // 驗證訂單所有權
+        // 驗證訂單存取權限：登入用戶比對 user_id，訪客比對 order_key
         $current_user_id = get_current_user_id();
-        if ( ! $current_user_id || (int) $order->get_user_id() !== $current_user_id ) {
+        // phpcs:ignore WordPress.Security.NonceVerification.Missing
+        $order_key       = isset( $_POST['order_key'] ) ? sanitize_text_field( wp_unslash( $_POST['order_key'] ) ) : '';
+        $is_owner        = $current_user_id && (int) $order->get_user_id() === $current_user_id;
+        $is_guest_valid  = ! $current_user_id && 0 === (int) $order->get_user_id() && $order_key && $order->get_order_key() === $order_key;
+
+        if ( ! $is_owner && ! $is_guest_valid ) {
             wp_send_json( array(
                 'result'   => 'failure',
                 'messages' => __( '無權存取此訂單。', 'ys-shopline-via-woocommerce' ),
@@ -632,8 +638,8 @@ final class YSShoplinePayment {
     public function plugin_action_links( $links ) {
         $settings_link = sprintf(
             '<a href="%s">%s</a>',
-            admin_url( 'admin.php?page=ys_shopline_payment' ),
-            __( 'Settings', 'ys-shopline-via-woocommerce' )
+            admin_url( 'admin.php?page=ys-shopline-payment' ),
+            __( '設定', 'ys-shopline-via-woocommerce' )
         );
 
         array_unshift( $links, $settings_link );

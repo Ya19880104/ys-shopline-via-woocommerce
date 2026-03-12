@@ -413,11 +413,14 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
         elseif ( $ajax_order_id ) {
             $order = wc_get_order( $ajax_order_id );
             if ( $order && $order->needs_payment() ) {
-                // 驗證訂單所有權
+                // 驗證訂單所有權：登入用戶比對 user_id，訪客比對 order_key
+                // phpcs:ignore WordPress.Security.NonceVerification.Missing
+                $ajax_order_key  = isset( $_POST['order_key'] ) ? sanitize_text_field( wp_unslash( $_POST['order_key'] ) ) : '';
                 $current_user_id = get_current_user_id();
                 $is_owner        = $current_user_id && (int) $order->get_user_id() === $current_user_id;
+                $is_guest_valid  = ! $current_user_id && 0 === (int) $order->get_user_id() && $ajax_order_key && $order->get_order_key() === $ajax_order_key;
 
-                if ( $is_owner ) {
+                if ( $is_owner || $is_guest_valid ) {
                     $amount_raw = $order->get_total();
                     $currency   = $order->get_currency();
                 }
