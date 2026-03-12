@@ -128,6 +128,24 @@ class YSApi {
 
         $decoded_body = json_decode( $body, true );
 
+        // 驗證 JSON 解析結果
+        if ( null === $decoded_body && '' !== $body ) {
+            YSLogger::error( 'API Response: JSON decode failed', array(
+                'request_id'   => $request_id,
+                'http_code'    => $code,
+                'body_preview' => substr( $body, 0, 200 ),
+            ) );
+            return new WP_Error( 'json_decode_error', __( 'API 回應格式異常，請稍後重試。', 'ys-shopline-via-woocommerce' ) );
+        }
+
+        if ( empty( $decoded_body ) || ! is_array( $decoded_body ) ) {
+            YSLogger::error( 'API Response: Empty or invalid response body', array(
+                'request_id' => $request_id,
+                'http_code'  => $code,
+            ) );
+            return new WP_Error( 'empty_response', __( 'API 回應為空，請稍後重試。', 'ys-shopline-via-woocommerce' ) );
+        }
+
         // SHOPLINE 有時會在 400 錯誤中仍然返回有效的交易資訊
         // 如果有 tradeOrderId 或 nextAction，視為成功（部分成功）
         $has_trade_info = isset( $decoded_body['tradeOrderId'] ) || isset( $decoded_body['nextAction'] );

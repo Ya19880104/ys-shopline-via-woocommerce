@@ -739,7 +739,45 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
             return $this->handle_next_action( $order, $response );
         }
 
-        // Payment completed immediately
+        // 驗證回應狀態：只有明確的成功狀態才能 payment_complete
+        // SHOPLINE API 文件定義的成功狀態：SUCCEEDED, CAPTURED
+        $status = $response['status'] ?? '';
+        if ( ! in_array( $status, array( 'SUCCEEDED', 'SUCCESS', 'CAPTURED' ), true ) ) {
+            YSLogger::warning( 'process_payment: Unexpected status without nextAction', array(
+                'order_id'      => $order->get_id(),
+                'status'        => $status,
+                'response_keys' => array_keys( $response ),
+            ) );
+
+            // CREATED/PROCESSING/CUSTOMER_ACTION 等中間狀態 — 等待 webhook
+            if ( in_array( $status, array( 'CREATED', 'PROCESSING', 'CUSTOMER_ACTION', 'PENDING' ), true ) ) {
+                $order->update_status( 'on-hold', sprintf(
+                    /* translators: %s: payment status */
+                    __( 'Shopline 付款處理中，狀態：%s，等待 webhook 確認。', 'ys-shopline-via-woocommerce' ),
+                    $status
+                ) );
+                $order->update_meta_data( YSOrderMeta::PAYMENT_STATUS, $status );
+                $order->save();
+
+                WC()->cart->empty_cart();
+
+                return array(
+                    'result'   => 'success',
+                    'redirect' => $this->get_return_url( $order ),
+                );
+            }
+
+            // 未知狀態 — 視為失敗
+            $order->update_status( 'failed', sprintf(
+                /* translators: %s: payment status */
+                __( 'Shopline 付款回傳未預期的狀態：%s', 'ys-shopline-via-woocommerce' ),
+                $status ?: '(empty)'
+            ) );
+            wc_add_notice( __( '付款處理異常，請重試或聯繫客服。', 'ys-shopline-via-woocommerce' ), 'error' );
+            return array( 'result' => 'failure' );
+        }
+
+        // Payment completed immediately (confirmed SUCCEEDED/CAPTURED)
         $order->payment_complete( isset( $response['tradeOrderId'] ) ? $response['tradeOrderId'] : '' );
         $order->add_order_note( __( 'Shopline payment completed.', 'ys-shopline-via-woocommerce' ) );
 
