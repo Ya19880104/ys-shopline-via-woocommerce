@@ -63,6 +63,16 @@ class YSRedirectHandler {
             return;
         }
 
+        // 驗證 order key（防止未授權請求觸發 API 查詢）
+        // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+        $order_key = isset( $_GET['key'] ) ? sanitize_text_field( wp_unslash( $_GET['key'] ) ) : '';
+        if ( ! $order_key || $order->get_order_key() !== $order_key ) {
+            YSLogger::warning( 'Redirect handler: Invalid order key', array(
+                'order_id' => $order_id,
+            ) );
+            return;
+        }
+
         // 檢查是否是 Shopline 付款方式
         $payment_method = $order->get_payment_method();
         if ( strpos( $payment_method, 'ys_shopline' ) !== 0 ) {
