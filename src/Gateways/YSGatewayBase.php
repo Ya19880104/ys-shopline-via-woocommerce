@@ -782,6 +782,11 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
 
         // Payment completed immediately (confirmed SUCCEEDED/CAPTURED)
         $order->payment_complete( isset( $response['tradeOrderId'] ) ? $response['tradeOrderId'] : '' );
+        // 套用商家自訂的付款成功訂單狀態
+        $custom_paid_status = get_option( 'ys_shopline_order_status_paid', '' );
+        if ( $custom_paid_status && $custom_paid_status !== $order->get_status() ) {
+            $order->update_status( $custom_paid_status, __( '依商家設定更新訂單狀態。', 'ys-shopline-via-woocommerce' ) );
+        }
         $order->add_order_note( __( 'Shopline payment completed.', 'ys-shopline-via-woocommerce' ) );
 
         // Empty the cart

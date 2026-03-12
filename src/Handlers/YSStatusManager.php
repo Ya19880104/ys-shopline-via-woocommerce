@@ -271,6 +271,11 @@ final class YSStatusManager {
         if ( null !== $wc_status && $order->get_status() !== $wc_status ) {
             if ( 'processing' === $wc_status && ! $order->is_paid() ) {
                 $order->payment_complete( $payment_dto->trade_order_id );
+                // 套用商家自訂的付款成功訂單狀態
+                $custom_paid_status = get_option( 'ys_shopline_order_status_paid', '' );
+                if ( $custom_paid_status && $custom_paid_status !== $order->get_status() ) {
+                    $order->update_status( $custom_paid_status, __( '依商家設定更新訂單狀態。', 'ys-shopline-via-woocommerce' ) );
+                }
             } elseif ( 'on-hold' === $wc_status ) {
                 $order->update_status( 'on-hold' );
             } elseif ( 'refunded' === $wc_status ) {
