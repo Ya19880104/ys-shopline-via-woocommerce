@@ -4,7 +4,7 @@
 
 ## 版本資訊
 
-- **目前版本**：3.0.0
+- **目前版本**：3.0.1
 - **PHP 需求**：>= 8.0
 - **WordPress 需求**：>= 6.0
 - **WooCommerce 需求**：7.0 - 9.0
@@ -65,6 +65,12 @@ https://your-domain.com/wp-json/ys-shopline/v1/webhook
 ---
 
 ## 變更紀錄
+
+### 3.0.1 - 2026-03-14
+
+**修正**
+- 空字串 API 回應正確回傳 `empty_response` 錯誤碼（不再誤歸為 `json_decode_error`）
+- GET 請求參數透過 `add_query_arg()` 加入 URL query string（不再被靜默忽略）
 
 ### 3.0.0 - 2026-03-13
 
