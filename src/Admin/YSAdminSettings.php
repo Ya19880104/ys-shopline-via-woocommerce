@@ -47,27 +47,351 @@ class YSAdminSettings {
 	 * Constructor.
 	 */
 	private function __construct() {
-		add_action( 'admin_menu', array( $this, 'add_admin_menu' ) );
+		add_action( 'admin_menu', array( $this, 'add_admin_menu' ), 21 );
 		add_action( 'admin_init', array( $this, 'register_settings' ) );
 		add_action( 'admin_enqueue_scripts', array( $this, 'enqueue_scripts' ) );
+		add_filter( 'ys_toolbox_plugins', array( $this, 'register_toolbox_card' ) );
 
 		// Apple Pay 驗證檔案 AJAX
 		add_action( 'wp_ajax_ys_shopline_apple_verify', array( $this, 'ajax_apple_verify' ) );
 	}
 
 	/**
-	 * Add admin menu.
+	 * Add admin menu under 電商工具箱.
 	 */
 	public function add_admin_menu() {
-		add_menu_page(
+		global $menu;
+
+		// 檢查「電商工具箱」頂層選單是否已存在
+		$toolbox_exists = false;
+		if ( is_array( $menu ) ) {
+			foreach ( $menu as $item ) {
+				if ( isset( $item[2] ) && 'ys-toolbox' === $item[2] ) {
+					$toolbox_exists = true;
+					break;
+				}
+			}
+		}
+
+		// 只建立一次頂層選單
+		if ( ! $toolbox_exists ) {
+			add_menu_page(
+				__( '電商工具箱', 'ys-shopline-via-woocommerce' ),
+				__( '電商工具箱', 'ys-shopline-via-woocommerce' ),
+				'manage_options',
+				'ys-toolbox',
+				array( __CLASS__, 'render_toolbox_welcome' ),
+				'dashicons-store',
+				56
+			);
+
+			// 將第一個子選單顯示為「總覽」而非重複的「電商工具箱」
+			add_submenu_page(
+				'ys-toolbox',
+				__( '電商工具箱', 'ys-shopline-via-woocommerce' ),
+				__( '總覽', 'ys-shopline-via-woocommerce' ),
+				'manage_options',
+				'ys-toolbox',
+				array( __CLASS__, 'render_toolbox_welcome' )
+			);
+		}
+
+		// 註冊子選單
+		add_submenu_page(
+			'ys-toolbox',
 			__( 'SHOPLINE Payment 設定', 'ys-shopline-via-woocommerce' ),
 			__( 'SHOPLINE 金流', 'ys-shopline-via-woocommerce' ),
 			'manage_options',
-			'ys_shopline_payment',
-			array( $this, 'render_settings_page' ),
-			'dashicons-money-alt',
-			58
+			'ys-shopline-payment',
+			array( $this, 'render_settings_page' )
 		);
+	}
+
+	/**
+	 * 註冊本外掛的工具箱卡片資訊
+	 *
+	 * @param array $plugins 已註冊的外掛列表。
+	 * @return array
+	 */
+	public function register_toolbox_card( $plugins ) {
+		$plugins[] = array(
+			'name'    => 'SHOPLINE 金流',
+			'version' => YS_SHOPLINE_VERSION,
+			'icon'    => 'dashicons-money-alt',
+			'desc'    => '整合 SHOPLINE Payment 金流服務，支援信用卡、ATM、LINE Pay、Apple Pay 等多種付款方式。',
+			'url'     => admin_url( 'admin.php?page=ys-shopline-payment' ),
+		);
+		return $plugins;
+	}
+
+	/**
+	 * 渲染電商工具箱歡迎頁面
+	 *
+	 * 靜態方法，任何外掛都可呼叫，但只需註冊一次。
+	 * 透過 ys_toolbox_plugins filter 自動偵測所有已註冊的 YS 外掛。
+	 */
+	public static function render_toolbox_welcome() {
+		if ( ! current_user_can( 'manage_options' ) ) {
+			return;
+		}
+
+		/**
+		 * 收集所有已啟用的 YS 外掛卡片資訊。
+		 *
+		 * 每個外掛透過此 filter 註冊自己的卡片，歡迎頁面自動顯示。
+		 * 陣列元素格式：
+		 *   'name'    => (string) 外掛顯示名稱
+		 *   'version' => (string) 版本號
+		 *   'icon'    => (string) Dashicon CSS class
+		 *   'desc'    => (string) 簡短描述
+		 *   'url'     => (string) 設定頁面完整 URL
+		 *
+		 * @param array $plugins 已註冊的外掛列表。
+		 */
+		$plugins = apply_filters( 'ys_toolbox_plugins', array() );
+
+		?>
+		<div class="wrap">
+			<h1 style="display:none;"><?php esc_html_e( '電商工具箱', 'ys-toolbox' ); ?></h1>
+		</div>
+
+		<div class="ys-toolbox-welcome">
+
+			<!-- Header -->
+			<div class="ys-toolbox-header">
+				<div class="ys-toolbox-header-content">
+					<div class="ys-toolbox-logo">
+						<span class="dashicons dashicons-store"></span>
+					</div>
+					<h2>電商工具箱</h2>
+					<p class="ys-toolbox-subtitle">WooCommerce 電商擴充套件，由 YANGSHEEP DESIGN 開發維護</p>
+				</div>
+			</div>
+
+			<!-- Plugin Cards -->
+			<?php if ( ! empty( $plugins ) ) : ?>
+			<div class="ys-toolbox-cards">
+				<?php
+				foreach ( $plugins as $plugin ) :
+					$plugin = wp_parse_args( $plugin, array(
+						'name'    => __( '未知外掛', 'ys-toolbox' ),
+						'version' => '0.0.0',
+						'icon'    => 'dashicons-admin-plugins',
+						'desc'    => '',
+						'url'     => '#',
+					) );
+				?>
+				<a href="<?php echo esc_url( $plugin['url'] ); ?>" class="ys-toolbox-card">
+					<div class="ys-toolbox-card-icon">
+						<span class="dashicons <?php echo esc_attr( $plugin['icon'] ); ?>"></span>
+					</div>
+					<div class="ys-toolbox-card-body">
+						<h3><?php echo esc_html( $plugin['name'] ); ?></h3>
+						<span class="ys-toolbox-card-version">v<?php echo esc_html( $plugin['version'] ); ?></span>
+						<p><?php echo esc_html( $plugin['desc'] ); ?></p>
+					</div>
+					<span class="ys-toolbox-card-arrow dashicons dashicons-arrow-right-alt2"></span>
+				</a>
+				<?php endforeach; ?>
+			</div>
+			<?php else : ?>
+			<div class="ys-toolbox-empty">
+				<span class="dashicons dashicons-info-outline"></span>
+				<p>尚未偵測到已啟用的 YS 外掛。</p>
+			</div>
+			<?php endif; ?>
+
+			<!-- Footer -->
+			<div class="ys-toolbox-footer">
+				<div class="ys-toolbox-footer-info">
+					<span class="dashicons dashicons-heart"></span>
+					<span>由 <strong>YANGSHEEP DESIGN</strong> 用心開發</span>
+					<span class="ys-toolbox-sep">|</span>
+					<a href="https://yangsheep.com.tw" target="_blank" rel="noopener">yangsheep.com.tw</a>
+				</div>
+			</div>
+		</div>
+
+		<style>
+			/* ── Welcome Page ─────────────────────────────── */
+			.ys-toolbox-welcome {
+				max-width: 860px;
+				margin: 20px 0;
+				font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+			}
+
+			/* Header */
+			.ys-toolbox-header {
+				background: linear-gradient(135deg, #3a4f63 0%, #2c3e50 100%);
+				border-radius: 12px;
+				padding: 40px;
+				margin-bottom: 24px;
+				color: #fff;
+			}
+			.ys-toolbox-header-content {
+				text-align: center;
+			}
+			.ys-toolbox-logo {
+				display: inline-flex;
+				align-items: center;
+				justify-content: center;
+				width: 64px;
+				height: 64px;
+				background: rgba(255,255,255,.15);
+				border-radius: 16px;
+				margin-bottom: 16px;
+			}
+			.ys-toolbox-logo .dashicons {
+				font-size: 32px;
+				width: 32px;
+				height: 32px;
+				color: #fff;
+			}
+			.ys-toolbox-header h2 {
+				font-size: 24px;
+				font-weight: 600;
+				margin: 0 0 8px;
+				color: #fff;
+			}
+			.ys-toolbox-subtitle {
+				font-size: 14px;
+				opacity: .8;
+				margin: 0;
+			}
+
+			/* Cards */
+			.ys-toolbox-cards {
+				display: flex;
+				flex-direction: column;
+				gap: 12px;
+				margin-bottom: 24px;
+			}
+			.ys-toolbox-card {
+				display: flex;
+				align-items: center;
+				gap: 20px;
+				background: #fff;
+				border: 1px solid #e0e0e0;
+				border-radius: 10px;
+				padding: 24px;
+				text-decoration: none;
+				color: inherit;
+				transition: all .2s ease;
+			}
+			.ys-toolbox-card:hover {
+				border-color: #8fa8b8;
+				box-shadow: 0 2px 12px rgba(0,0,0,.08);
+				transform: translateY(-1px);
+			}
+			.ys-toolbox-card:focus {
+				outline: 2px solid #8fa8b8;
+				outline-offset: 2px;
+			}
+			.ys-toolbox-card-icon {
+				flex-shrink: 0;
+				display: flex;
+				align-items: center;
+				justify-content: center;
+				width: 52px;
+				height: 52px;
+				background: #f0f4f7;
+				border-radius: 12px;
+			}
+			.ys-toolbox-card-icon .dashicons {
+				font-size: 24px;
+				width: 24px;
+				height: 24px;
+				color: #3a4f63;
+			}
+			.ys-toolbox-card-body {
+				flex: 1;
+				min-width: 0;
+			}
+			.ys-toolbox-card-body h3 {
+				font-size: 15px;
+				font-weight: 600;
+				margin: 0 0 4px;
+				color: #1d2327;
+				display: inline;
+			}
+			.ys-toolbox-card-version {
+				display: inline-block;
+				font-size: 11px;
+				color: #8fa8b8;
+				background: #f0f4f7;
+				padding: 1px 8px;
+				border-radius: 10px;
+				margin-left: 8px;
+				vertical-align: middle;
+			}
+			.ys-toolbox-card-body p {
+				font-size: 13px;
+				color: #646970;
+				margin: 6px 0 0;
+				line-height: 1.5;
+			}
+			.ys-toolbox-card-arrow {
+				flex-shrink: 0;
+				color: #c3c4c7;
+				transition: color .2s ease;
+			}
+			.ys-toolbox-card:hover .ys-toolbox-card-arrow {
+				color: #8fa8b8;
+			}
+
+			/* Empty State */
+			.ys-toolbox-empty {
+				text-align: center;
+				padding: 48px 24px;
+				background: #fff;
+				border: 1px solid #e0e0e0;
+				border-radius: 10px;
+				margin-bottom: 24px;
+			}
+			.ys-toolbox-empty .dashicons {
+				font-size: 40px;
+				width: 40px;
+				height: 40px;
+				color: #c3c4c7;
+				margin-bottom: 12px;
+			}
+			.ys-toolbox-empty p {
+				color: #646970;
+				font-size: 14px;
+				margin: 0;
+			}
+
+			/* Footer */
+			.ys-toolbox-footer {
+				text-align: center;
+				padding: 16px 0;
+			}
+			.ys-toolbox-footer-info {
+				display: inline-flex;
+				align-items: center;
+				gap: 6px;
+				font-size: 13px;
+				color: #8c8f94;
+			}
+			.ys-toolbox-footer-info .dashicons {
+				font-size: 14px;
+				width: 14px;
+				height: 14px;
+				color: #cc99c2;
+			}
+			.ys-toolbox-footer-info a {
+				color: #8fa8b8;
+				text-decoration: none;
+			}
+			.ys-toolbox-footer-info a:hover {
+				color: #3a4f63;
+			}
+			.ys-toolbox-sep {
+				color: #ddd;
+				margin: 0 4px;
+			}
+		</style>
+		<?php
 	}
 
 	/**
@@ -76,7 +400,8 @@ class YSAdminSettings {
 	 * @param string $hook Current admin page.
 	 */
 	public function enqueue_scripts( $hook ) {
-		if ( 'toplevel_page_ys_shopline_payment' !== $hook ) {
+		if ( false === strpos( $hook, 'ys-toolbox' )
+			&& false === strpos( $hook, 'ys-shopline-payment' ) ) {
 			return;
 		}
 

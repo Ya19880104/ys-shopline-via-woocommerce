@@ -322,7 +322,7 @@ final class YSStatusManager {
      * @return YSShoplineClient
      */
     private function get_api_client( \WC_Order $order ): YSShoplineClient {
-        $client = new YSShoplineClient( $order );
+        $client = new YSShoplineClient();
 
         if ( ! $client->has_credentials() ) {
             throw new \RuntimeException( __( 'SHOPLINE API credentials are not configured.', 'ys-shopline-via-woocommerce' ) );

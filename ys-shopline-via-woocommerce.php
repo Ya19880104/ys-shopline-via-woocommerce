@@ -3,7 +3,7 @@
  * Plugin Name: YS Shopline via WooCommerce
  * Plugin URI: https://yangsheep.com.tw
  * Description: Support Shopline Payments for WooCommerce, including HPOS and Subscriptions. Supports Credit Card, ATM, JKOPay, Apple Pay, LINE Pay, and Chailease BNPL.
- * Version: 2.4.4
+ * Version: 2.4.5
  * Author: YangSheep
  * Author URI: https://yangsheep.com.tw
  * Text Domain: ys-shopline-via-woocommerce
@@ -17,7 +17,7 @@
 defined( 'ABSPATH' ) || exit;
 
 // Define plugin constants
-define( 'YS_SHOPLINE_VERSION', '2.4.4' );
+define( 'YS_SHOPLINE_VERSION', '2.4.5' );
 define( 'YS_SHOPLINE_PLUGIN_FILE', __FILE__ );
 define( 'YS_SHOPLINE_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 define( 'YS_SHOPLINE_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
@@ -27,6 +27,11 @@ define( 'YS_SHOPLINE_PLUGIN_BASENAME', plugin_basename( __FILE__ ) );
 if ( file_exists( YS_SHOPLINE_PLUGIN_DIR . 'vendor/autoload.php' ) ) {
     require_once YS_SHOPLINE_PLUGIN_DIR . 'vendor/autoload.php';
 }
+
+// 停用時清理排程
+register_deactivation_hook( __FILE__, function () {
+    wp_clear_scheduled_hook( 'ys_shopline_sync_pending_orders' );
+} );
 
 use YangSheep\ShoplinePayment\Utils\YSLogger;
 use YangSheep\ShoplinePayment\Api\YSApi;
@@ -471,7 +476,13 @@ final class YSShoplinePayment {
                 function showError(message) {
                     document.querySelector('.spinner').style.display = 'none';
                     var errorEl = document.getElementById('errorMessage');
-                    errorEl.innerHTML = message + '<br><a href="' + checkoutUrl + '" class="btn">Return to Checkout</a>';
+                    errorEl.textContent = message;
+                    var backLink = document.createElement('a');
+                    backLink.href = checkoutUrl;
+                    backLink.className = 'btn';
+                    backLink.textContent = 'Return to Checkout';
+                    errorEl.appendChild(document.createElement('br'));
+                    errorEl.appendChild(backLink);
                     errorEl.style.display = 'block';
                 }
 
