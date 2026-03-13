@@ -3,7 +3,7 @@
  * Plugin Name: YS Shopline via WooCommerce
  * Plugin URI: https://yangsheep.com.tw
  * Description: Support Shopline Payments for WooCommerce, including HPOS and Subscriptions. Supports Credit Card, ATM, JKOPay, Apple Pay, LINE Pay, and Chailease BNPL.
- * Version: 2.4.5
+ * Version: 3.0.0
  * Author: YangSheep
  * Author URI: https://yangsheep.com.tw
  * Text Domain: ys-shopline-via-woocommerce
@@ -17,7 +17,7 @@
 defined( 'ABSPATH' ) || exit;
 
 // Define plugin constants
-define( 'YS_SHOPLINE_VERSION', '2.4.5' );
+define( 'YS_SHOPLINE_VERSION', '3.0.0' );
 define( 'YS_SHOPLINE_PLUGIN_FILE', __FILE__ );
 define( 'YS_SHOPLINE_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 define( 'YS_SHOPLINE_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
@@ -683,22 +683,9 @@ final class YSShoplinePayment {
      * @return YSApi|null
      */
     public static function get_api() {
-        $test_mode = 'yes' === get_option( 'ys_shopline_testmode', 'yes' );
+        $api = new YSApi();
 
-        // Get credentials based on test mode
-        if ( $test_mode ) {
-            $merchant_id = get_option( 'ys_shopline_sandbox_merchant_id', '' );
-            $api_key     = get_option( 'ys_shopline_sandbox_api_key', '' );
-        } else {
-            $merchant_id = get_option( 'ys_shopline_merchant_id', '' );
-            $api_key     = get_option( 'ys_shopline_api_key', '' );
-        }
-
-        if ( empty( $merchant_id ) || empty( $api_key ) ) {
-            return null;
-        }
-
-        return new YSApi( $merchant_id, $api_key, $test_mode );
+        return $api->has_credentials() ? $api : null;
     }
 
     /**

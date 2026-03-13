@@ -66,6 +66,19 @@ https://your-domain.com/wp-json/ys-shopline/v1/webhook
 
 ## 變更紀錄
 
+### 3.0.0 - 2026-03-13
+
+**重構（Breaking）**
+- API Client 統一：消除 `YSApi` / `YSShoplineRequester+YSShoplineClient` 雙軌架構
+- `YSApi` 內部改委託 `YSShoplineRequester` 執行 HTTP 請求，對外維持 `array|WP_Error` 契約
+- 新增 `YSApiException`（結構化 API 錯誤碼）與 `YSApiPartialSuccessException`（3DS 部分成功）
+- `YSShoplineRequester` 新增 `idempotent_key` 與 400 部分成功容錯
+- `query_session()`、`query_payment()`、`cancel_payment_by_ids()` 併入 `YSApi`
+- `YSStatusManager` 改用 `YSApi`（`is_wp_error()` 取代 `try/catch`）
+- 刪除 `YSShoplineClient`
+- 移除未使用方法：`capture_payment`、`cancel_payment(array)`、`get_refund`、`check_credentials`、`get_api_url`、`is_test_mode`
+- `get_api()` 簡化（憑證讀取委託 Requester）
+
 ### 2.4.3 - 2026-03-11
 
 **新增**

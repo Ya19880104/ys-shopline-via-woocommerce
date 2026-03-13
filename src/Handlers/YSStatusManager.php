@@ -9,7 +9,6 @@ declare(strict_types=1);
 
 namespace YangSheep\ShoplinePayment\Handlers;
 
-use YangSheep\ShoplinePayment\Api\YSShoplineClient;
 use YangSheep\ShoplinePayment\DTOs\YSPaymentDTO;
 use YangSheep\ShoplinePayment\Utils\YSLogger;
 use YangSheep\ShoplinePayment\Utils\YSOrderMeta;
@@ -132,6 +131,29 @@ final class YSStatusManager {
      * @param \WC_Order $order Order object.
      */
     public function sync_payment_status( \WC_Order $order ): void {
+        try {
+            $this->do_sync_payment_status( $order );
+        } catch ( \Throwable $e ) {
+            YSLogger::error( 'SHOPLINE status sync uncaught error: ' . $e->getMessage(), [
+                'order_id' => $order->get_id(),
+                'trace'    => $e->getTraceAsString(),
+            ] );
+            $order->add_order_note(
+                sprintf(
+                    /* translators: %s: error message */
+                    __( 'SHOPLINE status sync error: %s', 'ys-shopline-via-woocommerce' ),
+                    $e->getMessage()
+                )
+            );
+        }
+    }
+
+    /**
+     * 實際執行狀態同步邏輯。
+     *
+     * @param \WC_Order $order Order object.
+     */
+    private function do_sync_payment_status( \WC_Order $order ): void {
         $trade_order_id = (string) $order->get_meta( YSOrderMeta::TRADE_ORDER_ID );
         $session_id     = (string) $order->get_meta( YSOrderMeta::SESSION_ID );
 
@@ -140,49 +162,87 @@ final class YSStatusManager {
             return;
         }
 
-        try {
-            $client = $this->get_api_client( $order );
+        $api = \YSShoplinePayment::get_api();
 
-            if ( '' !== $trade_order_id ) {
-                $payment_dto = $client->query_payment( $trade_order_id );
-                $this->update_order_from_payment( $order, $payment_dto );
-            } else {
-                $session_dto = $client->query_session( $session_id );
+        if ( null === $api ) {
+            YSLogger::error( 'SHOPLINE status sync failed: API credentials not configured', [
+                'order_id' => $order->get_id(),
+            ] );
+            $order->add_order_note( __( 'SHOPLINE status sync failed: API credentials are not configured.', 'ys-shopline-via-woocommerce' ) );
+            return;
+        }
 
-                if ( ! empty( $session_dto->trade_order_id ) ) {
-                    $order->update_meta_data( YSOrderMeta::TRADE_ORDER_ID, $session_dto->trade_order_id );
+        if ( '' !== $trade_order_id ) {
+            $payment_dto = $api->query_payment( $trade_order_id );
 
-                    $payment_dto = $client->query_payment( $session_dto->trade_order_id );
-                    $this->update_order_from_payment( $order, $payment_dto );
-                } else {
-                    $order->add_order_note(
-                        sprintf(
-                            /* translators: %s: session status */
-                            __( 'Session status is %s; no trade order is available yet.', 'ys-shopline-via-woocommerce' ),
-                            $session_dto->status ?: 'UNKNOWN'
-                        )
-                    );
-                }
+            if ( is_wp_error( $payment_dto ) ) {
+                YSLogger::error( 'SHOPLINE status sync failed: ' . $payment_dto->get_error_message(), [
+                    'order_id' => $order->get_id(),
+                ] );
+                $order->add_order_note(
+                    sprintf(
+                        /* translators: %s: error message */
+                        __( 'SHOPLINE status sync failed: %s', 'ys-shopline-via-woocommerce' ),
+                        $payment_dto->get_error_message()
+                    )
+                );
+                return;
             }
 
-            $order->save();
+            $this->update_order_from_payment( $order, $payment_dto );
+        } else {
+            $session_dto = $api->query_session( $session_id );
 
-            YSLogger::info( 'SHOPLINE status sync completed', [
-                'order_id' => $order->get_id(),
-            ] );
-        } catch ( \Throwable $e ) {
-            YSLogger::error( 'SHOPLINE status sync failed: ' . $e->getMessage(), [
-                'order_id' => $order->get_id(),
-            ] );
+            if ( is_wp_error( $session_dto ) ) {
+                YSLogger::error( 'SHOPLINE status sync failed: ' . $session_dto->get_error_message(), [
+                    'order_id' => $order->get_id(),
+                ] );
+                $order->add_order_note(
+                    sprintf(
+                        /* translators: %s: error message */
+                        __( 'SHOPLINE status sync failed: %s', 'ys-shopline-via-woocommerce' ),
+                        $session_dto->get_error_message()
+                    )
+                );
+                return;
+            }
 
-            $order->add_order_note(
-                sprintf(
-                    /* translators: %s: error message */
-                    __( 'SHOPLINE status sync failed: %s', 'ys-shopline-via-woocommerce' ),
-                    $e->getMessage()
-                )
-            );
+            if ( ! empty( $session_dto->trade_order_id ) ) {
+                $order->update_meta_data( YSOrderMeta::TRADE_ORDER_ID, $session_dto->trade_order_id );
+
+                $payment_dto = $api->query_payment( $session_dto->trade_order_id );
+
+                if ( is_wp_error( $payment_dto ) ) {
+                    YSLogger::error( 'SHOPLINE status sync failed: ' . $payment_dto->get_error_message(), [
+                        'order_id' => $order->get_id(),
+                    ] );
+                    $order->add_order_note(
+                        sprintf(
+                            /* translators: %s: error message */
+                            __( 'SHOPLINE status sync failed: %s', 'ys-shopline-via-woocommerce' ),
+                            $payment_dto->get_error_message()
+                        )
+                    );
+                    return;
+                }
+
+                $this->update_order_from_payment( $order, $payment_dto );
+            } else {
+                $order->add_order_note(
+                    sprintf(
+                        /* translators: %s: session status */
+                        __( 'Session status is %s; no trade order is available yet.', 'ys-shopline-via-woocommerce' ),
+                        $session_dto->status ?: 'UNKNOWN'
+                    )
+                );
+            }
         }
+
+        $order->save();
+
+        YSLogger::info( 'SHOPLINE status sync completed', [
+            'order_id' => $order->get_id(),
+        ] );
     }
 
     /**
@@ -224,30 +284,40 @@ final class YSStatusManager {
             return;
         }
 
-        try {
-            $client   = $this->get_api_client( $order );
-            $response = $client->cancel_payment(
-                $trade_order_id,
-                '' !== $reference_order_id ? $reference_order_id : (string) $order->get_id()
-            );
+        $api = \YSShoplinePayment::get_api();
 
-            $status = '';
-            if ( isset( $response['status'] ) && is_string( $response['status'] ) ) {
-                $status = $this->normalize_status( $response['status'] );
-            }
-
-            if ( '' !== $status ) {
-                $order->update_meta_data( YSOrderMeta::PAYMENT_STATUS, $status );
-            }
-
-            $order->add_order_note( __( 'SHOPLINE payment cancel request sent.', 'ys-shopline-via-woocommerce' ) );
-            $order->save();
-        } catch ( \Throwable $e ) {
-            YSLogger::error( 'Failed to cancel SHOPLINE payment: ' . $e->getMessage(), [
+        if ( null === $api ) {
+            YSLogger::error( 'Failed to cancel SHOPLINE payment: API credentials not configured', [
                 'order_id'       => $order->get_id(),
                 'trade_order_id' => $trade_order_id,
             ] );
+            return;
         }
+
+        $response = $api->cancel_payment_by_ids(
+            $trade_order_id,
+            '' !== $reference_order_id ? $reference_order_id : (string) $order->get_id()
+        );
+
+        if ( is_wp_error( $response ) ) {
+            YSLogger::error( 'Failed to cancel SHOPLINE payment: ' . $response->get_error_message(), [
+                'order_id'       => $order->get_id(),
+                'trade_order_id' => $trade_order_id,
+            ] );
+            return;
+        }
+
+        $status = '';
+        if ( isset( $response['status'] ) && is_string( $response['status'] ) ) {
+            $status = $this->normalize_status( $response['status'] );
+        }
+
+        if ( '' !== $status ) {
+            $order->update_meta_data( YSOrderMeta::PAYMENT_STATUS, $status );
+        }
+
+        $order->add_order_note( __( 'SHOPLINE payment cancel request sent.', 'ys-shopline-via-woocommerce' ) );
+        $order->save();
     }
 
     /**
@@ -313,22 +383,6 @@ final class YSStatusManager {
         }
 
         return str_starts_with( $payment_method, 'ys_shopline_' );
-    }
-
-    /**
-     * Build API client for the order.
-     *
-     * @param \WC_Order $order Order object.
-     * @return YSShoplineClient
-     */
-    private function get_api_client( \WC_Order $order ): YSShoplineClient {
-        $client = new YSShoplineClient();
-
-        if ( ! $client->has_credentials() ) {
-            throw new \RuntimeException( __( 'SHOPLINE API credentials are not configured.', 'ys-shopline-via-woocommerce' ) );
-        }
-
-        return $client;
     }
 
     /**

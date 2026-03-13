@@ -2,6 +2,8 @@
 /**
  * API class for YS Shopline Payment.
  *
+ * 對外維持 array|WP_Error 契約，內部委託 YSShoplineRequester 執行 HTTP 請求。
+ *
  * @package YangSheep\ShoplinePayment\Api
  */
 
@@ -9,6 +11,8 @@ namespace YangSheep\ShoplinePayment\Api;
 
 defined( 'ABSPATH' ) || exit;
 
+use YangSheep\ShoplinePayment\DTOs\YSSessionDTO;
+use YangSheep\ShoplinePayment\DTOs\YSPaymentDTO;
 use YangSheep\ShoplinePayment\Utils\YSLogger;
 use WP_Error;
 
@@ -20,190 +24,55 @@ use WP_Error;
 class YSApi {
 
     /**
-     * Merchant ID.
+     * HTTP 請求器
      *
-     * @var string
+     * @var YSShoplineRequester
      */
-    private $merchant_id;
-
-    /**
-     * API Key.
-     *
-     * @var string
-     */
-    private $api_key;
-
-    /**
-     * Test mode flag.
-     *
-     * @var bool
-     */
-    private $is_test_mode;
-
-    /**
-     * API base URL.
-     *
-     * @var string
-     */
-    private $api_url;
+    private $requester;
 
     /**
      * Constructor.
      *
-     * @param string $merchant_id  Merchant ID.
-     * @param string $api_key      API Key.
-     * @param bool   $is_test_mode Test mode flag.
+     * 所有參數均為 optional，預設從 Requester 的 option 讀取。
+     *
+     * @param string|null $merchant_id  Merchant ID.
+     * @param string|null $api_key      API Key.
+     * @param bool|null   $is_test_mode Test mode flag.
      */
-    public function __construct( $merchant_id, $api_key, $is_test_mode = false ) {
-        $this->merchant_id  = $merchant_id;
-        $this->api_key      = $api_key;
-        $this->is_test_mode = $is_test_mode;
-        $this->api_url      = $is_test_mode
-            ? 'https://api-sandbox.shoplinepayments.com/api/v1'
-            : 'https://api.shoplinepayments.com/api/v1';
+    public function __construct( $merchant_id = null, $api_key = null, $is_test_mode = null ) {
+        $this->requester = new YSShoplineRequester( $is_test_mode, $merchant_id, $api_key );
     }
 
     /**
-     * Send request to Shopline API.
+     * 發送 API 請求並將 Exception 映射為 WP_Error。
      *
-     * @param string $endpoint API endpoint.
-     * @param array  $data     Request data.
-     * @param string $method   HTTP method.
+     * @param string $endpoint       API 端點
+     * @param array  $data           請求資料
+     * @param string $method         HTTP 方法
+     * @param string $idempotent_key 冪等鍵
      * @return array|WP_Error
      */
     private function request( $endpoint, $data = array(), $method = 'POST', $idempotent_key = '' ) {
-        $url = $this->api_url . $endpoint;
-
-        $request_id = $this->generate_request_id();
-
-        $headers = array(
-            'Content-Type' => 'application/json',
-            'merchantId'   => $this->merchant_id,
-            'apiKey'       => $this->api_key,
-            'requestId'    => $request_id,
-        );
-
-        if ( '' !== $idempotent_key ) {
-            $headers['idempotentKey'] = substr( $idempotent_key, 0, 32 );
-        }
-
-        $args = array(
-            'method'  => $method,
-            'headers' => $headers,
-            'timeout' => 45,
-        );
-
-        if ( ! empty( $data ) && 'GET' !== $method ) {
-            $args['body'] = wp_json_encode( $data );
-        }
-
-        // 記錄簡要資訊
-        YSLogger::debug( "API Request to $url", array(
-            'method'     => $method,
-            'request_id' => $request_id,
-        ) );
-
-        // 記錄完整請求資料（用於除錯 1999 錯誤）
-        YSLogger::debug( 'API Request full data', array(
-            'endpoint'             => $endpoint,
-            'data_json'            => wp_json_encode( $data ),
-            'paySession_type'      => isset( $data['paySession'] ) ? gettype( $data['paySession'] ) : 'not_set',
-            'paySession_is_json'   => isset( $data['paySession'] ) ? ( json_decode( $data['paySession'] ) !== null ? 'yes' : 'no' ) : 'not_set',
-        ) );
-
-        $response = wp_remote_request( $url, $args );
-
-        if ( is_wp_error( $response ) ) {
-            YSLogger::error( 'API Request Error: ' . $response->get_error_message() );
-            return $response;
-        }
-
-        $body = wp_remote_retrieve_body( $response );
-        $code = wp_remote_retrieve_response_code( $response );
-
-        YSLogger::debug( "API Response ($code)", array(
-            'request_id' => $request_id,
-            'body'       => $body,
-        ) );
-
-        $decoded_body = json_decode( $body, true );
-
-        // 驗證 JSON 解析結果
-        if ( null === $decoded_body && '' !== $body ) {
-            YSLogger::error( 'API Response: JSON decode failed', array(
-                'request_id'   => $request_id,
-                'http_code'    => $code,
-                'body_preview' => substr( $body, 0, 200 ),
-            ) );
-            return new WP_Error( 'json_decode_error', __( 'API 回應格式異常，請稍後重試。', 'ys-shopline-via-woocommerce' ) );
-        }
-
-        if ( empty( $decoded_body ) || ! is_array( $decoded_body ) ) {
-            YSLogger::error( 'API Response: Empty or invalid response body', array(
-                'request_id' => $request_id,
-                'http_code'  => $code,
-            ) );
-            return new WP_Error( 'empty_response', __( 'API 回應為空，請稍後重試。', 'ys-shopline-via-woocommerce' ) );
-        }
-
-        // SHOPLINE 有時會在 400 錯誤中仍然返回有效的交易資訊
-        // 如果有 tradeOrderId 或 nextAction，視為成功（部分成功）
-        $has_trade_info = isset( $decoded_body['tradeOrderId'] ) || isset( $decoded_body['nextAction'] );
-
-        if ( $code >= 400 && ! $has_trade_info ) {
-            // SHOPLINE API 使用 'msg' 而非 'message'
-            $error_message = isset( $decoded_body['msg'] ) ? $decoded_body['msg'] : ( isset( $decoded_body['message'] ) ? $decoded_body['message'] : "API request failed with code $code" );
-            $error_code    = isset( $decoded_body['code'] ) ? $decoded_body['code'] : 'api_error';
-
-            // 1999 是 SHOPLINE 內部伺服器錯誤，提供更多資訊給用戶
-            if ( '1999' === $error_code ) {
-                $error_message = __( 'SHOPLINE 伺服器錯誤 (1999)。請稍後重試或聯繫客服。', 'ys-shopline-via-woocommerce' );
-                YSLogger::error( 'SHOPLINE Server Error 1999 - 可能需要聯繫 SHOPLINE 技術支援', array(
-                    'http_code'  => $code,
-                    'request_id' => $request_id,
-                    'endpoint'   => $endpoint,
-                    'response'   => $decoded_body,
-                    'hint'       => '這通常是 SHOPLINE 內部處理錯誤，可能與 3DS 驗證流程有關',
-                ) );
-            } else {
-                YSLogger::error( "API Error: $error_message (Code: $error_code)", array(
-                    'http_code' => $code,
-                    'response'  => $decoded_body,
-                ) );
+        try {
+            if ( 'GET' === $method ) {
+                return $this->requester->get( $endpoint, $data );
             }
 
-            return new WP_Error( $error_code, $error_message );
+            return $this->requester->post( $endpoint, $data, $idempotent_key );
+        } catch ( YSApiPartialSuccessException $e ) {
+            // 400 但有 tradeOrderId / nextAction → 回傳 body 繼續處理（3DS 等流程）
+            return $e->get_response_body();
+        } catch ( YSApiException $e ) {
+            // Requester 的結構化錯誤（攜帶精確 error code：http_request_failed / json_decode_error / empty_response / 1999 / …）
+            return new WP_Error( $e->get_api_code(), $e->getMessage() );
+        } catch ( \Throwable $e ) {
+            // 未預期的錯誤（TypeError 等）— 不對外洩漏內部訊息
+            YSLogger::error( 'API 未預期錯誤: ' . $e->getMessage(), [
+                'endpoint' => $endpoint,
+                'trace'    => $e->getTraceAsString(),
+            ] );
+            return new WP_Error( 'api_error', __( '付款系統發生錯誤，請稍後重試。', 'ys-shopline-via-woocommerce' ) );
         }
-
-        // 即使是 400 錯誤，如果有交易資訊，記錄警告但繼續處理
-        if ( $code >= 400 && $has_trade_info ) {
-            YSLogger::warning( 'API returned error code but has trade info', array(
-                'http_code'    => $code,
-                'error_code'   => isset( $decoded_body['code'] ) ? $decoded_body['code'] : 'none',
-                'error_msg'    => isset( $decoded_body['msg'] ) ? $decoded_body['msg'] : 'none',
-                'tradeOrderId' => isset( $decoded_body['tradeOrderId'] ) ? $decoded_body['tradeOrderId'] : 'none',
-                'has_nextAction' => isset( $decoded_body['nextAction'] ) ? 'yes' : 'no',
-            ) );
-        }
-
-        // 檢查是否有 nextAction（即使 HTTP 200，也要記錄成功資訊）
-        YSLogger::debug( 'API Success', array(
-            'http_code'      => $code,
-            'has_nextAction' => isset( $decoded_body['nextAction'] ) ? 'yes' : 'no',
-            'status'         => isset( $decoded_body['status'] ) ? $decoded_body['status'] : 'unknown',
-            'tradeOrderId'   => isset( $decoded_body['tradeOrderId'] ) ? $decoded_body['tradeOrderId'] : 'none',
-        ) );
-
-        return $decoded_body;
-    }
-
-    /**
-     * Generate unique request ID.
-     *
-     * @return string
-     */
-    private function generate_request_id() {
-        return round( microtime( true ) * 1000 ) . wp_rand( 1000, 9999 );
     }
 
     /**
@@ -228,26 +97,6 @@ class YSApi {
     }
 
     /**
-     * Capture payment.
-     *
-     * @param array $data Capture data.
-     * @return array|WP_Error
-     */
-    public function capture_payment( $data ) {
-        return $this->request( '/trade/payment/capture', $data );
-    }
-
-    /**
-     * Cancel payment.
-     *
-     * @param array $data Cancel data.
-     * @return array|WP_Error
-     */
-    public function cancel_payment( $data ) {
-        return $this->request( '/trade/payment/cancel', $data );
-    }
-
-    /**
      * Create refund.
      *
      * @param array $data Refund data.
@@ -255,16 +104,6 @@ class YSApi {
      */
     public function create_refund( $data ) {
         return $this->request( '/trade/refund/create', $data );
-    }
-
-    /**
-     * Get refund.
-     *
-     * @param string $refund_order_id Refund order ID.
-     * @return array|WP_Error
-     */
-    public function get_refund( $refund_order_id ) {
-        return $this->request( '/trade/refund/get', array( 'refundOrderId' => $refund_order_id ) );
     }
 
     /**
@@ -328,47 +167,75 @@ class YSApi {
         ) );
     }
 
+    // ==========================================
+    // Query 方法
+    // ==========================================
+
     /**
-     * Check API credentials.
+     * 查詢結帳交易 Session
      *
-     * @return bool
+     * @param string $session_id Session ID
+     * @return YSSessionDTO|WP_Error
      */
-    public function check_credentials() {
-        if ( empty( $this->merchant_id ) || empty( $this->api_key ) ) {
-            return false;
-        }
+    public function query_session( $session_id ) {
+        $response = $this->request( '/trade/sessions/query', array( 'sessionId' => $session_id ) );
 
-        // Try a simple API call to verify credentials
-        $response = $this->get_customer_token( 'test_' . time() );
-
-        // We expect an error since the customer doesn't exist,
-        // but we should get an API response rather than a connection error
         if ( is_wp_error( $response ) ) {
-            $error_code = $response->get_error_code();
-            // Connection errors indicate invalid credentials or network issues
-            if ( in_array( $error_code, array( 'http_request_failed', 'api_error' ), true ) ) {
-                return false;
-            }
+            return $response;
         }
 
-        return true;
+        try {
+            return YSSessionDTO::from_response( $response );
+        } catch ( \Throwable $e ) {
+            return new WP_Error( 'dto_error', $e->getMessage() );
+        }
     }
 
     /**
-     * Get API URL.
+     * 查詢付款交易（回傳 DTO）
      *
-     * @return string
+     * @param string $trade_order_id 交易訂單 ID
+     * @return YSPaymentDTO|WP_Error
      */
-    public function get_api_url() {
-        return $this->api_url;
+    public function query_payment( $trade_order_id ) {
+        $response = $this->get_payment_trade( $trade_order_id );
+
+        if ( is_wp_error( $response ) ) {
+            return $response;
+        }
+
+        try {
+            return YSPaymentDTO::from_response( $response );
+        } catch ( \Throwable $e ) {
+            return new WP_Error( 'dto_error', $e->getMessage() );
+        }
     }
 
     /**
-     * Is test mode.
+     * 以指定 ID 取消付款交易
+     *
+     * @param string $trade_order_id     交易訂單 ID
+     * @param string $reference_order_id 特店訂單號
+     * @return array|WP_Error
+     */
+    public function cancel_payment_by_ids( $trade_order_id, $reference_order_id ) {
+        $data = array(
+            'tradeOrderId' => $trade_order_id,
+        );
+
+        if ( '' !== $reference_order_id ) {
+            $data['referenceOrderId'] = $reference_order_id;
+        }
+
+        return $this->request( '/trade/payment/cancel', $data );
+    }
+
+    /**
+     * 檢查 API 憑證是否已設定
      *
      * @return bool
      */
-    public function is_test_mode() {
-        return $this->is_test_mode;
+    public function has_credentials() {
+        return $this->requester->has_credentials();
     }
 }

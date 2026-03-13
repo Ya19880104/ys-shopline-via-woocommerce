@@ -69,13 +69,14 @@ final class YSShoplineRequester {
     /**
      * 發送 POST 請求
      *
-     * @param string               $endpoint API 端點
-     * @param array<string, mixed> $data     請求資料
+     * @param string               $endpoint       API 端點
+     * @param array<string, mixed> $data           請求資料
+     * @param string               $idempotent_key 冪等鍵（同一筆重送相同 key，API 只處理一次）
      * @return array<string, mixed>
      * @throws \Exception 如果請求失敗
      */
-    public function post( string $endpoint, array $data = [] ): array {
-        return $this->request( $endpoint, $data, 'POST' );
+    public function post( string $endpoint, array $data = [], string $idempotent_key = '' ): array {
+        return $this->request( $endpoint, $data, 'POST', $idempotent_key );
     }
 
     /**
@@ -99,10 +100,10 @@ final class YSShoplineRequester {
      * @return array<string, mixed>
      * @throws \Exception 如果請求失敗
      */
-    private function request( string $endpoint, array $data, string $method ): array {
+    private function request( string $endpoint, array $data, string $method, string $idempotent_key = '' ): array {
         $url        = $this->get_api_url() . $endpoint;
         $request_id = $this->generate_request_id();
-        $headers    = $this->build_headers( $request_id );
+        $headers    = $this->build_headers( $request_id, $idempotent_key );
 
         $args = [
             'method'  => $method,
@@ -136,7 +137,7 @@ final class YSShoplineRequester {
         if ( is_wp_error( $response ) ) {
             $error_message = $response->get_error_message();
             YSLogger::error( "API 請求錯誤: {$error_message}", [ 'request_id' => $request_id ] );
-            throw new \Exception( "API 請求失敗: {$error_message}" );
+            throw new YSApiException( 'http_request_failed', "API 請求失敗: {$error_message}" );
         }
 
         $body = wp_remote_retrieve_body( $response );
@@ -150,21 +151,55 @@ final class YSShoplineRequester {
         $decoded_body = json_decode( $body, true );
 
         if ( json_last_error() !== JSON_ERROR_NONE ) {
-            throw new \Exception( "無法解析 API 回應: {$body}" );
+            throw new YSApiException( 'json_decode_error', 'API 回應格式異常，請稍後重試。' );
+        }
+
+        // 防護：確保解析結果為陣列
+        if ( empty( $decoded_body ) || ! is_array( $decoded_body ) ) {
+            YSLogger::error( 'API 回應為空或非陣列', [
+                'request_id' => $request_id,
+                'http_code'  => $code,
+            ] );
+            throw new YSApiException( 'empty_response', 'API 回應為空，請稍後重試。' );
         }
 
         // 處理 HTTP 錯誤狀態碼
         if ( $code >= 400 ) {
+            $has_trade_info = isset( $decoded_body['tradeOrderId'] ) || isset( $decoded_body['nextAction'] );
+
+            // 400 但有 tradeOrderId 或 nextAction → 部分成功（3DS 等流程需要繼續）
+            if ( $has_trade_info ) {
+                YSLogger::warning( "API 回應 {$code} 但含交易資訊，視為部分成功", [
+                    'request_id'     => $request_id,
+                    'http_code'      => $code,
+                    'tradeOrderId'   => $decoded_body['tradeOrderId'] ?? 'none',
+                    'has_nextAction' => isset( $decoded_body['nextAction'] ) ? 'yes' : 'no',
+                ] );
+
+                throw new YSApiPartialSuccessException( $decoded_body, $decoded_body['msg'] ?? '', $code );
+            }
+
             $error_message = $decoded_body['msg'] ?? $decoded_body['message'] ?? "API 請求失敗，狀態碼: {$code}";
-            $error_code    = $decoded_body['code'] ?? 'api_error';
+            $error_code    = (string) ( $decoded_body['code'] ?? 'api_error' );
 
-            YSLogger::error( "API 錯誤: {$error_message}", [
-                'request_id' => $request_id,
-                'code'       => $error_code,
-                'http_code'  => $code,
-            ] );
+            // 1999 是 SHOPLINE 內部伺服器錯誤，提供更有意義的訊息
+            if ( '1999' === $error_code ) {
+                $error_message = 'SHOPLINE 伺服器錯誤 (1999)。請稍後重試或聯繫客服。';
+                YSLogger::error( 'SHOPLINE Server Error 1999', [
+                    'request_id' => $request_id,
+                    'http_code'  => $code,
+                    'response'   => $decoded_body,
+                    'hint'       => '這通常是 SHOPLINE 內部處理錯誤，可能與 3DS 驗證流程有關',
+                ] );
+            } else {
+                YSLogger::error( "API 錯誤: {$error_message}", [
+                    'request_id' => $request_id,
+                    'code'       => $error_code,
+                    'http_code'  => $code,
+                ] );
+            }
 
-            throw new \Exception( $error_message );
+            throw new YSApiException( $error_code, $error_message, $code );
         }
 
         return $decoded_body;
@@ -176,13 +211,17 @@ final class YSShoplineRequester {
      * @param string $request_id 請求 ID
      * @return array<string, string>
      */
-    private function build_headers( string $request_id ): array {
+    private function build_headers( string $request_id, string $idempotent_key = '' ): array {
         $headers = [
             'Content-Type' => 'application/json',
             'merchantId'   => $this->merchant_id,
             'apiKey'       => $this->api_key,
             'requestId'    => $request_id,
         ];
+
+        if ( '' !== $idempotent_key ) {
+            $headers['idempotentKey'] = substr( $idempotent_key, 0, 32 );
+        }
 
         // 平台特店需要加入 platformId
         if ( $this->platform_id ) {
