@@ -111,8 +111,12 @@ final class YSShoplineRequester {
             'timeout' => self::TIMEOUT,
         ];
 
-        if ( ! empty( $data ) && 'GET' !== $method ) {
-            $args['body'] = wp_json_encode( $data );
+        if ( ! empty( $data ) ) {
+            if ( 'GET' === $method ) {
+                $url = add_query_arg( $data, $url );
+            } else {
+                $args['body'] = wp_json_encode( $data );
+            }
         }
 
         YSLogger::debug( "API 請求: {$method} {$url}", [
@@ -148,6 +152,15 @@ final class YSShoplineRequester {
             'body'       => $body,
         ] );
 
+        // 空字串 body → empty_response（不進 json_decode 以保留錯誤碼契約）
+        if ( '' === $body ) {
+            YSLogger::error( 'API 回應為空', [
+                'request_id' => $request_id,
+                'http_code'  => $code,
+            ] );
+            throw new YSApiException( 'empty_response', 'API 回應為空，請稍後重試。' );
+        }
+
         $decoded_body = json_decode( $body, true );
 
         if ( json_last_error() !== JSON_ERROR_NONE ) {
@@ -155,7 +168,7 @@ final class YSShoplineRequester {
         }
 
         // 防護：確保解析結果為陣列
-        if ( empty( $decoded_body ) || ! is_array( $decoded_body ) ) {
+        if ( ! is_array( $decoded_body ) || empty( $decoded_body ) ) {
             YSLogger::error( 'API 回應為空或非陣列', [
                 'request_id' => $request_id,
                 'http_code'  => $code,
