@@ -4,7 +4,7 @@
 
 ## 版本資訊
 
-- **目前版本**：3.0.1
+- **目前版本**：3.0.2
 - **PHP 需求**：>= 8.0
 - **WordPress 需求**：>= 6.0
 - **WooCommerce 需求**：7.0 - 9.0
@@ -65,6 +65,13 @@ https://your-domain.com/wp-json/ys-shopline/v1/webhook
 ---
 
 ## 變更紀錄
+
+### 3.0.2 - 2026-03-18
+
+**修正**
+- ATM 虛擬帳號資訊未儲存至訂單 meta，導致感謝頁與訂單內頁無法顯示銀行代碼、帳號、繳費期限
+- `trade.customer_action` webhook 改為提取並儲存 VA 資訊（原本只做 log）
+- Redirect handler 增加 `virtualAccount` fallback 路徑與 warning log
 
 ### 3.0.1 - 2026-03-14
 
