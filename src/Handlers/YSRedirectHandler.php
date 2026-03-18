@@ -254,17 +254,49 @@ class YSRedirectHandler {
         }
         // 其他狀態（CREATED, PROCESSING）暫不處理，等待 Webhook 或用戶重試
 
-        // 補抓 ATM 虛擬帳號資訊（API 回傳 VA 在 payment 物件內）
-        $va_data = $response['payment']['virtualAccount'] ?? null;
-        if ( 'ys_shopline_atm' === $order->get_payment_method() && $va_data ) {
-            if ( ! $order->get_meta( YSOrderMeta::VA_ACCOUNT ) ) {
-                $order->update_meta_data( YSOrderMeta::VA_BANK_CODE, $va_data['recipientBankCode'] ?? '' );
-                $order->update_meta_data( YSOrderMeta::VA_ACCOUNT, $va_data['recipientAccountNum'] ?? '' );
-                $order->update_meta_data( YSOrderMeta::VA_EXPIRE, $va_data['dueDate'] ?? '' );
+        // 補抓 ATM 虛擬帳號資訊
+        if ( 'ys_shopline_atm' === $order->get_payment_method() && ! $order->get_meta( YSOrderMeta::VA_ACCOUNT ) ) {
+            // 嘗試多種路徑取得 VA 資料（API 回傳結構可能不同）
+            $va_data = $response['payment']['virtualAccount']
+                ?? $response['virtualAccount']
+                ?? null;
+
+            if ( $va_data && ! empty( $va_data['recipientAccountNum'] ) ) {
+                $bank_code = $va_data['recipientBankCode'] ?? '';
+                $account   = $va_data['recipientAccountNum'] ?? '';
+                $expire    = $va_data['dueDate'] ?? '';
+
+                $order->update_meta_data( YSOrderMeta::VA_BANK_CODE, $bank_code );
+                $order->update_meta_data( YSOrderMeta::VA_ACCOUNT, $account );
+                $order->update_meta_data( YSOrderMeta::VA_EXPIRE, $expire );
+
+                // 寫入訂單備註
+                $note_parts = array();
+                if ( $bank_code ) {
+                    $note_parts[] = sprintf( __( '銀行代碼：%s', 'ys-shopline-via-woocommerce' ), $bank_code );
+                }
+                $note_parts[] = sprintf( __( '虛擬帳號：%s', 'ys-shopline-via-woocommerce' ), $account );
+                $note_parts[] = sprintf( __( '轉帳金額：%s', 'ys-shopline-via-woocommerce' ), $order->get_formatted_order_total() );
+                if ( $expire ) {
+                    $note_parts[] = sprintf( __( '繳費期限：%s', 'ys-shopline-via-woocommerce' ), $expire );
+                }
+                $order->add_order_note(
+                    __( 'ATM 虛擬帳號已產生', 'ys-shopline-via-woocommerce' ) . "\n" . implode( "\n", $note_parts )
+                );
+
                 $order->save();
 
-                YSLogger::info( 'Redirect handler: ATM VA info supplemented from query', array(
-                    'order_id' => $order->get_id(),
+                YSLogger::info( 'Redirect handler: ATM VA info stored from query', array(
+                    'order_id'  => $order->get_id(),
+                    'bank_code' => $bank_code,
+                    'account'   => $account ? substr( $account, 0, 4 ) . '****' : '',
+                ) );
+            } else {
+                YSLogger::warning( 'Redirect handler: ATM order but no VA data in API response', array(
+                    'order_id'      => $order->get_id(),
+                    'response_keys' => array_keys( $response ),
+                    'payment_keys'  => isset( $response['payment'] ) ? array_keys( $response['payment'] ) : [],
+                    'status'        => $status,
                 ) );
             }
         }

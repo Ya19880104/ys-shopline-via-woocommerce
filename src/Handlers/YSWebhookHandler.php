@@ -211,9 +211,9 @@ final class YSWebhookHandler {
                 $this->handle_trade_processing( $data );
                 break;
 
-            // 等待顧客付款確認
+            // 等待顧客付款確認（ATM 虛擬帳號 Confirm 完成後觸發）
             case 'trade.customer_action':
-                YSLogger::info( '等待顧客付款確認', [ 'data' => $data ] );
+                $this->handle_trade_customer_action( $data );
                 break;
 
             // 綁定付款工具（建立 WC Token）
@@ -431,6 +431,37 @@ final class YSWebhookHandler {
     }
 
     /**
+     * 處理等待顧客付款確認（ATM Confirm 後觸發）
+     *
+     * ATM 付款流程：SDK confirm 後 SHOPLINE 觸發此事件，攜帶虛擬帳號資訊。
+     */
+    private function handle_trade_customer_action( array $data ): void {
+        $trade_order_id = $data['tradeOrderId'] ?? '';
+
+        if ( ! $trade_order_id ) {
+            return;
+        }
+
+        $order = $this->get_order_by_trade_id( $trade_order_id );
+
+        if ( ! $order ) {
+            YSLogger::info( '等待顧客付款確認（找不到訂單）', [ 'trade_order_id' => $trade_order_id ] );
+            return;
+        }
+
+        // 嘗試儲存 ATM 虛擬帳號資訊
+        $this->maybe_store_virtual_account_info( $order, $data );
+
+        $order->update_meta_data( YSOrderMeta::PAYMENT_STATUS, 'CUSTOMER_ACTION' );
+        $order->save();
+
+        YSLogger::info( '等待顧客付款確認', [
+            'order_id'       => $order->get_id(),
+            'trade_order_id' => $trade_order_id,
+        ] );
+    }
+
+    /**
      * 處理付款處理中
      */
     private function handle_trade_processing( array $data ): void {
@@ -449,6 +480,10 @@ final class YSWebhookHandler {
         $order->update_status( 'on-hold', __( 'Shopline payment processing.', 'ys-shopline-via-woocommerce' ) );
         $order->update_meta_data( YSOrderMeta::PAYMENT_STATUS, 'PROCESSING' );
         $order->update_meta_data( YSOrderMeta::PAYMENT_DETAIL, $data );
+
+        // 嘗試儲存 ATM 虛擬帳號資訊
+        $this->maybe_store_virtual_account_info( $order, $data );
+
         $order->save();
     }
 
@@ -631,6 +666,70 @@ final class YSWebhookHandler {
     // ==========================================
     // 輔助方法
     // ==========================================
+
+    /**
+     * 嘗試從 API 回應或 Webhook 資料中提取並儲存 ATM 虛擬帳號資訊。
+     *
+     * 僅在訂單為 ATM 付款方式且尚未儲存帳號時才寫入。
+     * 支援多種資料路徑：payment.virtualAccount 或 virtualAccount（根層級）。
+     *
+     * @param \WC_Order $order 訂單物件
+     * @param array     $data  API 回應或 Webhook 事件資料
+     */
+    private function maybe_store_virtual_account_info( \WC_Order $order, array $data ): void {
+        if ( 'ys_shopline_atm' !== $order->get_payment_method() ) {
+            return;
+        }
+
+        // 已有帳號，不覆蓋
+        if ( $order->get_meta( YSOrderMeta::VA_ACCOUNT ) ) {
+            return;
+        }
+
+        // 嘗試多種路徑取得 VA 資料
+        $va = $data['payment']['virtualAccount']
+            ?? $data['virtualAccount']
+            ?? null;
+
+        if ( ! $va || empty( $va['recipientAccountNum'] ) ) {
+            YSLogger::debug( 'Webhook: ATM 訂單但無虛擬帳號資料', [
+                'order_id'     => $order->get_id(),
+                'data_keys'    => array_keys( $data ),
+                'payment_keys' => isset( $data['payment'] ) ? array_keys( $data['payment'] ) : [],
+            ] );
+            return;
+        }
+
+        $bank_code = $va['recipientBankCode'] ?? '';
+        $account   = $va['recipientAccountNum'] ?? '';
+        $expire    = $va['dueDate'] ?? '';
+
+        $order->update_meta_data( YSOrderMeta::VA_BANK_CODE, $bank_code );
+        $order->update_meta_data( YSOrderMeta::VA_ACCOUNT, $account );
+        $order->update_meta_data( YSOrderMeta::VA_EXPIRE, $expire );
+
+        // 寫入訂單備註
+        $note_parts = [];
+        if ( $bank_code ) {
+            $note_parts[] = sprintf( __( '銀行代碼：%s', 'ys-shopline-via-woocommerce' ), $bank_code );
+        }
+        $note_parts[] = sprintf( __( '虛擬帳號：%s', 'ys-shopline-via-woocommerce' ), $account );
+        $note_parts[] = sprintf( __( '轉帳金額：%s', 'ys-shopline-via-woocommerce' ), $order->get_formatted_order_total() );
+        if ( $expire ) {
+            $note_parts[] = sprintf( __( '繳費期限：%s', 'ys-shopline-via-woocommerce' ), $expire );
+        }
+
+        $order->add_order_note(
+            __( 'ATM 虛擬帳號已產生（Webhook）', 'ys-shopline-via-woocommerce' ) . "\n" . implode( "\n", $note_parts )
+        );
+
+        YSLogger::info( 'Webhook: ATM 虛擬帳號資訊已儲存', [
+            'order_id'  => $order->get_id(),
+            'bank_code' => $bank_code,
+            'account'   => $account ? substr( $account, 0, 4 ) . '****' : '',
+            'expire'    => $expire,
+        ] );
+    }
 
     /**
      * 透過 Trade ID 查詢訂單
