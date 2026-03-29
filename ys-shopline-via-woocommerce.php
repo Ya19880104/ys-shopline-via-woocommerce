@@ -3,7 +3,7 @@
  * Plugin Name: YS Shopline via WooCommerce
  * Plugin URI: https://yangsheep.com.tw
  * Description: Support Shopline Payments for WooCommerce, including HPOS and Subscriptions. Supports Credit Card, ATM, JKOPay, Apple Pay, LINE Pay, and Chailease BNPL.
- * Version: 3.0.2
+ * Version: 3.1.0
  * Author: YangSheep
  * Author URI: https://yangsheep.com.tw
  * Text Domain: ys-shopline-via-woocommerce
@@ -17,7 +17,7 @@
 defined( 'ABSPATH' ) || exit;
 
 // Define plugin constants
-define( 'YS_SHOPLINE_VERSION', '3.0.2' );
+define( 'YS_SHOPLINE_VERSION', '3.1.0' );
 define( 'YS_SHOPLINE_PLUGIN_FILE', __FILE__ );
 define( 'YS_SHOPLINE_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 define( 'YS_SHOPLINE_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
@@ -88,6 +88,16 @@ final class YSShoplinePayment {
      * Initialize hooks.
      */
     private function init_hooks() {
+        // 註冊到 YS Plugin Hub Client（自動更新 + 市集）
+        if ( class_exists( '\YangSheep\PluginHubClient\YSPluginHubClient' ) ) {
+            \YangSheep\PluginHubClient\YSPluginHubClient::register( array(
+                'slug'        => 'ys-shopline-via-woocommerce',
+                'version'     => YS_SHOPLINE_VERSION,
+                'plugin_file' => __FILE__,
+                'name'        => 'YS Shopline Payment',
+            ) );
+        }
+
         // Declare compatibility
         add_action( 'before_woocommerce_init', array( $this, 'declare_compatibility' ) );
 

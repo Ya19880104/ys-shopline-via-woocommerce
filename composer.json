@@ -15,8 +15,15 @@
         }
     },
     "require": {
-        "php": ">=8.0"
+        "php": ">=8.0",
+        "yangsheep/ys-plugin-hub-client": "^2.0"
     },
+    "repositories": [
+        {
+            "type": "path",
+            "url": "../../packages/ys-plugin-hub-client"
+        }
+    ],
     "config": {
         "optimize-autoloader": true
     }
