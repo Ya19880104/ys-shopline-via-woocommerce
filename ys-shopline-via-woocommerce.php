@@ -23,10 +23,24 @@ define( 'YS_SHOPLINE_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 define( 'YS_SHOPLINE_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
 define( 'YS_SHOPLINE_PLUGIN_BASENAME', plugin_basename( __FILE__ ) );
 
-// Load Composer autoloader
+// Composer autoloader（載入 hub-client 等依賴）
 if ( file_exists( YS_SHOPLINE_PLUGIN_DIR . 'vendor/autoload.php' ) ) {
     require_once YS_SHOPLINE_PLUGIN_DIR . 'vendor/autoload.php';
 }
+
+// 永遠註冊 Fallback PSR-4（即使 vendor 存在，也確保自身 namespace 可載入）
+spl_autoload_register( function ( $class ) {
+    $prefix   = 'YangSheep\\ShoplinePayment\\';
+    $base_dir = YS_SHOPLINE_PLUGIN_DIR . 'src/';
+    $len      = strlen( $prefix );
+    if ( strncmp( $prefix, $class, $len ) !== 0 ) {
+        return;
+    }
+    $file = $base_dir . str_replace( '\\', '/', substr( $class, $len ) ) . '.php';
+    if ( file_exists( $file ) ) {
+        require_once $file;
+    }
+} );
 
 // 停用時清理排程
 register_deactivation_hook( __FILE__, function () {
