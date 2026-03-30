@@ -55,3 +55,7 @@ Thumbs.db
 *.bak
 *.swp
 tmpclaude-*
+
+# Vendor（排除但保留 hub-client）
+!vendor/autoload.php
+!vendor/yangsheep/
