@@ -90,6 +90,12 @@ jQuery(function ($) {
     var pendingAjax = {};
 
     /**
+     * Generation counter per gateway — incremented on clear, checked after async SDK init.
+     * Prevents stale ShoplinePayments() callbacks from rendering into a cleared container.
+     */
+    var sdkGeneration = {};
+
+    /**
      * Main Shopline Checkout Handler
      */
     var ShoplineCheckout = {
@@ -203,6 +209,7 @@ jQuery(function ($) {
                 // 有舊實例或進行中的請求 → 清除
                 if (paymentInstances[existingId] || pendingAjax[existingId]) {
                     console.log('[YS Shopline] Clearing conflicting SDK instance:', existingId, '→', targetGatewayId);
+                    sdkGeneration[existingId] = (sdkGeneration[existingId] || 0) + 1;
                     if (pendingAjax[existingId]) {
                         pendingAjax[existingId].abort();
                         delete pendingAjax[existingId];
@@ -246,6 +253,9 @@ jQuery(function ($) {
          */
         clearAllInstances: function () {
             $.each(GATEWAY_CONFIG, function (gatewayId, config) {
+                // Increment generation to invalidate in-flight ShoplinePayments() calls
+                sdkGeneration[gatewayId] = (sdkGeneration[gatewayId] || 0) + 1;
+
                 // Abort pending AJAX request to prevent stale callback
                 if (pendingAjax[gatewayId]) {
                     pendingAjax[gatewayId].abort();
@@ -404,6 +414,9 @@ jQuery(function ($) {
                 return;
             }
 
+            // Capture generation before async work
+            var myGeneration = sdkGeneration[gatewayId] || 0;
+
             // Clear container
             $container.empty();
 
@@ -480,6 +493,14 @@ jQuery(function ($) {
 
                 // Initialize SDK
                 var result = await ShoplinePayments(options);
+
+                // Stale check: if generation changed while awaiting, this init is outdated
+                if ((sdkGeneration[gatewayId] || 0) !== myGeneration) {
+                    console.log('[YS Shopline] Stale SDK result discarded for:', gatewayId,
+                        '(gen', myGeneration, '→', sdkGeneration[gatewayId], ')');
+                    sdkInitializing[gatewayId] = false;
+                    return;
+                }
 
                 console.log('[YS Shopline] SDK Result:', result);
                 console.log('[YS Shopline] SDK Result payment object:', result.payment);
