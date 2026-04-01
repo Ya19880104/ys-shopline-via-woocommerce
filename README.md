@@ -4,7 +4,7 @@
 
 ## 版本資訊
 
-- **目前版本**：3.3.1
+- **目前版本**：3.3.2
 - **PHP 需求**：>= 8.0
 - **WordPress 需求**：>= 6.0
 - **WooCommerce 需求**：7.0 - 9.0
@@ -65,6 +65,13 @@ https://your-domain.com/wp-json/ys-shopline/v1/webhook
 ---
 
 ## 變更紀錄
+
+### 3.3.2 - 2026-04-02
+
+**改進**
+- Apple Pay 不支援裝置改顯示友善提示（取代紅色 SDK 錯誤），並對 1100/2009/4200/4204 等錯誤碼提供中文說明
+- 消除切換付款方式的競態風險：同 gateway 已有 instance 時 `onPaymentMethodChange()` 直接跳過
+- order-pay 頁面不再註冊全域 `change`/`updated_checkout` listener，消除雙 handler 衝突
 
 ### 3.3.1 - 2026-04-02
 

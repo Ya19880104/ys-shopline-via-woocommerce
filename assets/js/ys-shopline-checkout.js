@@ -114,14 +114,17 @@ jQuery(function ($) {
                 console.log('[YS Shopline] SDK already loaded');
             }
 
-            // Bind events
-            $(document.body).on('change', 'input[name="payment_method"]', function () {
-                self.onPaymentMethodChange();
-            });
+            // Bind events — 只在一般結帳頁（非 order-pay）
+            // order-pay 由 PayForOrderHandler 獨立管理，避免雙重 handler
+            if (window.location.pathname.indexOf('order-pay') === -1) {
+                $(document.body).on('change', 'input[name="payment_method"]', function () {
+                    self.onPaymentMethodChange();
+                });
 
-            $(document.body).on('updated_checkout', function () {
-                self.onUpdatedCheckout();
-            });
+                $(document.body).on('updated_checkout', function () {
+                    self.onUpdatedCheckout();
+                });
+            }
 
             // 重置提交 flag：WC 在錯誤或頁面更新時觸發
             $(document.body).on('checkout_error updated_checkout', function () {
@@ -184,6 +187,10 @@ jQuery(function ($) {
             var gatewayId = this.getSelectedGateway();
 
             if (gatewayId) {
+                // 同一個 gateway 且已有 instance → 不需重新初始化
+                if (gatewayId === activeGateway && paymentInstances[gatewayId]) {
+                    return;
+                }
                 this.clearConflictingInstances(gatewayId);
                 activeGateway = gatewayId;
                 this.initSDK(gatewayId);
@@ -515,15 +522,15 @@ jQuery(function ($) {
                     sdkInitializing[gatewayId] = false;
                     $container.data('sdk-initializing', false);
 
-                    // Provide helpful error messages based on error code
-                    var errorMessage = result.error.message || 'Unknown error';
                     var errorCode = result.error.code;
+                    var friendlyMsg = self.getFriendlySDKError(errorCode, gatewayConfig.paymentMethod);
 
-                    if (errorCode === 2009) {
-                        errorMessage = '認證失敗 (Access Denied)。請確認：1) merchantId 與 clientKey 配對正確 2) 網域已在 SHOPLINE 後台設定白名單';
+                    if (friendlyMsg) {
+                        self.showFriendlyNotice($container, friendlyMsg);
+                    } else {
+                        var errorMessage = result.error.message || 'Unknown error';
+                        self.showError($container, errorMessage + (errorCode ? ' (' + errorCode + ')' : ''));
                     }
-
-                    self.showError($container, errorMessage + (errorCode ? ' (' + errorCode + ')' : ''));
                     return;
                 }
 
@@ -933,6 +940,36 @@ jQuery(function ($) {
                 '<div class="woocommerce-error ys-shopline-error" role="alert" style="margin: 10px 0;">' +
                 '<strong>' + (ys_shopline_params.i18n.error_prefix || 'Error') + ':</strong> ' +
                 this.escapeHtml(message) +
+                '</div>'
+            );
+        },
+
+        /**
+         * 根據 SDK 錯誤碼回傳友善訊息（null 表示無對應）
+         */
+        getFriendlySDKError: function (code, paymentMethod) {
+            var map = {
+                1100: paymentMethod === 'ApplePay'
+                    ? '此裝置或瀏覽器不支援 Apple Pay。\n請使用 iPhone、iPad 或 Mac 上的 Safari 瀏覽器，並確認已設定 Apple Pay 錢包。'
+                    : '此裝置不支援此付款方式，請選擇其他付款方式。',
+                2009: '認證失敗，請聯繫商家確認金流設定。',
+                4200: '此付款方式尚未啟用，請聯繫商家。',
+                4204: '此付款方式目前不支援，請選擇其他付款方式。'
+            };
+            return map[code] || null;
+        },
+
+        /**
+         * 顯示友善提示（非紅色錯誤，而是資訊提示）
+         */
+        showFriendlyNotice: function ($container, message) {
+            $container.html(
+                '<div class="ys-shopline-notice" style="' +
+                    'text-align:center;padding:20px 16px;color:#666;' +
+                    'background:#f9f9f9;border:1px solid #e0e0e0;border-radius:6px;' +
+                    'font-size:14px;line-height:1.6;">' +
+                    '<div style="font-size:28px;margin-bottom:8px;">⚠️</div>' +
+                    '<p style="margin:0;white-space:pre-line;">' + this.escapeHtml(message) + '</p>' +
                 '</div>'
             );
         },
