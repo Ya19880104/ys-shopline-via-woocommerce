@@ -4,7 +4,7 @@
 
 ## 版本資訊
 
-- **目前版本**：3.2.9
+- **目前版本**：3.3.1
 - **PHP 需求**：>= 8.0
 - **WordPress 需求**：>= 6.0
 - **WooCommerce 需求**：7.0 - 9.0
@@ -25,7 +25,7 @@
 ## 主要功能
 
 - **HPOS 相容**：完全支援 WooCommerce High-Performance Order Storage
-- **Block Checkout**：支援 WooCommerce Block 結帳頁
+- **Block Checkout**：已註冊但尚未完整支援（目前僅支援傳統結帳頁）
 - **訂閱支援**：與 WooCommerce Subscriptions 整合
 - **儲存卡管理**：My Account 頁面管理已儲存的付款工具
 - **Webhook 整合**：自動接收 Shopline 付款狀態通知
@@ -65,6 +65,14 @@ https://your-domain.com/wp-json/ys-shopline/v1/webhook
 ---
 
 ## 變更紀錄
+
+### 3.3.1 - 2026-04-02
+
+**修正**
+- 訪客 order-pay 頁面補傳 `order_key`，修正「無權存取此訂單」與 SDK 金額為 0 的問題
+- Pay-for-order 切換付款方式加入 `clearConflictingInstances()`，防止同類型 SDK 衝突
+- Block Checkout 暫時停用（`canMakePayment: false`），因尚未整合 SDK paySession 流程
+- README 修正 Block Checkout 支援狀態描述
 
 ### 3.2.9 - 2026-04-01
 

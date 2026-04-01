@@ -335,10 +335,14 @@ jQuery(function ($) {
                 gateway: gatewayId
             };
 
-            // Pay-for-order 頁面：傳遞 order_id 讓後端取得正確金額
+            // Pay-for-order 頁面：傳遞 order_id + order_key 讓後端取得正確金額與驗證權限
             var orderPayMatch = window.location.pathname.match(/order-pay\/(\d+)/);
             if (orderPayMatch) {
                 ajaxData.order_id = orderPayMatch[1];
+                var urlParams = new URLSearchParams(window.location.search);
+                if (urlParams.get('key')) {
+                    ajaxData.order_key = urlParams.get('key');
+                }
             }
 
             // Abort any previous pending request for this gateway
@@ -1152,6 +1156,7 @@ jQuery(function ($) {
             $form.on('change', 'input[name="payment_method"]', function () {
                 var newGatewayId = $(this).val();
                 if (newGatewayId && GATEWAY_CONFIG[newGatewayId]) {
+                    ShoplineCheckout.clearConflictingInstances(newGatewayId);
                     ShoplineCheckout.initSDK(newGatewayId);
                 }
             });
@@ -1241,10 +1246,12 @@ jQuery(function ($) {
                     ? JSON.stringify(result.paySession)
                     : result.paySession;
 
+                var urlParams = new URLSearchParams(window.location.search);
                 var ajaxData = {
                     action: 'ys_shopline_pay_for_order',
                     nonce: ys_shopline_params.nonce,
                     order_id: self.getOrderId(),
+                    order_key: urlParams.get('key') || '',
                     payment_method: gatewayId,
                     ys_shopline_pay_session: paySessionValue,
                     ys_shopline_bind_card_enabled: ShoplineCheckout.isBindCardEnabled(gatewayId) ? '1' : '0'

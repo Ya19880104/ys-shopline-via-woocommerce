@@ -90,7 +90,9 @@
             content: createElement( Content, null ),
             edit: createElement( Edit, null ),
             canMakePayment: function () {
-                return true;
+                // Block Checkout 尚未整合 SDK paySession 流程，暫時停用
+                // TODO: 整合 PaymentMethodInterface 的 paymentProcessing 事件
+                return false;
             },
             ariaLabel: title,
             supports: {
