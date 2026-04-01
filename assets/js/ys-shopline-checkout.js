@@ -131,8 +131,9 @@ jQuery(function ($) {
             // Bind checkout events
             this.bindCheckoutEvents();
 
-            // Init on load if Shopline gateway already selected
-            this.onPaymentMethodChange();
+            // 不在此處呼叫 onPaymentMethodChange()：
+            // WooCommerce 結帳頁一定會觸發 updated_checkout 事件，
+            // 由 onUpdatedCheckout() 統一初始化 SDK，避免競態條件導致重複渲染。
 
             console.log('[YS Shopline] Checkout handler initialized');
         },
