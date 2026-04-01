@@ -4,7 +4,7 @@
 
 ## 版本資訊
 
-- **目前版本**：3.0.2
+- **目前版本**：3.2.7
 - **PHP 需求**：>= 8.0
 - **WordPress 需求**：>= 6.0
 - **WooCommerce 需求**：7.0 - 9.0
@@ -65,6 +65,13 @@ https://your-domain.com/wp-json/ys-shopline/v1/webhook
 ---
 
 ## 變更紀錄
+
+### 3.2.7 - 2026-04-01
+
+**修正**
+- 修正結帳頁首次載入時 SDK 重複渲染（信用卡、Apple Pay 等所有付款方式出現兩次）
+- 新增 `pendingAjax` 追蹤機制，`updated_checkout` 時自動 abort 飛行中的 AJAX 請求
+- `renderPayment()` 加入 final guard，防止競態條件下的重複初始化
 
 ### 3.0.2 - 2026-03-18
 

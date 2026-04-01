@@ -85,6 +85,11 @@ jQuery(function ($) {
     var sdkInitializing = {};
 
     /**
+     * Pending AJAX requests (for abort on clearAllInstances)
+     */
+    var pendingAjax = {};
+
+    /**
      * Main Shopline Checkout Handler
      */
     var ShoplineCheckout = {
@@ -195,9 +200,13 @@ jQuery(function ($) {
                 if (existingId === targetGatewayId) return; // 跳過自己
                 if (existingConfig.paymentMethod !== targetMethod) return; // 不同類型不衝突
 
-                // 有舊實例存在 → 清除
-                if (paymentInstances[existingId]) {
+                // 有舊實例或進行中的請求 → 清除
+                if (paymentInstances[existingId] || pendingAjax[existingId]) {
                     console.log('[YS Shopline] Clearing conflicting SDK instance:', existingId, '→', targetGatewayId);
+                    if (pendingAjax[existingId]) {
+                        pendingAjax[existingId].abort();
+                        delete pendingAjax[existingId];
+                    }
                     delete paymentInstances[existingId];
                     sdkInitializing[existingId] = false;
 
@@ -237,6 +246,12 @@ jQuery(function ($) {
          */
         clearAllInstances: function () {
             $.each(GATEWAY_CONFIG, function (gatewayId, config) {
+                // Abort pending AJAX request to prevent stale callback
+                if (pendingAjax[gatewayId]) {
+                    pendingAjax[gatewayId].abort();
+                    delete pendingAjax[gatewayId];
+                }
+
                 if (paymentInstances[gatewayId]) {
                     console.log('[YS Shopline] Clearing SDK instance on checkout update:', gatewayId);
                     delete paymentInstances[gatewayId];
@@ -315,11 +330,17 @@ jQuery(function ($) {
                 ajaxData.order_id = orderPayMatch[1];
             }
 
-            $.ajax({
+            // Abort any previous pending request for this gateway
+            if (pendingAjax[gatewayId]) {
+                pendingAjax[gatewayId].abort();
+            }
+
+            pendingAjax[gatewayId] = $.ajax({
                 type: 'POST',
                 url: ys_shopline_params.ajax_url,
                 data: ajaxData,
                 success: function (response) {
+                    delete pendingAjax[gatewayId];
                     if (response.success) {
                         self.renderPayment(gatewayId, response.data);
                     } else {
@@ -332,6 +353,12 @@ jQuery(function ($) {
                     }
                 },
                 error: function (jqXHR, textStatus) {
+                    delete pendingAjax[gatewayId];
+                    // Silently ignore aborted requests (cleared by clearAllInstances)
+                    if (textStatus === 'abort') {
+                        console.log('[YS Shopline] SDK config request aborted for:', gatewayId);
+                        return;
+                    }
                     sdkInitializing[gatewayId] = false;
                     $container.data('sdk-initializing', false);
                     var errorMsg = ys_shopline_params.i18n.connection_error || 'Connection error';
@@ -350,6 +377,14 @@ jQuery(function ($) {
             var self = this;
             var gatewayConfig = GATEWAY_CONFIG[gatewayId];
             var $container = $('#' + gatewayConfig.containerId);
+
+            // Final guard: if instance already created (race condition), skip
+            if (paymentInstances[gatewayId]) {
+                console.log('[YS Shopline] renderPayment skipped - instance already exists for:', gatewayId);
+                sdkInitializing[gatewayId] = false;
+                $container.data('sdk-initializing', false);
+                return;
+            }
 
             // Check SDK loaded
             if (!sdkLoaded && typeof ShoplinePayments === 'undefined') {
