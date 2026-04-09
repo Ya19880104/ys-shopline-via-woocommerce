@@ -375,21 +375,26 @@ class YSCustomer {
 			$card_info = array();
 		}
 
-		// 驗證卡片資訊完整性：last4 必須是 1-4 位數字
-		$last4 = (string) ( $card_info['last'] ?? '' );
-		if ( ! preg_match( '/^\d{1,4}$/', $last4 ) ) {
-			YSLogger::warning( 'Skipping instrument with invalid card info', array(
-				'user_id'       => $user_id,
-				'instrument_id' => $instrument_id,
-				'last4'         => $last4,
-			) );
-			return false;
-		}
-
 		try {
-			$brand        = (string) ( $card_info['brand'] ?? 'visa' );
-			$expiry_month = (string) ( $card_info['expireMonth'] ?? '12' );
-			$expiry_year  = (string) ( $card_info['expireYear'] ?? gmdate( 'Y' ) );
+			// 安全提取 scalar 值，非 scalar（如 array）一律用 default
+			$last4        = is_scalar( $card_info['last'] ?? '' ) ? (string) $card_info['last'] : '';
+			$brand        = is_scalar( $card_info['brand'] ?? '' ) ? (string) $card_info['brand'] : 'visa';
+			$expiry_month = is_scalar( $card_info['expireMonth'] ?? '' ) ? (string) $card_info['expireMonth'] : '12';
+			$expiry_year  = is_scalar( $card_info['expireYear'] ?? '' ) ? (string) $card_info['expireYear'] : gmdate( 'Y' );
+
+			// last4 必須是 1-4 位數字
+			if ( ! preg_match( '/^\d{1,4}$/', $last4 ) ) {
+				YSLogger::warning( 'Skipping instrument with invalid card info', array(
+					'user_id'       => $user_id,
+					'instrument_id' => $instrument_id,
+					'last4'         => $last4,
+				) );
+				return false;
+			}
+
+			if ( empty( $brand ) ) {
+				$brand = 'visa';
+			}
 
 			$token = new WC_Payment_Token_CC();
 			$token->set_token( $instrument_id );
