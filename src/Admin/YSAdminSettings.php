@@ -1261,6 +1261,7 @@ class YSAdminSettings {
 					<li><?php _e( '結帳時選擇「儲存卡片」即可保存', 'ys-shopline-via-woocommerce' ); ?></li>
 					<li><?php _e( '下次結帳可直接選用已儲存的卡片', 'ys-shopline-via-woocommerce' ); ?></li>
 					<li><?php _e( '支援從「新增付款方式」頁面直接綁卡', 'ys-shopline-via-woocommerce' ); ?></li>
+					<li><?php _e( '「設為預設」功能用於訂閱自動續扣時的優先卡片；結帳頁的卡片顯示順序由 SHOPLINE SDK 自動管理，無法手動指定', 'ys-shopline-via-woocommerce' ); ?></li>
 				</ul>
 			</div>
 

@@ -335,7 +335,7 @@ do_action( 'woocommerce_before_account_payment_methods', $has_methods );
 								<?php if ( $is_expired ) : ?>
 									<span class="ys-card-status expired">已過期</span>
 								<?php elseif ( $is_default ) : ?>
-									<span class="ys-card-status default">預設</span>
+									<span class="ys-card-status default" title="<?php esc_attr_e( '訂閱續扣時將優先使用此卡片', 'ys-shopline-via-woocommerce' ); ?>">預設</span>
 								<?php else : ?>
 									<span class="ys-card-status active">有效</span>
 								<?php endif; ?>
@@ -352,6 +352,9 @@ do_action( 'woocommerce_before_account_payment_methods', $has_methods );
 				</div>
 			<?php endforeach; ?>
 		<?php endforeach; ?>
+		<p class="ys-payment-hint" style="margin-top: 12px; font-size: 13px; color: #888;">
+			<?php esc_html_e( '「預設」卡片將用於訂閱自動續扣。結帳頁的卡片選擇由付款系統自動管理。', 'ys-shopline-via-woocommerce' ); ?>
+		</p>
 	</div>
 
 <?php else : ?>
