@@ -4,7 +4,7 @@
 
 ## 版本資訊
 
-- **目前版本**：3.3.2
+- **目前版本**：3.3.3
 - **PHP 需求**：>= 8.0
 - **WordPress 需求**：>= 6.0
 - **WooCommerce 需求**：7.0 - 9.0
@@ -65,6 +65,14 @@ https://your-domain.com/wp-json/ys-shopline/v1/webhook
 ---
 
 ## 變更紀錄
+
+### 3.3.3 - 2026-04-09
+
+**修正**
+- 修正 Token 同步導致「我的帳戶」頁白屏：API 回傳不完整的 `instrumentCard` 時 WC data store 驗證失敗
+- `create_wc_token_from_instrument()` 加入完整防禦：`is_array()` 正規化、`is_scalar()` 型別檢查、`last4` 格式驗證、`catch \Throwable`
+- 付款方式頁新增「預設」卡片用途提示（用於訂閱續扣，非結帳頁卡片順序）
+- 後台說明文件補充預設卡片與結帳頁卡片順序的差異
 
 ### 3.3.2 - 2026-04-02
 
