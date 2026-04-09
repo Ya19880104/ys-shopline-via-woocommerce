@@ -371,28 +371,34 @@ class YSCustomer {
 		}
 
 		$card_info = $instrument['instrumentCard'] ?? array();
+		if ( ! is_array( $card_info ) ) {
+			$card_info = array();
+		}
 
 		// 驗證卡片資訊完整性：last4 必須是 1-4 位數字
-		$last4 = $card_info['last'] ?? '';
-		if ( empty( $last4 ) || ! preg_match( '/^\d{1,4}$/', $last4 ) ) {
+		$last4 = (string) ( $card_info['last'] ?? '' );
+		if ( ! preg_match( '/^\d{1,4}$/', $last4 ) ) {
 			YSLogger::warning( 'Skipping instrument with invalid card info', array(
 				'user_id'       => $user_id,
 				'instrument_id' => $instrument_id,
 				'last4'         => $last4,
-				'card_keys'     => array_keys( $card_info ),
 			) );
 			return false;
 		}
 
 		try {
+			$brand        = (string) ( $card_info['brand'] ?? 'visa' );
+			$expiry_month = (string) ( $card_info['expireMonth'] ?? '12' );
+			$expiry_year  = (string) ( $card_info['expireYear'] ?? gmdate( 'Y' ) );
+
 			$token = new WC_Payment_Token_CC();
 			$token->set_token( $instrument_id );
 			$token->set_gateway_id( YSOrderMeta::CREDIT_GATEWAY_ID );
 			$token->set_user_id( $user_id );
-			$token->set_card_type( strtolower( $card_info['brand'] ?? 'visa' ) );
+			$token->set_card_type( strtolower( $brand ) );
 			$token->set_last4( $last4 );
-			$token->set_expiry_month( $card_info['expireMonth'] ?? '12' );
-			$token->set_expiry_year( $card_info['expireYear'] ?? gmdate( 'Y' ) );
+			$token->set_expiry_month( $expiry_month );
+			$token->set_expiry_year( $expiry_year );
 
 			// 儲存 Shopline 付款工具 ID
 			$token->add_meta_data( YSOrderMeta::TOKEN_INSTRUMENT_ID, $instrument_id, true );
@@ -405,7 +411,7 @@ class YSCustomer {
 				) );
 				return $token;
 			}
-		} catch ( \Exception $e ) {
+		} catch ( \Throwable $e ) {
 			YSLogger::error( 'Failed to create WC Token from instrument', array(
 				'user_id'       => $user_id,
 				'instrument_id' => $instrument_id,
