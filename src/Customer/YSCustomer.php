@@ -377,10 +377,15 @@ class YSCustomer {
 
 		try {
 			// 安全提取 scalar 值，非 scalar（如 array）一律用 default
-			$last4        = is_scalar( $card_info['last'] ?? '' ) ? (string) $card_info['last'] : '';
-			$brand        = is_scalar( $card_info['brand'] ?? '' ) ? (string) $card_info['brand'] : 'visa';
-			$expiry_month = is_scalar( $card_info['expireMonth'] ?? '' ) ? (string) $card_info['expireMonth'] : '12';
-			$expiry_year  = is_scalar( $card_info['expireYear'] ?? '' ) ? (string) $card_info['expireYear'] : gmdate( 'Y' );
+			$raw_last4    = $card_info['last'] ?? '';
+			$raw_brand    = $card_info['brand'] ?? '';
+			$raw_month    = $card_info['expireMonth'] ?? '';
+			$raw_year     = $card_info['expireYear'] ?? '';
+
+			$last4        = is_scalar( $raw_last4 ) ? (string) $raw_last4 : '';
+			$brand        = is_scalar( $raw_brand ) && '' !== $raw_brand ? (string) $raw_brand : 'visa';
+			$expiry_month = is_scalar( $raw_month ) && '' !== $raw_month ? (string) $raw_month : '12';
+			$expiry_year  = is_scalar( $raw_year ) && '' !== $raw_year ? (string) $raw_year : gmdate( 'Y' );
 
 			// last4 必須是 1-4 位數字
 			if ( ! preg_match( '/^\d{1,4}$/', $last4 ) ) {
