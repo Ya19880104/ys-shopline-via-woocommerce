@@ -551,6 +551,18 @@ jQuery(function ($) {
                 // Remove loading state - SDK should have rendered its content
                 $container.find('.ys-shopline-loading').remove();
 
+                // bindOnlyMode（$0 訂閱試用）：附加純綁卡提示
+                if (serverConfig.bindOnlyMode && $container.find('.ys-bindcard-hint').length === 0) {
+                    $container.append(
+                        '<div class="ys-bindcard-hint" style="margin-top:12px;padding:10px 14px;' +
+                        'background:#f0f7ff;border-left:3px solid #4a90e2;border-radius:4px;' +
+                        'font-size:13px;color:#555;line-height:1.5;">' +
+                        '<strong style="color:#4a90e2;">ℹ️ 試用期綁卡驗證</strong><br>' +
+                        '試用期間不會扣款，試用結束後將依訂閱方案自動扣款。' +
+                        '</div>'
+                    );
+                }
+
                 // For Apple Pay, check if button was rendered (device support)
                 if (gatewayConfig.paymentMethod === 'ApplePay') {
                     setTimeout(function() {
@@ -1532,6 +1544,18 @@ jQuery(function ($) {
                 // 儲存 payment instance
                 self.paymentInstance = result.payment;
                 $container.data('sdk-initialized', true);
+
+                // 附加純綁卡提示文字（告知用戶此為驗證性質不會扣款）
+                if ($container.find('.ys-bindcard-hint').length === 0) {
+                    $container.append(
+                        '<div class="ys-bindcard-hint" style="margin-top:12px;padding:10px 14px;' +
+                        'background:#f0f7ff;border-left:3px solid #4a90e2;border-radius:4px;' +
+                        'font-size:13px;color:#555;line-height:1.5;">' +
+                        '<strong style="color:#4a90e2;">ℹ️ 純綁卡驗證</strong><br>' +
+                        '此為綁卡驗證流程，SHOPLINE 將依銀行規範進行卡片授權驗證，不會扣款。' +
+                        '</div>'
+                    );
+                }
 
                 console.log('[YS Shopline] Add payment method SDK initialized successfully');
 

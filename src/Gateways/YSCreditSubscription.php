@@ -111,11 +111,19 @@ class YSCreditSubscription extends YSGatewayBase {
             ),
         );
 
+        // 偵測 $0 訂閱（試用）：SDK 需要 amount > 0 通過驗證，但實際 API 會用 CardBind + amount=0
+        if ( isset( $config['amount'] ) && (int) $config['amount'] <= 0 ) {
+            $config['bindOnlyMode'] = true;
+        }
+
         return $config;
     }
 
     /**
      * Prepare payment data.
+     *
+     * - 一般訂閱（首期金額 > 0）：CardBindPayment（綁卡並付款）
+     * - 試用訂閱（首期金額 = 0）：CardBind（純綁卡，amount=0 通過 SHOPLINE API）
      *
      * @param \WC_Order $order       Order object.
      * @param string    $pay_session Pay session from SDK.
@@ -124,8 +132,21 @@ class YSCreditSubscription extends YSGatewayBase {
     protected function prepare_payment_data( $order, $pay_session ) {
         $data = parent::prepare_payment_data( $order, $pay_session );
 
-        // Force CardBindPayment for subscriptions
-        $data['confirm']['paymentBehavior'] = 'CardBindPayment';
+        $order_total = (float) $order->get_total();
+
+        if ( $order_total <= 0 ) {
+            // 零元試用訂閱：純綁卡，API 實際 amount=0
+            $data['confirm']['paymentBehavior'] = 'CardBind';
+            $data['amount']['value']             = 0;
+
+            YSLogger::info( 'Zero-amount subscription: using CardBind paymentBehavior', array(
+                'order_id' => $order->get_id(),
+            ) );
+        } else {
+            // 一般訂閱：綁卡並付款
+            $data['confirm']['paymentBehavior'] = 'CardBindPayment';
+        }
+
         $data['confirm']['paymentInstrument']['savePaymentInstrument'] = true;
 
         return $data;
