@@ -435,12 +435,18 @@ jQuery(function ($) {
             try {
                 // Build SDK options
                 // Note: env 參數控制環境 (sandbox/production)
+                // bindOnlyMode: true 時（如 $0 訂閱試用），SDK init amount 需 >= 100 通過驗證，
+                // 後端會以 CardBind + amount=0 處理實際 API 呼叫，不會扣款
+                var sdkAmount = serverConfig.amount || 0;
+                if (serverConfig.bindOnlyMode && sdkAmount <= 0) {
+                    sdkAmount = 100; // TWD $1 的 SDK 最低驗證值（不實際扣款）
+                }
                 var options = {
                     clientKey: serverConfig.clientKey,
                     merchantId: serverConfig.merchantId,
                     paymentMethod: gatewayConfig.paymentMethod,
                     currency: serverConfig.currency || 'TWD',
-                    amount: serverConfig.amount || 0,
+                    amount: sdkAmount,
                     element: '#' + gatewayConfig.containerId,
                     env: serverConfig.env || 'production'
                 };
@@ -544,6 +550,18 @@ jQuery(function ($) {
 
                 // Remove loading state - SDK should have rendered its content
                 $container.find('.ys-shopline-loading').remove();
+
+                // bindOnlyMode（$0 訂閱試用）：附加純綁卡提示
+                if (serverConfig.bindOnlyMode && $container.find('.ys-bindcard-hint').length === 0) {
+                    $container.append(
+                        '<div class="ys-bindcard-hint" style="margin-top:12px;padding:10px 14px;' +
+                        'background:#f0f7ff;border-left:3px solid #4a90e2;border-radius:4px;' +
+                        'font-size:13px;color:#555;line-height:1.5;">' +
+                        '<strong style="color:#4a90e2;">ℹ️ 試用期綁卡驗證</strong><br>' +
+                        '試用期間不會扣款，試用結束後將依訂閱方案自動扣款。' +
+                        '</div>'
+                    );
+                }
 
                 // For Apple Pay, check if button was rendered (device support)
                 if (gatewayConfig.paymentMethod === 'ApplePay') {
@@ -1471,13 +1489,15 @@ jQuery(function ($) {
             $container.empty();
 
             try {
-                // SDK 選項 - 新增卡片頁面使用 0 金額
+                // SDK 選項 - 純綁卡頁面
+                // SHOPLINE SDK 驗證 amount 必填且 > 0，但後端 API 會用 CardBind + amount=0 真正不扣款
+                // SDK init 時的 amount 只是通過驗證，不會被實際計費
                 var options = {
                     clientKey: serverConfig.clientKey,
                     merchantId: serverConfig.merchantId,
                     paymentMethod: 'CreditCard',
                     currency: serverConfig.currency || 'TWD',
-                    amount: 0, // 純綁卡不需金額
+                    amount: serverConfig.amount || 100, // SDK 驗證用，實際 API 以 CardBind + amount=0 處理
                     element: '#' + $container.attr('id'),
                     env: serverConfig.env || 'production'
                 };
@@ -1524,6 +1544,18 @@ jQuery(function ($) {
                 // 儲存 payment instance
                 self.paymentInstance = result.payment;
                 $container.data('sdk-initialized', true);
+
+                // 附加純綁卡提示文字（告知用戶此為驗證性質不會扣款）
+                if ($container.find('.ys-bindcard-hint').length === 0) {
+                    $container.append(
+                        '<div class="ys-bindcard-hint" style="margin-top:12px;padding:10px 14px;' +
+                        'background:#f0f7ff;border-left:3px solid #4a90e2;border-radius:4px;' +
+                        'font-size:13px;color:#555;line-height:1.5;">' +
+                        '<strong style="color:#4a90e2;">ℹ️ 純綁卡驗證</strong><br>' +
+                        '此為綁卡驗證流程，SHOPLINE 將依銀行規範進行卡片授權驗證，不會扣款。' +
+                        '</div>'
+                    );
+                }
 
                 console.log('[YS Shopline] Add payment method SDK initialized successfully');
 

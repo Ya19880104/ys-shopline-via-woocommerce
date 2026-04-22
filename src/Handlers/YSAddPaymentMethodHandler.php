@@ -20,6 +20,7 @@ namespace YangSheep\ShoplinePayment\Handlers;
 defined( 'ABSPATH' ) || exit;
 
 use YangSheep\ShoplinePayment\Utils\YSLogger;
+use YangSheep\ShoplinePayment\Utils\YSBindCardLogger;
 use YangSheep\ShoplinePayment\Utils\YSOrderMeta;
 use YangSheep\ShoplinePayment\Customer\YSCustomer;
 use WC_Payment_Tokens;
@@ -134,6 +135,20 @@ class YSAddPaymentMethodHandler {
 			$credit_card        = $response['creditCard'] ?? $response['payment']['creditCard'] ?? $payment_instrument['instrumentCard'] ?? array();
 			$instrument_id      = $payment_instrument['paymentInstrumentId'] ?? $payment_instrument['instrumentId'] ?? '';
 
+			$last4 = is_array( $credit_card ) && isset( $credit_card['last'] ) ? (string) $credit_card['last'] : '';
+
+			YSBindCardLogger::log(
+				YSBindCardLogger::EVENT_TOKEN_SAVED,
+				array(
+					'flow'           => 'add_payment_method',
+					'trade_order_id' => $trade_order_id,
+					'instrument_id'  => $instrument_id,
+					'customer_id'    => $customer_id,
+					'last4'          => $last4,
+					'brand'          => is_array( $credit_card ) && isset( $credit_card['brand'] ) ? (string) $credit_card['brand'] : '',
+				)
+			);
+
 			if ( ! empty( $instrument_id ) ) {
 				// 直接建立 WC Token
 				self::create_token_from_response( $user_id, $instrument_id, $credit_card, $customer_id );
@@ -160,6 +175,16 @@ class YSAddPaymentMethodHandler {
 				'trade_order_id' => $trade_order_id,
 				'error'          => $error_msg,
 			) );
+
+			YSBindCardLogger::log(
+				YSBindCardLogger::EVENT_ERROR,
+				array(
+					'flow'           => 'add_payment_method',
+					'trade_order_id' => $trade_order_id,
+					'status'         => $status,
+					'error'          => $error_msg,
+				)
+			);
 
 			self::clear_pending_data( $user_id );
 			wc_add_notice( __( '新增付款方式失敗：', 'ys-shopline-via-woocommerce' ) . $error_msg, 'error' );

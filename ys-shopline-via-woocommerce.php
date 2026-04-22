@@ -3,7 +3,7 @@
  * Plugin Name: YS Shopline via WooCommerce
  * Plugin URI: https://yangsheep.com.tw
  * Description: Support Shopline Payments for WooCommerce, including HPOS and Subscriptions. Supports Credit Card, ATM, JKOPay, Apple Pay, LINE Pay, and Chailease BNPL.
- * Version:           3.3.3
+ * Version:           3.4.0
  * Author: YangSheep
  * Author URI: https://yangsheep.com.tw
  * Text Domain: ys-shopline-via-woocommerce
@@ -17,7 +17,7 @@
 defined( 'ABSPATH' ) || exit;
 
 // Define plugin constants
-define( 'YS_SHOPLINE_VERSION', '3.3.3' );
+define( 'YS_SHOPLINE_VERSION', '3.4.0' );
 define( 'YS_SHOPLINE_PLUGIN_FILE', __FILE__ );
 define( 'YS_SHOPLINE_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 define( 'YS_SHOPLINE_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
@@ -42,9 +42,29 @@ spl_autoload_register( function ( $class ) {
     }
 } );
 
+// 啟用時排程綁卡日誌清理（每日）
+register_activation_hook( __FILE__, function () {
+    if ( ! wp_next_scheduled( 'ys_shopline_bindcard_log_cleanup' ) ) {
+        wp_schedule_event( time(), 'daily', 'ys_shopline_bindcard_log_cleanup' );
+    }
+} );
+
 // 停用時清理排程
 register_deactivation_hook( __FILE__, function () {
     wp_clear_scheduled_hook( 'ys_shopline_sync_pending_orders' );
+    wp_clear_scheduled_hook( 'ys_shopline_bindcard_log_cleanup' );
+} );
+
+// 綁卡日誌每日清理
+add_action( 'ys_shopline_bindcard_log_cleanup', function () {
+    \YangSheep\ShoplinePayment\Utils\YSBindCardLogger::cleanup_old_logs();
+} );
+
+// 保險：即使外掛已在啟用狀態但此版本新增 cron，首次載入補排程
+add_action( 'init', function () {
+    if ( ! wp_next_scheduled( 'ys_shopline_bindcard_log_cleanup' ) ) {
+        wp_schedule_event( time(), 'daily', 'ys_shopline_bindcard_log_cleanup' );
+    }
 } );
 
 use YangSheep\ShoplinePayment\Utils\YSLogger;

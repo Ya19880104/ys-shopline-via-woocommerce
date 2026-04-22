@@ -97,6 +97,11 @@ class YSCreditInstallment extends YSGatewayBase {
 			return false;
 		}
 
+		// 新增付款方式頁面：分期付款不適用（用戶無購物金額可分期）
+		if ( function_exists( 'is_add_payment_method_page' ) && is_add_payment_method_page() ) {
+			return false;
+		}
+
 		$min_amount = (float) $this->get_option( 'min_installment_amount', 3000 );
 		$cart_total = WC()->cart ? (float) WC()->cart->get_total( 'edit' ) : 0;
 
