@@ -4,7 +4,7 @@
 
 ## 版本資訊
 
-- **目前版本**：3.4.0
+- **目前版本**：3.4.1
 - **PHP 需求**：>= 8.0
 - **WordPress 需求**：>= 6.0
 - **WooCommerce 需求**：7.0 - 9.0
@@ -65,6 +65,17 @@ https://your-domain.com/wp-json/ys-shopline/v1/webhook
 ---
 
 ## 變更紀錄
+
+### 3.4.1 - 2026-04-09
+
+**修復**
+- 修正綁卡 API 錯誤「order is required; billing is required」：`add_payment_method()` 補齊 `billing` + `order` 欄位
+- 新增 `build_user_billing_address()` helper，從 user billing meta + 商店地址 fallback 組出地址
+
+**UX 強化**
+- 訂閱閘道結帳頁不再顯示已儲存卡片，強制走新增卡流程（避免已儲存卡無法直接訂閱的混淆）
+- 訂閱綁卡提示移到「定期扣款」說明下方，改為藍色資訊框
+- JS 依 bindOnlyMode 動態切換提示文字（試用期 vs 一般訂閱）
 
 ### 3.4.0 - 2026-04-09
 
