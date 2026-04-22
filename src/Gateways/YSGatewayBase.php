@@ -1802,6 +1802,17 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
             'reference_order_id' => $reference_order_id,
         ) );
 
+        \YangSheep\ShoplinePayment\Utils\YSBindCardLogger::log(
+            \YangSheep\ShoplinePayment\Utils\YSBindCardLogger::EVENT_API_REQUEST,
+            array(
+                'flow'               => 'add_payment_method',
+                'customer_id'        => $customer_id,
+                'reference_order_id' => $reference_order_id,
+                'paymentBehavior'    => 'CardBind',
+                'amount'             => 0,
+            )
+        );
+
         // 呼叫 API
         if ( ! $this->api ) {
             wc_add_notice( __( '付款閘道尚未設定。', 'ys-shopline-via-woocommerce' ), 'error' );
@@ -1812,12 +1823,30 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
 
         if ( is_wp_error( $response ) ) {
             YSLogger::error( 'Add payment method failed: ' . $response->get_error_message() );
+            \YangSheep\ShoplinePayment\Utils\YSBindCardLogger::log(
+                \YangSheep\ShoplinePayment\Utils\YSBindCardLogger::EVENT_ERROR,
+                array(
+                    'flow'           => 'add_payment_method',
+                    'error_code'     => $response->get_error_code(),
+                    'error_message'  => $response->get_error_message(),
+                )
+            );
             wc_add_notice(
                 __( '新增付款方式失敗：', 'ys-shopline-via-woocommerce' ) . $response->get_error_message(),
                 'error'
             );
             return array( 'result' => 'failure' );
         }
+
+        \YangSheep\ShoplinePayment\Utils\YSBindCardLogger::log(
+            \YangSheep\ShoplinePayment\Utils\YSBindCardLogger::EVENT_API_RESPONSE,
+            array(
+                'flow'           => 'add_payment_method',
+                'trade_order_id' => isset( $response['tradeOrderId'] ) ? $response['tradeOrderId'] : '',
+                'status'         => isset( $response['status'] ) ? $response['status'] : '',
+                'has_nextAction' => isset( $response['nextAction'] ) ? 'yes' : 'no',
+            )
+        );
 
         // 儲存綁卡資訊到 user meta（供 3DS 完成後使用）
         update_user_meta( $user_id, YSOrderMeta::PENDING_BIND, array(

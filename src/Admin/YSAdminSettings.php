@@ -54,6 +54,44 @@ class YSAdminSettings {
 
 		// Apple Pay 驗證檔案 AJAX
 		add_action( 'wp_ajax_ys_shopline_apple_verify', array( $this, 'ajax_apple_verify' ) );
+
+		// 綁卡紀錄下載
+		add_action( 'admin_post_ys_shopline_bindcard_log_download', array( $this, 'handle_bindcard_log_download' ) );
+	}
+
+	/**
+	 * Download bindcard log file.
+	 */
+	public function handle_bindcard_log_download() {
+		if ( ! current_user_can( 'manage_options' ) ) {
+			wp_die( esc_html__( '權限不足。', 'ys-shopline-via-woocommerce' ), 403 );
+		}
+
+		check_admin_referer( 'ys_bindcard_log_download' );
+
+		// phpcs:ignore WordPress.Security.NonceVerification.Recommended
+		$date = isset( $_GET['log_date'] ) ? sanitize_text_field( wp_unslash( $_GET['log_date'] ) ) : '';
+		if ( ! preg_match( '/^\d{4}-\d{2}-\d{2}$/', $date ) ) {
+			wp_die( esc_html__( '無效的日期。', 'ys-shopline-via-woocommerce' ), 400 );
+		}
+
+		$log_dir = \YangSheep\ShoplinePayment\Utils\YSBindCardLogger::get_log_dir();
+		if ( ! $log_dir ) {
+			wp_die( esc_html__( '日誌目錄無法存取。', 'ys-shopline-via-woocommerce' ), 500 );
+		}
+
+		$file_path = $log_dir . '/bindcard-' . $date . '.log';
+		if ( ! file_exists( $file_path ) ) {
+			wp_die( esc_html__( '檔案不存在。', 'ys-shopline-via-woocommerce' ), 404 );
+		}
+
+		nocache_headers();
+		header( 'Content-Type: text/plain; charset=UTF-8' );
+		header( 'Content-Disposition: attachment; filename="bindcard-' . $date . '.log"' );
+		header( 'Content-Length: ' . filesize( $file_path ) );
+		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_readfile
+		readfile( $file_path );
+		exit;
 	}
 
 	/**
@@ -513,6 +551,9 @@ class YSAdminSettings {
 				<a href="#" class="nav-tab ys-tab-link <?php echo 'advanced' === $active_tab ? 'nav-tab-active' : ''; ?>" data-tab="advanced">
 					<span class="dashicons dashicons-admin-tools"></span> <?php _e( '進階設定', 'ys-shopline-via-woocommerce' ); ?>
 				</a>
+				<a href="#" class="nav-tab ys-tab-link <?php echo 'bindcard_log' === $active_tab ? 'nav-tab-active' : ''; ?>" data-tab="bindcard_log">
+					<span class="dashicons dashicons-id-alt"></span> <?php _e( '綁卡紀錄', 'ys-shopline-via-woocommerce' ); ?>
+				</a>
 				<a href="#" class="nav-tab ys-tab-link <?php echo 'docs' === $active_tab ? 'nav-tab-active' : ''; ?>" data-tab="docs">
 					<span class="dashicons dashicons-book"></span> <?php _e( '說明文件', 'ys-shopline-via-woocommerce' ); ?>
 				</a>
@@ -541,12 +582,17 @@ class YSAdminSettings {
 					<?php $this->render_advanced_tab(); ?>
 				</div>
 
+				<!-- Tab: 綁卡紀錄 -->
+				<div class="ys-tab-content" id="ys-tab-bindcard_log" style="<?php echo 'bindcard_log' !== $active_tab ? 'display:none;' : ''; ?>">
+					<?php $this->render_bindcard_log_tab(); ?>
+				</div>
+
 				<!-- Tab: 說明文件 -->
 				<div class="ys-tab-content" id="ys-tab-docs" style="<?php echo 'docs' !== $active_tab ? 'display:none;' : ''; ?>">
 					<?php $this->render_docs_tab(); ?>
 				</div>
 
-				<div class="ys-submit-wrap" id="ys-submit-button" style="<?php echo 'docs' === $active_tab ? 'display:none;' : ''; ?>">
+				<div class="ys-submit-wrap" id="ys-submit-button" style="<?php echo ( 'docs' === $active_tab || 'bindcard_log' === $active_tab ) ? 'display:none;' : ''; ?>">
 					<?php submit_button( __( '儲存設定', 'ys-shopline-via-woocommerce' ), 'primary large', 'submit', false ); ?>
 				</div>
 			</form>
@@ -574,6 +620,7 @@ class YSAdminSettings {
 			'ys_shopline_linepay_enabled',
 			'ys_shopline_bnpl_enabled',
 			'ys_shopline_debug',
+			'ys_shopline_bindcard_log_enabled',
 		);
 
 		foreach ( $checkboxes as $checkbox ) {
@@ -1163,6 +1210,18 @@ class YSAdminSettings {
 					</td>
 				</tr>
 				<tr>
+					<th scope="row"><?php _e( '綁卡紀錄', 'ys-shopline-via-woocommerce' ); ?></th>
+					<td>
+						<?php $this->render_toggle( 'ys_shopline_bindcard_log_enabled', 'no' ); ?>
+						<span class="ys-toggle-desc">
+							<?php _e( '啟用綁卡專用日誌（獨立檔案，每日輪轉，保留 30 天）', 'ys-shopline-via-woocommerce' ); ?>
+						</span>
+						<p class="description">
+							<?php _e( '啟用後可在「綁卡紀錄」tab 檢視記錄內容，包含用戶、卡號後 4 碼、API 往返細節。敏感欄位（CVV、完整卡號、金鑰）自動遮罩。', 'ys-shopline-via-woocommerce' ); ?>
+						</p>
+					</td>
+				</tr>
+				<tr>
 					<th scope="row"><?php _e( '訂單狀態 - 付款成功', 'ys-shopline-via-woocommerce' ); ?></th>
 					<td>
 						<select name="ys_shopline_order_status_paid" class="regular-text">
@@ -1203,6 +1262,120 @@ class YSAdminSettings {
 			</table>
 		</div>
 		<?php
+	}
+
+	/**
+	 * Render bindcard log tab.
+	 */
+	private function render_bindcard_log_tab() {
+		$enabled = \YangSheep\ShoplinePayment\Utils\YSBindCardLogger::is_enabled();
+		$files   = \YangSheep\ShoplinePayment\Utils\YSBindCardLogger::list_log_files();
+
+		// phpcs:ignore WordPress.Security.NonceVerification.Recommended
+		$selected_date = isset( $_GET['log_date'] ) ? sanitize_text_field( wp_unslash( $_GET['log_date'] ) ) : '';
+		if ( '' === $selected_date && ! empty( $files ) ) {
+			$selected_date = array_key_first( $files );
+		}
+
+		$entries = $selected_date ? \YangSheep\ShoplinePayment\Utils\YSBindCardLogger::get_log_entries( $selected_date ) : array();
+		?>
+		<div class="ys-section-card">
+			<h3 class="ys-section-title"><span class="dashicons dashicons-id-alt"></span> <?php _e( '綁卡紀錄', 'ys-shopline-via-woocommerce' ); ?></h3>
+
+			<?php if ( ! $enabled ) : ?>
+				<div class="notice notice-warning inline">
+					<p>
+						<?php _e( '綁卡紀錄目前<strong>未啟用</strong>。請至「進階設定」啟用後才會產生新的記錄。', 'ys-shopline-via-woocommerce' ); ?>
+					</p>
+				</div>
+			<?php endif; ?>
+
+			<?php if ( empty( $files ) ) : ?>
+				<p><?php _e( '尚無綁卡紀錄。', 'ys-shopline-via-woocommerce' ); ?></p>
+			<?php else : ?>
+				<p>
+					<label for="ys_bindcard_log_date"><?php _e( '選擇日期：', 'ys-shopline-via-woocommerce' ); ?></label>
+					<select id="ys_bindcard_log_date" onchange="window.location.href=this.value">
+						<?php foreach ( $files as $date => $path ) : ?>
+							<?php
+							$size = size_format( filesize( $path ) );
+							$url  = add_query_arg(
+								array(
+									'page'     => 'ys-shopline-payment',
+									'tab'      => 'bindcard_log',
+									'log_date' => $date,
+								),
+								admin_url( 'admin.php' )
+							);
+							?>
+							<option value="<?php echo esc_url( $url ); ?>" <?php selected( $selected_date, $date ); ?>>
+								<?php echo esc_html( $date . ' (' . $size . ')' ); ?>
+							</option>
+						<?php endforeach; ?>
+					</select>
+
+					<?php
+					$download_url = wp_nonce_url(
+						add_query_arg(
+							array(
+								'action'   => 'ys_shopline_bindcard_log_download',
+								'log_date' => $selected_date,
+							),
+							admin_url( 'admin-post.php' )
+						),
+						'ys_bindcard_log_download'
+					);
+					?>
+					<a href="<?php echo esc_url( $download_url ); ?>" class="button">
+						<span class="dashicons dashicons-download" style="vertical-align:middle;"></span>
+						<?php _e( '下載此日記錄', 'ys-shopline-via-woocommerce' ); ?>
+					</a>
+				</p>
+
+				<div class="ys-bindcard-log-viewer" style="max-height:600px;overflow:auto;border:1px solid #ddd;background:#f9f9f9;padding:12px;font-family:monospace;font-size:12px;">
+					<?php if ( empty( $entries ) ) : ?>
+						<p><?php _e( '此日期無記錄。', 'ys-shopline-via-woocommerce' ); ?></p>
+					<?php else : ?>
+						<p class="description"><?php echo esc_html( sprintf( __( '共 %d 筆（最新在上）', 'ys-shopline-via-woocommerce' ), count( $entries ) ) ); ?></p>
+						<?php foreach ( $entries as $entry ) : ?>
+							<div style="margin-bottom:10px;padding:8px;background:#fff;border-left:3px solid <?php echo $this->get_event_color( $entry['event'] ?? '' ); ?>;">
+								<strong><?php echo esc_html( $entry['timestamp'] ?? '' ); ?></strong>
+								<span style="color:<?php echo $this->get_event_color( $entry['event'] ?? '' ); ?>;font-weight:bold;">
+									[<?php echo esc_html( $entry['event'] ?? '' ); ?>]
+								</span>
+								<?php if ( ! empty( $entry['user_email'] ) ) : ?>
+									<span style="color:#666;">user: <?php echo esc_html( $entry['user_email'] ); ?> (#<?php echo esc_html( (string) ( $entry['user_id'] ?? '' ) ); ?>)</span>
+								<?php endif; ?>
+								<pre style="margin:6px 0 0;white-space:pre-wrap;word-break:break-all;"><?php echo esc_html( wp_json_encode( $entry['context'] ?? array(), JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT ) ); ?></pre>
+							</div>
+						<?php endforeach; ?>
+					<?php endif; ?>
+				</div>
+			<?php endif; ?>
+
+			<p class="description" style="margin-top:15px;">
+				<?php _e( '記錄自動保留 30 天，超過期限的檔案每日會由 WordPress cron 自動清除。', 'ys-shopline-via-woocommerce' ); ?>
+			</p>
+		</div>
+		<?php
+	}
+
+	/**
+	 * Get color code for log event type.
+	 *
+	 * @param string $event
+	 * @return string
+	 */
+	private function get_event_color( string $event ): string {
+		$map = array(
+			'API_REQUEST'  => '#2271b1',
+			'API_RESPONSE' => '#00a32a',
+			'WEBHOOK'      => '#7c3aed',
+			'TOKEN_SAVED'  => '#00a32a',
+			'SDK_INIT'     => '#8c8f94',
+			'ERROR'        => '#d63638',
+		);
+		return $map[ $event ] ?? '#666';
 	}
 
 	/**
