@@ -89,20 +89,14 @@ class YSCreditSubscription extends YSGatewayBase {
     public function get_sdk_config() {
         $config = parent::get_sdk_config();
 
-        // 訂閱付款必須有 customerToken 才能綁卡
-        $has_customer_token = isset( $config['customerToken'] ) && ! empty( $config['customerToken'] );
-
-        if ( ! $has_customer_token ) {
-            YSLogger::warning( 'Subscription gateway: No customerToken available', array(
-                'user_id' => get_current_user_id(),
-            ) );
-        }
-
-        // Force save card for subscriptions
-        $config['forceSaveCard'] = true;
+        // 訂閱閘道設計：強制使用「新增卡片」流程，不顯示已儲存卡片
+        // 原因：訂閱綁卡需要重新授權（CardBindPayment / CardBind），
+        // 顯示已儲存卡片會造成 UX 混淆（用戶以為點了就能付，但 SDK 仍需卡號輸入）
+        unset( $config['customerToken'] );
+        $config['forceSaveCard']     = true;
         $config['paymentInstrument'] = array(
             'bindCard' => array(
-                'enable'   => $has_customer_token,
+                'enable'   => true,
                 'protocol' => array(
                     'switchVisible'       => false,
                     'defaultSwitchStatus' => true,
@@ -554,5 +548,19 @@ class YSCreditSubscription extends YSGatewayBase {
         esc_html_e( '此付款方式會儲存您的信用卡資訊以供定期扣款使用。', 'ys-shopline-via-woocommerce' );
         echo '</small>';
         echo '</p>';
+
+        // 綁卡驗證說明（放在「定期扣款」提示之下，用藍色資訊框強化）
+        // JS 會依 bindOnlyMode 動態改文字（試用期 vs 一般訂閱）
+        printf(
+            '<div class="ys-bindcard-hint ys-bindcard-hint-subscription" data-gateway="%s" style="' .
+                'margin-top:10px;padding:12px 14px;background:#f0f7ff;border-left:4px solid #4a90e2;' .
+                'border-radius:4px;font-size:13px;color:#333;line-height:1.6;">' .
+                '<strong style="color:#4a90e2;display:block;margin-bottom:4px;">%s</strong>' .
+                '<span class="ys-bindcard-hint-body">%s</span>' .
+            '</div>',
+            esc_attr( $this->id ),
+            esc_html__( 'ℹ️ 綁卡驗證說明', 'ys-shopline-via-woocommerce' ),
+            esc_html__( '首次結帳時將綁定此張信用卡，並依訂閱方案進行後續自動續扣。綁卡過程可能進行小額授權驗證，銀行將於驗證完成後自動解除，不會實際扣款。', 'ys-shopline-via-woocommerce' )
+        );
     }
 }

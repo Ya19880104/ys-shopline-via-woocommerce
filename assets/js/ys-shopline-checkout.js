@@ -551,16 +551,16 @@ jQuery(function ($) {
                 // Remove loading state - SDK should have rendered its content
                 $container.find('.ys-shopline-loading').remove();
 
-                // bindOnlyMode（$0 訂閱試用）：附加純綁卡提示
-                if (serverConfig.bindOnlyMode && $container.find('.ys-bindcard-hint').length === 0) {
-                    $container.append(
-                        '<div class="ys-bindcard-hint" style="margin-top:12px;padding:10px 14px;' +
-                        'background:#f0f7ff;border-left:3px solid #4a90e2;border-radius:4px;' +
-                        'font-size:13px;color:#555;line-height:1.5;">' +
-                        '<strong style="color:#4a90e2;">ℹ️ 試用期綁卡驗證</strong><br>' +
-                        '試用期間不會扣款，試用結束後將依訂閱方案自動扣款。' +
-                        '</div>'
-                    );
+                // bindOnlyMode（$0 訂閱試用）：將 PHP 渲染的綁卡提示改為試用期版本
+                if (serverConfig.bindOnlyMode) {
+                    var $hint = $('.ys-bindcard-hint-subscription[data-gateway="' + gatewayId + '"]');
+                    if ($hint.length) {
+                        $hint.find('.ys-bindcard-hint-body').text(
+                            '本訂閱含免費試用期，試用期間不會扣款。試用結束後將依訂閱方案自動扣款。' +
+                            '綁卡過程中銀行可能進行小額授權驗證，驗證金額將於完成後自動解除。'
+                        );
+                        $hint.find('strong').text('ℹ️ 試用期綁卡驗證');
+                    }
                 }
 
                 // For Apple Pay, check if button was rendered (device support)

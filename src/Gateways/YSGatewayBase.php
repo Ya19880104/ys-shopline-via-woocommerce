@@ -1195,6 +1195,57 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
      * @param string   $type  Address type (billing or shipping).
      * @return array
      */
+    /**
+     * Build billing address from user meta (for add_payment_method without order).
+     *
+     * 用戶 billing meta → 商店地址 fallback
+     *
+     * @param int $user_id
+     * @return array
+     */
+    protected function build_user_billing_address( $user_id ) {
+        $address_1 = (string) get_user_meta( $user_id, 'billing_address_1', true );
+        $address_2 = (string) get_user_meta( $user_id, 'billing_address_2', true );
+        $street    = trim( $address_1 . ' ' . $address_2 );
+        $city      = (string) get_user_meta( $user_id, 'billing_city', true );
+        $district  = (string) get_user_meta( $user_id, 'billing_state', true );
+        $postcode  = (string) get_user_meta( $user_id, 'billing_postcode', true );
+        $country   = (string) get_user_meta( $user_id, 'billing_country', true );
+
+        // Fallback 到商店地址設定
+        if ( '' === $street ) {
+            $street = (string) get_option( 'ys_shopline_store_address', '' );
+        }
+        if ( '' === $city ) {
+            $city = (string) get_option( 'ys_shopline_store_city', '' );
+        }
+        if ( '' === $postcode ) {
+            $postcode = (string) get_option( 'ys_shopline_store_postcode', '' );
+        }
+        if ( '' === $country ) {
+            $country = (string) get_option( 'ys_shopline_store_country', 'TW' );
+        }
+
+        // 最終安全預設值（避免空欄位）
+        if ( '' === $street ) {
+            $street = 'N/A';
+        }
+        if ( '' === $city ) {
+            $city = 'Taipei';
+        }
+        if ( '' === $postcode ) {
+            $postcode = '100';
+        }
+
+        return array(
+            'countryCode' => $country,
+            'city'        => $city,
+            'district'    => $district,
+            'street'      => $street,
+            'postcode'    => $postcode,
+        );
+    }
+
     protected function build_address( $order, $type = 'billing' ) {
         $other_type = ( 'billing' === $type ) ? 'shipping' : 'billing';
 
@@ -1759,12 +1810,33 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
         );
 
         // 取得用戶資訊
-        $user = get_userdata( $user_id );
+        $user      = get_userdata( $user_id );
         $raw_phone = get_user_meta( $user_id, 'billing_phone', true );
         $country   = get_user_meta( $user_id, 'billing_country', true ) ?: 'TW';
         $phone     = $this->format_phone_number( $raw_phone, $country );
 
+        $first_name = get_user_meta( $user_id, 'billing_first_name', true );
+        $last_name  = get_user_meta( $user_id, 'billing_last_name', true );
+        $display    = $user->display_name ?: $user->user_login;
+        if ( empty( $first_name ) ) {
+            $first_name = $display;
+        }
+        if ( empty( $last_name ) ) {
+            $last_name = $display;
+        }
+
+        $personal_info = array(
+            'firstName' => $first_name,
+            'lastName'  => $last_name,
+            'email'     => $user->user_email,
+            'phone'     => $phone,
+        );
+
+        // 取得 billing 地址：用戶 billing meta + 商店地址 fallback
+        $billing_address = $this->build_user_billing_address( $user_id );
+
         // 準備 API 請求資料（純綁卡）
+        // SHOPLINE API 要求 billing + order 必填，即使 CardBind amount=0 也不例外
         $data = array(
             'paySession'       => $pay_session_raw,
             'referenceOrderId' => $reference_order_id,
@@ -1786,11 +1858,34 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
             'customer'         => array(
                 'referenceCustomerId' => (string) $user_id,
                 'type'                => '0',
-                'personalInfo'        => array(
-                    'firstName' => $user->display_name ?: $user->user_login,
-                    'lastName'  => $user->display_name ?: $user->user_login,
-                    'email'     => $user->user_email,
-                    'phone'     => $phone,
+                'personalInfo'        => $personal_info,
+            ),
+            'billing'          => array(
+                'description'  => 'Card binding for user #' . $user_id,
+                'personalInfo' => $personal_info,
+                'address'      => $billing_address,
+            ),
+            'order'            => array(
+                'products' => array(
+                    array(
+                        'id'       => 'cardbind-' . $user_id,
+                        'name'     => 'Card Binding Verification',
+                        'quantity' => 1,
+                        'amount'   => array(
+                            'value'    => 0,
+                            'currency' => 'TWD',
+                        ),
+                    ),
+                ),
+                'shipping' => array(
+                    'shippingMethod' => 'Standard',
+                    'carrier'        => 'Default',
+                    'personalInfo'   => $personal_info,
+                    'address'        => $billing_address,
+                    'amount'         => array(
+                        'value'    => 0,
+                        'currency' => 'TWD',
+                    ),
                 ),
             ),
             'client'           => $this->build_client_info( $this->get_client_ip() ),
