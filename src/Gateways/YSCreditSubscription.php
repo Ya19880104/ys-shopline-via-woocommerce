@@ -67,6 +67,21 @@ class YSCreditSubscription extends YSGatewayBase {
     }
 
     /**
+     * Check if gateway is available.
+     *
+     * 新增付款方式頁面：訂閱閘道不適用（綁卡由 ys_shopline_credit 統一處理）
+     *
+     * @return bool
+     */
+    public function is_available() {
+        if ( function_exists( 'is_add_payment_method_page' ) && is_add_payment_method_page() ) {
+            return false;
+        }
+
+        return parent::is_available();
+    }
+
+    /**
      * Get SDK configuration.
      *
      * @return array

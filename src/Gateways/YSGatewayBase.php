@@ -398,16 +398,18 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
         $is_add_payment_method = is_add_payment_method_page() || ( isset( $_POST['is_add_payment_method'] ) && '1' === $_POST['is_add_payment_method'] );
 
         // 取得金額：優先從訂單付款頁面取得，否則從購物車
-        $amount_raw = 0;
-        $currency   = get_woocommerce_currency();
+        $amount_raw    = 0;
+        $currency      = get_woocommerce_currency();
+        $bind_only_mode = false; // 純綁卡模式（CardBind + amount=0）
 
         // AJAX 傳入的 order_id（pay-for-order 頁面的 SDK config 請求）
         // phpcs:ignore WordPress.Security.NonceVerification.Missing
         $ajax_order_id = isset( $_POST['order_id'] ) ? absint( $_POST['order_id'] ) : 0;
 
-        // 新增卡片頁面使用 0 金額
+        // 新增卡片頁面：純綁卡模式，短路回傳不做任何金額查詢
         if ( $is_add_payment_method ) {
-            $amount_raw = 0;
+            $amount_raw     = 0;
+            $bind_only_mode = true;
         }
         // Pay-for-order（AJAX 來源）
         elseif ( $ajax_order_id ) {
@@ -463,6 +465,7 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
             'amount'        => $amount,
             'paymentMethod' => $this->get_payment_method(),
             'env'           => $this->testmode ? 'sandbox' : 'production',
+            'bindOnlyMode'  => $bind_only_mode, // 純綁卡模式標記（前端用 amount=100 通過 SDK 驗證）
         );
 
         // Debug log for troubleshooting
@@ -473,6 +476,7 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
             'clientKey'             => $client_key ? substr( $client_key, 0, 8 ) . '...' : '(empty)',
             'env'                   => $config['env'],
             'amount'                => $amount,
+            'bind_only_mode'        => $bind_only_mode ? 'yes' : 'no',
             'is_add_payment_method' => $is_add_payment_method ? 'yes' : 'no',
         ) );
 
