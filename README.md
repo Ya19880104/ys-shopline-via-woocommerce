@@ -4,7 +4,7 @@
 
 ## 版本資訊
 
-- **目前版本**：3.4.3
+- **目前版本**：3.4.4
 - **PHP 需求**：>= 8.0
 - **WordPress 需求**：>= 6.0
 - **WooCommerce 需求**：7.0 - 9.0
@@ -65,6 +65,21 @@ https://your-domain.com/wp-json/ys-shopline/v1/webhook
 ---
 
 ## 變更紀錄
+
+### 3.4.4 - 2026-04-23
+
+**修復 — 新增付款方式 3DS 流程斷線**
+- 修正「新增付款方式」完成輸入後不跳頁、Token 未儲存的嚴重 bug
+- 根因：`YSGatewayBase::add_payment_method()` 回傳 `nextAction`，但 WooCommerce `WC_Form_Handler` 只認 `result` + `redirect`，導致 3DS 從未執行，Shopline trade 停留 `CREATED` 狀態
+- 修法：回傳 `redirect` 指向 3DS 頁面（`?ys_shopline_3ds=1&add_method=1`），由 `YSAddPaymentMethodHandler::handle_3ds_page()` 渲染 SDK + `payment.pay(nextAction)`，3DS 完成後經 returnUrl 觸發 `handle_add_method_redirect()` 建立 WC Token
+
+**修復 — 「新增付款方式」按鈕消失**
+- `templates/myaccount/payment-methods.php` 原條件 `get_available_payment_gateways()` 在 My Account 無 cart/order 時常回空陣列
+- 改為直接檢查 `ys_shopline_credit` 閘道是否啟用且支援 `add_payment_method`
+
+**調整 — 綁卡頁只顯示新卡輸入（Q3）**
+- 新增付款方式頁 SDK config 不再傳 `customerToken`，SDK 只顯示卡號輸入欄位（不再顯示已綁卡片列表）
+- 對齊官方 `/guide/quick/` 4.1 純綁卡範例（SDK init 無 `customerToken`）
 
 ### 3.4.3 - 2026-04-23
 

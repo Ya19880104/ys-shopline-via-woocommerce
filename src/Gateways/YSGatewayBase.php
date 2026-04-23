@@ -501,8 +501,12 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
             }
         }
 
-        // 新增卡片頁面：強制啟用 bindCard
-        if ( $is_add_payment_method && isset( $config['customerToken'] ) ) {
+        // 新增卡片頁面：強制啟用 bindCard，且「不傳 customerToken」只顯示新卡欄位
+        // 官方範例 /guide/quick/ 4.1 純綁卡 SDK init 未傳 customerToken → SDK 只顯卡號輸入
+        // 若傳 customerToken，SDK 會額外顯示已綁卡片列表，UX 混亂
+        if ( $is_add_payment_method ) {
+            unset( $config['customerToken'] );
+
             $config['paymentInstrument'] = array(
                 'bindCard' => array(
                     'enable'   => true,
@@ -1963,13 +1967,23 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
                 'has_next_action' => 'yes',
             ) );
 
-            // 儲存 nextAction 供前端處理
+            // 儲存 nextAction 供 YSAddPaymentMethodHandler::handle_3ds_page() 渲染
             update_user_meta( $user_id, YSOrderMeta::ADD_METHOD_NEXT_ACTION, $response['nextAction'] );
 
+            // WooCommerce WC_Form_Handler::add_payment_method_action() 只認 result + redirect
+            // 回傳 redirect 至 3DS 頁面；handle_3ds_page() 會攔截並渲染 SDK + pay(nextAction)
+            // 3DS 完成後 SDK 會跳至 returnUrl（含 ys_shopline_add_method=1），由 handle_add_method_redirect() 建立 Token
+            $redirect_url = add_query_arg(
+                array(
+                    'ys_shopline_3ds' => '1',
+                    'add_method'      => '1',
+                ),
+                wc_get_account_endpoint_url( 'payment-methods' )
+            );
+
             return array(
-                'result'     => 'success',
-                'nextAction' => $response['nextAction'],
-                'returnUrl'  => $return_url,
+                'result'   => 'success',
+                'redirect' => $redirect_url,
             );
         }
 

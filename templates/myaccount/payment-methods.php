@@ -368,8 +368,18 @@ do_action( 'woocommerce_before_account_payment_methods', $has_methods );
 
 <?php do_action( 'woocommerce_after_account_payment_methods', $has_methods ); ?>
 
+<?php
+// 檢查是否可顯示「新增付款方式」按鈕
+// WC 原生 get_available_payment_gateways() 在 My Account 頁面會因無 cart/order 而常回空陣列，
+// 導致按鈕消失。改為直接檢查 SHOPLINE 信用卡閘道是否啟用且支援 add_payment_method。
+$all_gateways          = WC()->payment_gateways->payment_gateways();
+$credit_gateway        = isset( $all_gateways['ys_shopline_credit'] ) ? $all_gateways['ys_shopline_credit'] : null;
+$can_add_payment_method = $credit_gateway
+	&& 'yes' === $credit_gateway->enabled
+	&& $credit_gateway->supports( 'add_payment_method' );
+?>
 <div class="ys-payment-actions">
-	<?php if ( WC()->payment_gateways->get_available_payment_gateways() ) : ?>
+	<?php if ( $can_add_payment_method ) : ?>
 		<a class="button add-method" href="<?php echo esc_url( wc_get_endpoint_url( 'add-payment-method' ) ); ?>">
 			<?php esc_html_e( '新增付款方式', 'ys-shopline-via-woocommerce' ); ?>
 		</a>
