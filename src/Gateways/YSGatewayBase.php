@@ -491,6 +491,13 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
             'bindOnlyMode'  => $bind_only_mode, // 純綁卡模式標記（前端用 amount=10000 對齊官方 CardBind 範例）
         );
 
+        // v3.4.15: bind-only 情境（訂閱變更付款方式 / 新增付款方式 / $0 訂閱試用）一律強制儲存卡片
+        // 否則卡片不會 tokenize，後續續扣會取不到 instrument_id
+        // 與 YSCreditSubscription 首次結帳的 forceSaveCard=true 行為對齊
+        if ( $bind_only_mode ) {
+            $config['forceSaveCard'] = true;
+        }
+
         // Debug log for troubleshooting
         YSLogger::debug( 'SDK Config generated', array(
             'gateway'               => $this->id,
@@ -500,6 +507,7 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
             'env'                   => $config['env'],
             'amount'                => $amount,
             'bind_only_mode'        => $bind_only_mode ? 'yes' : 'no',
+            'force_save_card'       => ! empty( $config['forceSaveCard'] ) ? 'yes' : 'no',
             'is_add_payment_method' => $is_add_payment_method ? 'yes' : 'no',
         ) );
 

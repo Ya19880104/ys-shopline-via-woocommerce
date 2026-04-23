@@ -66,6 +66,16 @@ https://your-domain.com/wp-json/ys-shopline/v1/webhook
 
 ## 變更紀錄
 
+### 3.4.16 - 2026-04-23
+
+**訂閱變更付款方式強制儲存新卡（與結帳訂閱行為對齊）**
+
+- 問題：v3.4.15 變更付款方式表單的「我同意記錄本次付款資訊」checkbox 可不勾選 → 新卡不被 tokenize → 續扣取不到 instrument_id
+- 與 `YSCreditSubscription::payment_fields()` 的 `data-force-save="true"` 首次結帳行為不一致
+- 修正：`YSGatewayBase::get_sdk_config` 的 bind-only 情境（訂閱變更付款方式 / 新增付款方式 / $0 訂閱試用）一律設 `forceSaveCard=true`
+- JS 端原本就已支援 `serverConfig.forceSaveCard`（`switchVisible=!forceSave` 隱藏 switch、`defaultSwitchStatus=forceSave` 預設勾選）
+- 結果：bind-only 情境下使用新卡必定儲存，不給使用者選擇不存的機會
+
 ### 3.4.15 - 2026-04-23
 
 **訂閱續扣 bound-then-default retry + 變更付款方式可行 + log 敏感欄位遮罩**
