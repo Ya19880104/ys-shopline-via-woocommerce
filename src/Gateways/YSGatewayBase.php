@@ -820,23 +820,9 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
         $is_subscription = $this->order_contains_subscription( $order );
 
         // 檢查是否使用已綁定的卡片（快捷付款）
-        // 優先讀 WC 標準欄位 wc-{id}-payment-token（來自 saved_payment_methods() radio）
-        $payment_instrument_id = '';
-        $wc_token_field        = 'wc-' . $this->id . '-payment-token';
+        // SDK 內建選卡 UI 時，由前端塞入 ys_shopline_payment_instrument_id
         // phpcs:ignore WordPress.Security.NonceVerification.Missing
-        $wc_token_posted = isset( $_POST[ $wc_token_field ] ) ? sanitize_text_field( wp_unslash( $_POST[ $wc_token_field ] ) ) : '';
-        if ( $wc_token_posted && 'new' !== $wc_token_posted && is_numeric( $wc_token_posted ) ) {
-            $wc_token = \WC_Payment_Tokens::get( (int) $wc_token_posted );
-            if ( $wc_token && (int) $wc_token->get_user_id() === (int) $order->get_user_id() ) {
-                $payment_instrument_id = $wc_token->get_token();
-            }
-        }
-
-        // 舊欄位相容（pay-for-order 頁 / legacy）
-        if ( empty( $payment_instrument_id ) ) {
-            // phpcs:ignore WordPress.Security.NonceVerification.Missing
-            $payment_instrument_id = isset( $_POST['ys_shopline_payment_instrument_id'] ) ? sanitize_text_field( wp_unslash( $_POST['ys_shopline_payment_instrument_id'] ) ) : '';
-        }
+        $payment_instrument_id = isset( $_POST['ys_shopline_payment_instrument_id'] ) ? sanitize_text_field( wp_unslash( $_POST['ys_shopline_payment_instrument_id'] ) ) : '';
 
         // 決定是否使用 CardBindPayment
         //

@@ -4,7 +4,7 @@
 
 ## 版本資訊
 
-- **目前版本**：3.4.7
+- **目前版本**：3.4.8
 - **PHP 需求**：>= 8.0
 - **WordPress 需求**：>= 6.0
 - **WooCommerce 需求**：7.0 - 9.0
@@ -65,6 +65,22 @@ https://your-domain.com/wp-json/ys-shopline/v1/webhook
 ---
 
 ## 變更紀錄
+
+### 3.4.8 - 2026-04-23
+
+**Revert — 回到 v3.3.3 單一 UI 路線**
+
+v3.4.7 疊加 WC 原生 `saved_payment_methods()` 與 SDK 內建 UI，造成兩套卡片選擇介面（WC radio + SDK tab）重複且視覺跑版。回到 v3.3.3 的正確路線：**只用 SDK 內建的已綁卡選擇 UI**。
+
+- 移除 `YSCreditSubscription::payment_fields()` 的 `saved_payment_methods()` + `tokenization_script()` 呼叫
+- 移除 `YSCreditCard::payment_fields()` 的同樣呼叫
+- `YSCreditSubscription::get_sdk_config()` 回到「有 `customerToken` 就 `bindCard.enable=true`」，不 unset token
+- 移除 `YSGatewayBase::prepare_payment_data()` 的 `wc-{id}-payment-token` 讀取（保留 SDK 原生 `ys_shopline_payment_instrument_id` 路徑）
+- 移除前端 JS 的 `onTokenChange` / `isUsingSavedToken` / `applyTokenUiState` 與 `placeOrder` 的已綁卡分支
+- 移除 `#payment ul.woocommerce-SavedPaymentMethods` 相關 CSS
+- 移除 `save_subscription_meta_from_order` 從 WC token 讀取 instrument_id 的新增邏輯（續扣 meta 寫入仍由 `YSRedirectHandler::update_subscription_instrument` 與 Webhook 兩路負責，v3.3.3 架構）
+
+保留 v3.4.3～v3.4.6 的真正修復：AJAX 綁卡、CardBind amount=10000、`expireYear` 2→4 位、結帳 FAILED redirect 到 pay-for-order 頁、3DS SDK amount=10000。
 
 ### 3.4.7 - 2026-04-23
 

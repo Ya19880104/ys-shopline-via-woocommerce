@@ -124,12 +124,6 @@ jQuery(function ($) {
                 $(document.body).on('updated_checkout', function () {
                     self.onUpdatedCheckout();
                 });
-
-                // WC 原生 token radio 切換（wc-{gateway_id}-payment-token）
-                // 選已綁卡 → 隱藏 SDK 新卡 UI；選「使用新卡」→ 顯示並確保 SDK 初始化
-                $(document.body).on('change', 'input[name^="wc-"][name$="-payment-token"]', function () {
-                    self.onTokenChange();
-                });
             }
 
             // 重置提交 flag：WC 在錯誤或頁面更新時觸發
@@ -258,63 +252,6 @@ jQuery(function ($) {
 
             if (gatewayId) {
                 activeGateway = gatewayId;
-                // 若預設選了已綁卡，不要初始化 SDK；選新卡才初始化
-                if (this.isUsingSavedToken(gatewayId)) {
-                    this.applyTokenUiState(gatewayId, true);
-                } else {
-                    this.applyTokenUiState(gatewayId, false);
-                    this.initSDK(gatewayId);
-                }
-            }
-        },
-
-        /**
-         * 判斷目前 gateway 是否選到「已綁卡」(wc-{id}-payment-token 的值不是 'new' 也不為空)
-         *
-         * @param {string} gatewayId
-         * @return {boolean}
-         */
-        isUsingSavedToken: function (gatewayId) {
-            var tokenField = 'wc-' + gatewayId + '-payment-token';
-            var $selected = $('input[name="' + tokenField + '"]:checked');
-            if (!$selected.length) {
-                return false; // 沒 token radio（沒綁卡）
-            }
-            var val = $selected.val();
-            return !!(val && val !== 'new' && !isNaN(val));
-        },
-
-        /**
-         * 根據是否選用已綁卡，顯示或隱藏 SDK 新卡 UI
-         *
-         * @param {string} gatewayId
-         * @param {boolean} usingSaved
-         */
-        applyTokenUiState: function (gatewayId, usingSaved) {
-            var gatewayConfig = GATEWAY_CONFIG[gatewayId];
-            if (!gatewayConfig) return;
-            var $container = $('#' + gatewayConfig.containerId);
-            if (usingSaved) {
-                $container.hide();
-                $container.siblings('.ys-shopline-new-card-only').hide();
-                $container.siblings('.ys-bindcard-hint').hide();
-            } else {
-                $container.show();
-                $container.siblings('.ys-shopline-new-card-only').show();
-                $container.siblings('.ys-bindcard-hint').show();
-            }
-        },
-
-        /**
-         * WC token radio change handler
-         * 切換「已綁卡 ⇄ 使用新卡」時顯示/隱藏 SDK UI 並按需初始化
-         */
-        onTokenChange: function () {
-            var gatewayId = this.getSelectedGateway();
-            if (!gatewayId) return;
-            var usingSaved = this.isUsingSavedToken(gatewayId);
-            this.applyTokenUiState(gatewayId, usingSaved);
-            if (!usingSaved && !paymentInstances[gatewayId]) {
                 this.initSDK(gatewayId);
             }
         },
@@ -717,19 +654,6 @@ jQuery(function ($) {
                     $('#billing_phone').focus();
                     return false;
                 }
-            }
-
-            // 優先：已綁卡（WC 原生 wc-{id}-payment-token）→ 後端走 QuickPayment，不需 SDK paySession
-            // 僅塞一個佔位 paySession='{}'（通過欄位存在檢查），後端會識別 instrument_id
-            if (self.isUsingSavedToken(gatewayId)) {
-                console.log('[YS Shopline] Using saved token, skipping SDK createPayment');
-                $form.find('input[name="ys_shopline_pay_session"]').remove();
-                $form.append($('<input>').attr({
-                    type: 'hidden',
-                    name: 'ys_shopline_pay_session',
-                    value: '{}'
-                }));
-                return true; // 讓 WC 處理 form submit（會帶 wc-{id}-payment-token）
             }
 
             // Check if paySession already exists (means SDK already processed)
