@@ -66,6 +66,17 @@ https://your-domain.com/wp-json/ys-shopline/v1/webhook
 
 ## 變更紀錄
 
+### 3.4.18 - 2026-04-23
+
+**v3.4.17 續修：bind-only 情境必須 `mustAccept=true` 才能真正鎖住 checkbox**
+
+- 問題：v3.4.16/17 只設 `forceSaveCard=true` → JS 默認 `mustAccept: false` → SHOPLINE SDK 仍顯示 checkbox（可取消）
+- 根因：SDK 的 `switchVisible: false` 會被 `mustAccept: false` 無效化
+- 修正：把 PHP `is_add_payment_method` 分支的 `paymentInstrument + mustAccept=true` 結構擴到整個 `bind_only_mode`
+  - 新增付款方式頁：`paymentInstrument + unset customerToken`
+  - 訂閱變更付款方式：`paymentInstrument`（保留 customerToken 讓使用者選已綁卡）
+  - $0 訂閱試用：同上
+
 ### 3.4.17 - 2026-04-23
 
 **v3.4.16 hotfix：AJAX SDK config 需要 is_change_payment_method flag 才能觸發 bind-only**

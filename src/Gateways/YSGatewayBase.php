@@ -533,23 +533,27 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
             }
         }
 
-        // 新增卡片頁面：強制啟用 bindCard，且「不傳 customerToken」只顯示新卡欄位
-        // 官方範例 /guide/quick/ 4.1 純綁卡 SDK init 未傳 customerToken → SDK 只顯卡號輸入
-        // 若傳 customerToken，SDK 會額外顯示已綁卡片列表，UX 混亂
-        if ( $is_add_payment_method ) {
-            unset( $config['customerToken'] );
-
+        // v3.4.18: bind-only 情境（新增付款方式 / 訂閱變更付款方式 / $0 訂閱試用）
+        // 一律傳 paymentInstrument + mustAccept=true 才能真正鎖住 checkbox
+        // 原本只有 JS 預設 protocol 但 mustAccept=false → SHOPLINE SDK 仍顯示 checkbox
+        if ( $bind_only_mode ) {
             $config['paymentInstrument'] = array(
                 'bindCard' => array(
                     'enable'   => true,
                     'protocol' => array(
-                        'switchVisible'       => false,  // 隱藏開關，強制儲存
-                        'defaultSwitchStatus' => true,
-                        'mustAccept'          => true,
+                        'switchVisible'       => false,  // 隱藏開關
+                        'defaultSwitchStatus' => true,   // 預設勾選
+                        'mustAccept'          => true,   // 強制接受（不可取消）
                     ),
                 ),
             );
             $config['forceSaveCard'] = true;
+
+            // 新增付款方式頁額外去掉 customerToken（官方範例：純綁卡 SDK 不該看到已綁卡列表）
+            // change_payment_method 則保留 customerToken（讓使用者能選已綁卡片）
+            if ( $is_add_payment_method ) {
+                unset( $config['customerToken'] );
+            }
         }
 
         return apply_filters( 'ys_shopline_sdk_config', $config, $this );
