@@ -1502,24 +1502,23 @@ jQuery(function ($) {
                     env: serverConfig.env || 'production'
                 };
 
-                // Customer token（必須有才能儲存卡片）
+                // 強制啟用 bindCard（純綁卡模式）
+                // 官方 /guide/quick/ 4.1 CardBind 範例 SDK init 不需要 customerToken
+                // 實際綁卡是後端 /trade/payment/create 帶 paymentCustomerId 達成
+                options.paymentInstrument = {
+                    bindCard: {
+                        enable: true,
+                        protocol: {
+                            switchVisible: false,     // 隱藏開關，強制儲存
+                            defaultSwitchStatus: true,
+                            mustAccept: true
+                        }
+                    }
+                };
+
+                // 若後端仍帶了 customerToken 則一併傳給 SDK（舊版相容）
                 if (serverConfig.customerToken) {
                     options.customerToken = serverConfig.customerToken;
-
-                    // 強制啟用並儲存卡片
-                    options.paymentInstrument = {
-                        bindCard: {
-                            enable: true,
-                            protocol: {
-                                switchVisible: false,     // 隱藏開關，強制儲存
-                                defaultSwitchStatus: true,
-                                mustAccept: true
-                            }
-                        }
-                    };
-                } else {
-                    $container.html('<div class="woocommerce-error">無法取得客戶資訊，請確認您已登入。</div>');
-                    return;
                 }
 
                 console.log('[YS Shopline] Add payment method SDK options:', {

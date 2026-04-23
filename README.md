@@ -4,7 +4,7 @@
 
 ## 版本資訊
 
-- **目前版本**：3.4.4
+- **目前版本**：3.4.5
 - **PHP 需求**：>= 8.0
 - **WordPress 需求**：>= 6.0
 - **WooCommerce 需求**：7.0 - 9.0
@@ -65,6 +65,13 @@ https://your-domain.com/wp-json/ys-shopline/v1/webhook
 ---
 
 ## 變更紀錄
+
+### 3.4.5 - 2026-04-23
+
+**Hotfix — v3.4.4 遺漏 JS 配套**
+- v3.4.4 後端 SDK config 已移除 `customerToken`，但前端 JS（`ys-shopline-checkout.js`）仍硬性要求 `customerToken`，導致綁卡頁顯示「無法取得客戶資訊，請確認您已登入。」
+- 修法：綁卡頁 SDK 初始化不再要求 `customerToken`，強制啟用 `bindCard.enable: true`；若後端帶 `customerToken` 則向後相容一併傳入
+- 對齊官方 `/guide/quick/` 4.1 CardBind 範例（SDK init 無 `customerToken`）
 
 ### 3.4.4 - 2026-04-23
 
