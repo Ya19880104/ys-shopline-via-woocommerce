@@ -66,6 +66,15 @@ https://your-domain.com/wp-json/ys-shopline/v1/webhook
 
 ## 變更紀錄
 
+### 3.4.17 - 2026-04-23
+
+**v3.4.16 hotfix：AJAX SDK config 需要 is_change_payment_method flag 才能觸發 bind-only**
+
+- v3.4.16 首版只在 PHP 檢查 `$_GET['change_payment_method']`，但 SDK config 走 AJAX POST 請求不會帶 GET 參數
+- 結果訂閱 `$order->get_total()` 返回週期金額 101（非實際要扣金額）→ 不進 bind-only → `forceSaveCard` 保持 false
+- 修正：JS 偵測 URL 有 `change_payment_method` 時，AJAX body 帶 `is_change_payment_method=1`；PHP 對應檢查 `$_POST['is_change_payment_method']`
+- 實機驗證（訂閱 #1221）：SDK Config log `bind_only_mode:"yes", force_save_card:"yes"` ✓；checkbox 文字灰階化不可取消 ✓
+
 ### 3.4.16 - 2026-04-23
 
 **訂閱變更付款方式強制儲存新卡（與結帳訂閱行為對齊）**

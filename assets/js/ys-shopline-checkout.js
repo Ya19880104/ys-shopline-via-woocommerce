@@ -350,6 +350,10 @@ jQuery(function ($) {
                 if (urlParams.get('key')) {
                     ajaxData.order_key = urlParams.get('key');
                 }
+                // v3.4.16: 訂閱變更付款方式 → 通知後端切 bind-only 模式（強制 CardBind + forceSaveCard）
+                if (urlParams.get('change_payment_method')) {
+                    ajaxData.is_change_payment_method = '1';
+                }
             }
 
             // Abort any previous pending request for this gateway

@@ -431,10 +431,14 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
                 $is_owner        = $current_user_id && (int) $order->get_user_id() === $current_user_id;
                 $is_guest_valid  = ! $current_user_id && 0 === (int) $order->get_user_id() && $ajax_order_key && $order->get_order_key() === $ajax_order_key;
 
+                // v3.4.16: 訂閱變更付款方式 — JS 端帶 is_change_payment_method=1 flag
+                // phpcs:ignore WordPress.Security.NonceVerification.Missing
+                $is_change_payment = isset( $_POST['is_change_payment_method'] ) && '1' === (string) $_POST['is_change_payment_method'];
+
                 if ( $is_owner || $is_guest_valid ) {
                     $raw_total = (float) $order->get_total();
-                    if ( $raw_total <= 0 ) {
-                        // 訂閱 change_payment_method 情境：走 CardBind 綁卡模式
+                    if ( $is_change_payment || $raw_total <= 0 ) {
+                        // 訂閱 change_payment_method 或訂單 total<=0 → 走 CardBind 綁卡模式
                         $amount_raw     = 0;
                         $bind_only_mode = true;
                     } else {
