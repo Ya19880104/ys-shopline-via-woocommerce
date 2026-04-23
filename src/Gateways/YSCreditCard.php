@@ -84,9 +84,15 @@ class YSCreditCard extends YSGatewayBase {
             echo wpautop( wp_kses_post( $this->description ) );
         }
 
-        // Container for SDK
+        // WC 原生 tokenization：顯示已綁卡 radio（若有）+ 「使用新卡」選項
+        if ( $this->supports( 'tokenization' ) && is_checkout() ) {
+            $this->tokenization_script();
+            $this->saved_payment_methods();
+        }
+
+        // SDK 容器（選「使用新卡」時顯示）
         printf(
-            '<div id="%s_container" class="ys-shopline-payment-container" data-gateway="%s" data-payment-method="%s" style="min-height: 150px;"></div>',
+            '<div id="%s_container" class="ys-shopline-payment-container ys-shopline-new-card-container" data-gateway="%s" data-payment-method="%s" style="min-height: 150px;"></div>',
             esc_attr( $this->id ),
             esc_attr( $this->id ),
             esc_attr( $this->get_payment_method() )

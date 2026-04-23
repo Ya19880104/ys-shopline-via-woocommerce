@@ -820,8 +820,23 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
         $is_subscription = $this->order_contains_subscription( $order );
 
         // 檢查是否使用已綁定的卡片（快捷付款）
+        // 優先讀 WC 標準欄位 wc-{id}-payment-token（來自 saved_payment_methods() radio）
+        $payment_instrument_id = '';
+        $wc_token_field        = 'wc-' . $this->id . '-payment-token';
         // phpcs:ignore WordPress.Security.NonceVerification.Missing
-        $payment_instrument_id = isset( $_POST['ys_shopline_payment_instrument_id'] ) ? sanitize_text_field( wp_unslash( $_POST['ys_shopline_payment_instrument_id'] ) ) : '';
+        $wc_token_posted = isset( $_POST[ $wc_token_field ] ) ? sanitize_text_field( wp_unslash( $_POST[ $wc_token_field ] ) ) : '';
+        if ( $wc_token_posted && 'new' !== $wc_token_posted && is_numeric( $wc_token_posted ) ) {
+            $wc_token = \WC_Payment_Tokens::get( (int) $wc_token_posted );
+            if ( $wc_token && (int) $wc_token->get_user_id() === (int) $order->get_user_id() ) {
+                $payment_instrument_id = $wc_token->get_token();
+            }
+        }
+
+        // 舊欄位相容（pay-for-order 頁 / legacy）
+        if ( empty( $payment_instrument_id ) ) {
+            // phpcs:ignore WordPress.Security.NonceVerification.Missing
+            $payment_instrument_id = isset( $_POST['ys_shopline_payment_instrument_id'] ) ? sanitize_text_field( wp_unslash( $_POST['ys_shopline_payment_instrument_id'] ) ) : '';
+        }
 
         // 決定是否使用 CardBindPayment
         //
@@ -1762,52 +1777,93 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
     }
 
     /**
-     * Add payment method via My Account.
+     * Add payment method via My Account (legacy WC form POST fallback).
      *
-     * 處理 /my-account/add-payment-method/ 頁面的新增卡片請求
-     * 使用純綁卡（CardBind）流程，不需要實際付款
+     * WC 原生 form POST 呼叫此方法。正常流程應由前端 AJAX 直接呼叫
+     * `ajax_add_payment_method()`，讓原 SDK 實例延續 `pay(nextAction)` 處理 3DS。
+     *
+     * 若 JS 失效，WC form POST 進入此方法 → 回傳錯誤訊息，避免走到已廢棄的獨立 3DS 頁。
      *
      * @return array
      */
     public function add_payment_method() {
+        YSLogger::warning( 'Legacy add_payment_method() form POST invoked — 應走 AJAX 流程。JS 可能失效。' );
+        wc_add_notice(
+            __( '請啟用 JavaScript 以新增付款方式；若問題持續請聯絡客服。', 'ys-shopline-via-woocommerce' ),
+            'error'
+        );
+        return array( 'result' => 'failure' );
+    }
+
+    /**
+     * AJAX handler: add payment method.
+     *
+     * 由前端 JS AJAX 呼叫。保持原 SDK 實例活著，回傳 nextAction 供前端
+     * 直接呼叫 `paymentInstance.pay(nextAction)` 完成 3DS（SDK 自動跳 returnUrl）。
+     *
+     * 流程：
+     *   1. 前端 SDK.createPayment() 取得 paySession
+     *   2. POST 到本 endpoint（action=ys_shopline_add_payment_method）
+     *   3. 本方法呼叫 Shopline `/trade/payment/create`（CardBind）
+     *   4. 回 JSON { nextAction, returnUrl }
+     *   5. 前端 `paymentInstance.pay(nextAction)` 完成 3DS
+     *   6. SDK 跳至 returnUrl → `YSAddPaymentMethodHandler::handle_add_method_redirect()` 建立 Token
+     *
+     * @return void (wp_send_json_*)
+     */
+    public function ajax_add_payment_method() {
+        check_ajax_referer( 'ys_shopline_nonce', 'nonce' );
+
         $user_id = get_current_user_id();
-
         if ( ! $user_id ) {
-            wc_add_notice( __( '請先登入後再新增付款方式。', 'ys-shopline-via-woocommerce' ), 'error' );
-            return array( 'result' => 'failure' );
+            wp_send_json_error( array( 'message' => __( '請先登入後再新增付款方式。', 'ys-shopline-via-woocommerce' ) ) );
         }
 
-        // 從 POST 取得 paySession
         // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
-        $pay_session_raw = isset( $_POST['ys_shopline_pay_session'] ) ? wp_unslash( $_POST['ys_shopline_pay_session'] ) : '';
+        $pay_session_raw = isset( $_POST['pay_session'] ) ? wp_unslash( $_POST['pay_session'] ) : '';
 
-        if ( empty( $pay_session_raw ) ) {
-            wc_add_notice( __( '付款資訊遺失，請重新輸入卡片資訊。', 'ys-shopline-via-woocommerce' ), 'error' );
-            return array( 'result' => 'failure' );
+        $result = $this->do_add_payment_method_request( $pay_session_raw, $user_id );
+
+        if ( is_wp_error( $result ) ) {
+            wp_send_json_error( array( 'message' => $result->get_error_message() ) );
         }
 
-        // 驗證 paySession 是有效的 JSON
+        wp_send_json_success( $result );
+    }
+
+    /**
+     * Core: 呼叫 Shopline 建立 CardBind 綁卡交易。
+     *
+     * 共用於 AJAX handler（正常流程）與 WC form fallback（已停用）。
+     *
+     * @param string $pay_session_raw paySession JSON 字串（來自前端 SDK.createPayment）
+     * @param int    $user_id         WordPress user ID
+     * @return array|\WP_Error { nextAction, returnUrl, reference_order_id, trade_order_id, customer_id } or WP_Error
+     */
+    protected function do_add_payment_method_request( $pay_session_raw, $user_id ) {
+        if ( empty( $pay_session_raw ) ) {
+            return new \WP_Error( 'missing_pay_session', __( '付款資訊遺失，請重新輸入卡片資訊。', 'ys-shopline-via-woocommerce' ) );
+        }
+
         $decoded = json_decode( $pay_session_raw, true );
         if ( json_last_error() !== JSON_ERROR_NONE ) {
             YSLogger::error( 'Invalid paySession JSON in add_payment_method', array(
                 'error' => json_last_error_msg(),
             ) );
-            wc_add_notice( __( '付款資訊格式錯誤，請重新輸入。', 'ys-shopline-via-woocommerce' ), 'error' );
-            return array( 'result' => 'failure' );
+            return new \WP_Error( 'invalid_pay_session', __( '付款資訊格式錯誤，請重新輸入。', 'ys-shopline-via-woocommerce' ) );
         }
 
-        // 取得或建立 SHOPLINE customerId
         $customer_id = $this->get_shopline_customer_id( $user_id );
-
         if ( ! $customer_id ) {
-            wc_add_notice( __( '無法建立客戶資訊，請稍後重試。', 'ys-shopline-via-woocommerce' ), 'error' );
-            return array( 'result' => 'failure' );
+            return new \WP_Error( 'no_customer_id', __( '無法建立客戶資訊，請稍後重試。', 'ys-shopline-via-woocommerce' ) );
         }
 
-        // 產生虛擬 referenceOrderId: ADD{YYYYMMDDHHmmss}{2位亂數}
+        if ( ! $this->api ) {
+            return new \WP_Error( 'no_api', __( '付款閘道尚未設定。', 'ys-shopline-via-woocommerce' ) );
+        }
+
         $reference_order_id = 'ADD' . gmdate( 'YmdHis' ) . wp_rand( 10, 99 );
 
-        // Return URL for 3DS completion
         $return_url = add_query_arg(
             array(
                 'ys_shopline_add_method' => '1',
@@ -1816,7 +1872,6 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
             wc_get_account_endpoint_url( 'payment-methods' )
         );
 
-        // 取得用戶資訊
         $user      = get_userdata( $user_id );
         $raw_phone = get_user_meta( $user_id, 'billing_phone', true );
         $country   = get_user_meta( $user_id, 'billing_country', true ) ?: 'TW';
@@ -1839,14 +1894,10 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
             'phone'     => $phone,
         );
 
-        // 取得 billing 地址：用戶 billing meta + 商店地址 fallback
         $billing_address = $this->build_user_billing_address( $user_id );
 
-        // 準備 API 請求資料（純綁卡）
-        // SHOPLINE API 要求 billing + order 必填
-        // 金額策略：對齊官方 CardBind 範例 amount.value=10000（TWD $100）
-        // CardBind 為「純綁卡」paymentBehavior（非付款場景），銀行進行授權驗證但不實際請款
-        // 參考：https://docs.shoplinepayments.com/guide/quick/ 章節 4.1
+        // 準備 API 請求資料（純綁卡 CardBind）
+        // 對齊官方 /guide/quick/ 4.1 範例：amount.value=10000（TWD $100），銀行只授權不請款
         $data = array(
             'paySession'       => $pay_session_raw,
             'referenceOrderId' => $reference_order_id,
@@ -1901,7 +1952,7 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
             'client'           => $this->build_client_info( $this->get_client_ip() ),
         );
 
-        YSLogger::debug( 'Add payment method request', array(
+        YSLogger::debug( 'Add payment method request (AJAX)', array(
             'user_id'            => $user_id,
             'customer_id'        => $customer_id,
             'reference_order_id' => $reference_order_id,
@@ -1910,19 +1961,13 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
         \YangSheep\ShoplinePayment\Utils\YSBindCardLogger::log(
             \YangSheep\ShoplinePayment\Utils\YSBindCardLogger::EVENT_API_REQUEST,
             array(
-                'flow'               => 'add_payment_method',
+                'flow'               => 'ajax_add_payment_method',
                 'customer_id'        => $customer_id,
                 'reference_order_id' => $reference_order_id,
                 'paymentBehavior'    => 'CardBind',
                 'amount'             => 10000,
             )
         );
-
-        // 呼叫 API
-        if ( ! $this->api ) {
-            wc_add_notice( __( '付款閘道尚未設定。', 'ys-shopline-via-woocommerce' ), 'error' );
-            return array( 'result' => 'failure' );
-        }
 
         $response = $this->api->create_payment_trade( $data );
 
@@ -1931,79 +1976,41 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
             \YangSheep\ShoplinePayment\Utils\YSBindCardLogger::log(
                 \YangSheep\ShoplinePayment\Utils\YSBindCardLogger::EVENT_ERROR,
                 array(
-                    'flow'           => 'add_payment_method',
-                    'error_code'     => $response->get_error_code(),
-                    'error_message'  => $response->get_error_message(),
+                    'flow'          => 'ajax_add_payment_method',
+                    'error_code'    => $response->get_error_code(),
+                    'error_message' => $response->get_error_message(),
                 )
             );
-            wc_add_notice(
-                __( '新增付款方式失敗：', 'ys-shopline-via-woocommerce' ) . $response->get_error_message(),
-                'error'
-            );
-            return array( 'result' => 'failure' );
+            return $response;
         }
+
+        $trade_order_id = isset( $response['tradeOrderId'] ) ? $response['tradeOrderId'] : '';
 
         \YangSheep\ShoplinePayment\Utils\YSBindCardLogger::log(
             \YangSheep\ShoplinePayment\Utils\YSBindCardLogger::EVENT_API_RESPONSE,
             array(
-                'flow'           => 'add_payment_method',
-                'trade_order_id' => isset( $response['tradeOrderId'] ) ? $response['tradeOrderId'] : '',
+                'flow'           => 'ajax_add_payment_method',
+                'trade_order_id' => $trade_order_id,
                 'status'         => isset( $response['status'] ) ? $response['status'] : '',
                 'has_nextAction' => isset( $response['nextAction'] ) ? 'yes' : 'no',
             )
         );
 
-        // 儲存綁卡資訊到 user meta（供 3DS 完成後使用）
+        // 儲存 pending bind 資訊（供 handle_add_method_redirect 使用）
         update_user_meta( $user_id, YSOrderMeta::PENDING_BIND, array(
             'reference_order_id' => $reference_order_id,
-            'trade_order_id'     => isset( $response['tradeOrderId'] ) ? $response['tradeOrderId'] : '',
+            'trade_order_id'     => $trade_order_id,
             'customer_id'        => $customer_id,
             'created_at'         => time(),
         ) );
 
-        // 處理 nextAction（3DS 驗證）
-        if ( isset( $response['nextAction'] ) ) {
-            YSLogger::debug( 'Add payment method requires 3DS', array(
-                'has_next_action' => 'yes',
-            ) );
-
-            // 儲存 nextAction 供 YSAddPaymentMethodHandler::handle_3ds_page() 渲染
-            update_user_meta( $user_id, YSOrderMeta::ADD_METHOD_NEXT_ACTION, $response['nextAction'] );
-
-            // WooCommerce WC_Form_Handler::add_payment_method_action() 只認 result + redirect
-            // 回傳 redirect 至 3DS 頁面；handle_3ds_page() 會攔截並渲染 SDK + pay(nextAction)
-            // 3DS 完成後 SDK 會跳至 returnUrl（含 ys_shopline_add_method=1），由 handle_add_method_redirect() 建立 Token
-            $redirect_url = add_query_arg(
-                array(
-                    'ys_shopline_3ds' => '1',
-                    'add_method'      => '1',
-                ),
-                wc_get_account_endpoint_url( 'payment-methods' )
-            );
-
-            return array(
-                'result'   => 'success',
-                'redirect' => $redirect_url,
-            );
-        }
-
-        // 無需 3DS，直接完成
-        YSLogger::info( 'Add payment method completed without 3DS', array(
-            'trade_order_id' => isset( $response['tradeOrderId'] ) ? $response['tradeOrderId'] : '',
-        ) );
-
-        // 清理暫存資料
-        delete_user_meta( $user_id, YSOrderMeta::PENDING_BIND );
-
-        // 同步 Token（從 API 或 Webhook）
-        $customer_manager = YSCustomer::instance();
-        $customer_manager->sync_tokens_from_api( $user_id );
-
-        wc_add_notice( __( '付款方式已成功新增。', 'ys-shopline-via-woocommerce' ), 'success' );
-
         return array(
-            'result'   => 'success',
-            'redirect' => wc_get_account_endpoint_url( 'payment-methods' ),
+            'nextAction'         => isset( $response['nextAction'] ) ? $response['nextAction'] : null,
+            'returnUrl'          => $return_url,
+            'reference_order_id' => $reference_order_id,
+            'trade_order_id'     => $trade_order_id,
+            'customer_id'        => $customer_id,
         );
     }
+
 }

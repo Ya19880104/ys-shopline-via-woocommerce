@@ -3,7 +3,7 @@
  * Plugin Name: YS Shopline via WooCommerce
  * Plugin URI: https://yangsheep.com.tw
  * Description: Support Shopline Payments for WooCommerce, including HPOS and Subscriptions. Supports Credit Card, ATM, JKOPay, Apple Pay, LINE Pay, and Chailease BNPL.
- * Version:           3.4.6
+ * Version:           3.4.7
  * Author: YangSheep
  * Author URI: https://yangsheep.com.tw
  * Text Domain: ys-shopline-via-woocommerce
@@ -17,7 +17,7 @@
 defined( 'ABSPATH' ) || exit;
 
 // Define plugin constants
-define( 'YS_SHOPLINE_VERSION', '3.4.6' );
+define( 'YS_SHOPLINE_VERSION', '3.4.7' );
 define( 'YS_SHOPLINE_PLUGIN_FILE', __FILE__ );
 define( 'YS_SHOPLINE_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 define( 'YS_SHOPLINE_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
@@ -257,6 +257,9 @@ final class YSShoplinePayment {
         // Pay-for-order AJAX（重新付款頁面用）
         add_action( 'wp_ajax_ys_shopline_pay_for_order', array( $this, 'ajax_pay_for_order' ) );
         add_action( 'wp_ajax_nopriv_ys_shopline_pay_for_order', array( $this, 'ajax_pay_for_order' ) );
+
+        // Add payment method AJAX（綁卡；同頁原 SDK 實例延續 3DS，不跳獨立頁）
+        add_action( 'wp_ajax_ys_shopline_add_payment_method', array( $this, 'ajax_add_payment_method' ) );
     }
 
     /**
@@ -571,6 +574,26 @@ final class YSShoplinePayment {
 
         $config = $gateway->get_sdk_config();
         wp_send_json_success( $config );
+    }
+
+    /**
+     * AJAX handler: 新增付款方式（綁卡）
+     *
+     * 委派到 ys_shopline_credit 閘道的 ajax_add_payment_method() 完成 CardBind 綁卡 API。
+     * 前端拿到回應 nextAction 後，使用**原 SDK 實例**執行 `payment.pay(nextAction)`，
+     * SDK 自己跳至 returnUrl（由 YSAddPaymentMethodHandler::handle_add_method_redirect() 建 Token）。
+     *
+     * 不再跳獨立 3DS 頁（因為跨頁會丟失 PCI session）。
+     */
+    public function ajax_add_payment_method() {
+        $gateways = WC()->payment_gateways()->payment_gateways();
+        $gateway  = isset( $gateways['ys_shopline_credit'] ) ? $gateways['ys_shopline_credit'] : null;
+
+        if ( ! $gateway || ! method_exists( $gateway, 'ajax_add_payment_method' ) ) {
+            wp_send_json_error( array( 'message' => __( '付款閘道未啟用。', 'ys-shopline-via-woocommerce' ) ) );
+        }
+
+        $gateway->ajax_add_payment_method();
     }
 
     /**

@@ -90,10 +90,9 @@ class YSCreditSubscription extends YSGatewayBase {
     public function get_sdk_config() {
         $config = parent::get_sdk_config();
 
-        // 訂閱閘道設計：強制使用「新增卡片」流程，不顯示已儲存卡片
-        // 原因：訂閱綁卡需要重新授權（CardBindPayment / CardBind），
-        // 顯示已儲存卡片會造成 UX 混淆（用戶以為點了就能付，但 SDK 仍需卡號輸入）
-        unset( $config['customerToken'] );
+        // 訂閱閘道：當用戶選「使用新卡」時，SDK 仍要強制綁卡（savePaymentInstrument=true）
+        // 但已綁卡列表是由 WC 原生 saved_payment_methods() radio 呈現，不依賴 SDK customerToken
+        // 所以這裡保留 customerToken（若 parent 有帶），但強制 bindCard.enable=true 確保新卡綁定流程
         $config['forceSaveCard']     = true;
         $config['paymentInstrument'] = array(
             'bindCard' => array(
@@ -481,16 +480,33 @@ class YSCreditSubscription extends YSGatewayBase {
         $user_id     = $order->get_user_id();
         $customer_id = $user_id ? $this->get_shopline_customer_id( $user_id ) : '';
 
+        // 若本次結帳選擇「已綁卡」，從 WC Token 取 instrument_id 寫入 subscription meta
+        // 為「QuickPayment 即時 SUCCEEDED（不走 redirect）」提供寫入保障
+        $instrument_id  = '';
+        $wc_token_field = 'wc-' . $this->id . '-payment-token';
+        // phpcs:ignore WordPress.Security.NonceVerification.Missing
+        $wc_token_id = isset( $_POST[ $wc_token_field ] ) ? absint( $_POST[ $wc_token_field ] ) : 0;
+        if ( $wc_token_id ) {
+            $wc_token = \WC_Payment_Tokens::get( $wc_token_id );
+            if ( $wc_token && (int) $wc_token->get_user_id() === (int) $user_id ) {
+                $instrument_id = $wc_token->get_token();
+            }
+        }
+
         foreach ( $subscriptions as $subscription ) {
             if ( $customer_id ) {
                 $subscription->update_meta_data( YSOrderMeta::CUSTOMER_ID, $customer_id );
-                $subscription->save();
             }
+            if ( $instrument_id && empty( $subscription->get_meta( YSOrderMeta::PAYMENT_INSTRUMENT_ID ) ) ) {
+                $subscription->update_meta_data( YSOrderMeta::PAYMENT_INSTRUMENT_ID, $instrument_id );
+            }
+            $subscription->save();
 
-            YSLogger::debug( 'Saved subscription customer_id from order', array(
+            YSLogger::debug( 'Saved subscription meta from order', array(
                 'order_id'        => $order->get_id(),
                 'subscription_id' => $subscription->get_id(),
                 'customer_id'     => $customer_id ?: 'none',
+                'instrument_id'   => $instrument_id ?: 'none',
             ) );
         }
     }
@@ -545,15 +561,24 @@ class YSCreditSubscription extends YSGatewayBase {
             echo wpautop( wp_kses_post( $this->description ) );
         }
 
-        // SDK 容器已內建卡片選擇功能，不需要 WC 原生的 saved_payment_methods() radio buttons
+        // WC 原生 tokenization：若用戶已有綁卡，顯示 radio 列表（含「使用新卡」選項）
+        // 選已綁卡 → 後端走 QuickPayment（直接扣，不重綁）
+        // 選新卡 → SDK 顯示卡號輸入，後端走 CardBindPayment（扣並綁）
+        // 無綁卡 → saved_payment_methods() 不輸出任何內容，直接顯示 SDK 新卡 UI
+        if ( $this->supports( 'tokenization' ) && is_checkout() ) {
+            $this->tokenization_script();
+            $this->saved_payment_methods();
+        }
+
+        // SDK 容器（當選「使用新卡」時 JS 會顯示；選已綁卡時 JS 會隱藏）
         printf(
-            '<div id="%s_container" class="ys-shopline-payment-container" data-gateway="%s" data-payment-method="%s" data-force-save="true" style="min-height: 150px;"></div>',
+            '<div id="%s_container" class="ys-shopline-payment-container ys-shopline-new-card-container" data-gateway="%s" data-payment-method="%s" data-force-save="true" style="min-height: 150px;"></div>',
             esc_attr( $this->id ),
             esc_attr( $this->id ),
             esc_attr( $this->get_payment_method() )
         );
 
-        echo '<p class="ys-shopline-subscription-notice">';
+        echo '<p class="ys-shopline-subscription-notice ys-shopline-new-card-only">';
         echo '<small>';
         esc_html_e( '此付款方式會儲存您的信用卡資訊以供定期扣款使用。', 'ys-shopline-via-woocommerce' );
         echo '</small>';

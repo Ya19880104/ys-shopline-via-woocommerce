@@ -4,7 +4,7 @@
 
 ## 版本資訊
 
-- **目前版本**：3.4.6
+- **目前版本**：3.4.7
 - **PHP 需求**：>= 8.0
 - **WordPress 需求**：>= 6.0
 - **WooCommerce 需求**：7.0 - 9.0
@@ -65,6 +65,44 @@ https://your-domain.com/wp-json/ys-shopline/v1/webhook
 ---
 
 ## 變更紀錄
+
+### 3.4.7 - 2026-04-23
+
+**重大改善 — 綁卡／已綁卡整合重構（AJAX 模式）**
+
+本版同時處理「信用卡綁卡」與「訂閱結帳」兩條路徑的 UX 與流程一致性，解決先前 v3.4.2～v3.4.6 一連串症狀的根因：跨頁 3DS PCI session 丟失、已綁卡在訂閱頁不顯示、Token 儲存失敗。
+
+**新增付款方式（My Account）— AJAX 重構**
+- 完全重寫綁卡流程為 AJAX 模式：前端 SDK 實例保持活著，不跳獨立 3DS 頁
+- 新增 AJAX endpoint `wp_ajax_ys_shopline_add_payment_method`
+- 後端 `YSGatewayBase::do_add_payment_method_request()` 回 JSON `{nextAction, returnUrl}`
+- 前端取到 `nextAction` 後以**原 SDK 實例** `paymentInstance.pay(nextAction)` 完成 3DS
+- SDK 自己跳 `returnUrl` → `handle_add_method_redirect()` 建立 WC Token
+- 移除已廢棄的 `YSAddPaymentMethodHandler::handle_3ds_page()` 與 `render_3ds_page()`
+
+**結帳／訂閱 — 已綁卡與新卡統一支援**
+- `YSCreditSubscription::payment_fields()` 與 `YSCreditCard::payment_fields()` 加回 WC 原生 `saved_payment_methods()` radio 列表
+- 已綁卡時顯示卡片清單（含預設標記）+ 「使用新付款方式」選項；無綁卡則直接顯示 SDK 新卡 UI
+- 前端 JS 新增 `onTokenChange` / `isUsingSavedToken` / `applyTokenUiState`
+  - 選已綁卡 → 隱藏 SDK 容器 + 不初始化 SDK
+  - 選「使用新卡」 → 顯示 SDK 容器 + 按需初始化
+- `placeOrder` 偵測已綁卡 → 塞 `paySession='{}'` 交由 WC 提交（後端走 QuickPayment）
+
+**後端標準化**
+- `YSGatewayBase::prepare_payment_data()` 讀 WC 標準欄位 `wc-{id}-payment-token`（取代自訂 `ys_shopline_payment_instrument_id`）
+- 選 token 時自動轉為 Shopline `paymentInstrumentId` 走 `QuickPayment` paymentBehavior
+
+**訂閱續扣 Instrument ID 寫入保障（三條路徑）**
+1. `YSRedirectHandler::update_subscription_instrument`（走 returnUrl redirect 成功時）
+2. `YSCreditSubscription::save_subscription_meta_from_order`（新增：QuickPayment 即時 SUCCEEDED 不走 redirect 時，從 WC Token 補寫 instrument_id 至 subscription meta）
+3. `YSWebhookHandler::update_pending_subscriptions_instrument`（webhook 非同步保底）
+
+**WC Token 儲存修正**
+- `YSCustomer::create_wc_token_from_instrument()` 處理 SHOPLINE 回傳的兩位數年份 `"30"` 轉為 `"2030"`，避免 `WC_Payment_Token_CC::validate()` 失敗拋 `Invalid or missing payment token fields` Exception
+
+**結帳付款失敗改善**
+- `YSRedirectHandler` 處理 `FAILED` 狀態時，自動 `wp_safe_redirect()` 至 WC pay-for-order 頁（`/checkout/order-pay/{id}/?key=...`），並顯示 `wc_add_notice` 錯誤訊息
+- 使用者不再卡在感謝頁，可直接重選付款方式重試同一訂單
 
 ### 3.4.6 - 2026-04-23
 

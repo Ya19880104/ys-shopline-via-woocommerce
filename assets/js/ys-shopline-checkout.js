@@ -124,6 +124,12 @@ jQuery(function ($) {
                 $(document.body).on('updated_checkout', function () {
                     self.onUpdatedCheckout();
                 });
+
+                // WC 原生 token radio 切換（wc-{gateway_id}-payment-token）
+                // 選已綁卡 → 隱藏 SDK 新卡 UI；選「使用新卡」→ 顯示並確保 SDK 初始化
+                $(document.body).on('change', 'input[name^="wc-"][name$="-payment-token"]', function () {
+                    self.onTokenChange();
+                });
             }
 
             // 重置提交 flag：WC 在錯誤或頁面更新時觸發
@@ -252,6 +258,63 @@ jQuery(function ($) {
 
             if (gatewayId) {
                 activeGateway = gatewayId;
+                // 若預設選了已綁卡，不要初始化 SDK；選新卡才初始化
+                if (this.isUsingSavedToken(gatewayId)) {
+                    this.applyTokenUiState(gatewayId, true);
+                } else {
+                    this.applyTokenUiState(gatewayId, false);
+                    this.initSDK(gatewayId);
+                }
+            }
+        },
+
+        /**
+         * 判斷目前 gateway 是否選到「已綁卡」(wc-{id}-payment-token 的值不是 'new' 也不為空)
+         *
+         * @param {string} gatewayId
+         * @return {boolean}
+         */
+        isUsingSavedToken: function (gatewayId) {
+            var tokenField = 'wc-' + gatewayId + '-payment-token';
+            var $selected = $('input[name="' + tokenField + '"]:checked');
+            if (!$selected.length) {
+                return false; // 沒 token radio（沒綁卡）
+            }
+            var val = $selected.val();
+            return !!(val && val !== 'new' && !isNaN(val));
+        },
+
+        /**
+         * 根據是否選用已綁卡，顯示或隱藏 SDK 新卡 UI
+         *
+         * @param {string} gatewayId
+         * @param {boolean} usingSaved
+         */
+        applyTokenUiState: function (gatewayId, usingSaved) {
+            var gatewayConfig = GATEWAY_CONFIG[gatewayId];
+            if (!gatewayConfig) return;
+            var $container = $('#' + gatewayConfig.containerId);
+            if (usingSaved) {
+                $container.hide();
+                $container.siblings('.ys-shopline-new-card-only').hide();
+                $container.siblings('.ys-bindcard-hint').hide();
+            } else {
+                $container.show();
+                $container.siblings('.ys-shopline-new-card-only').show();
+                $container.siblings('.ys-bindcard-hint').show();
+            }
+        },
+
+        /**
+         * WC token radio change handler
+         * 切換「已綁卡 ⇄ 使用新卡」時顯示/隱藏 SDK UI 並按需初始化
+         */
+        onTokenChange: function () {
+            var gatewayId = this.getSelectedGateway();
+            if (!gatewayId) return;
+            var usingSaved = this.isUsingSavedToken(gatewayId);
+            this.applyTokenUiState(gatewayId, usingSaved);
+            if (!usingSaved && !paymentInstances[gatewayId]) {
                 this.initSDK(gatewayId);
             }
         },
@@ -654,6 +717,19 @@ jQuery(function ($) {
                     $('#billing_phone').focus();
                     return false;
                 }
+            }
+
+            // 優先：已綁卡（WC 原生 wc-{id}-payment-token）→ 後端走 QuickPayment，不需 SDK paySession
+            // 僅塞一個佔位 paySession='{}'（通過欄位存在檢查），後端會識別 instrument_id
+            if (self.isUsingSavedToken(gatewayId)) {
+                console.log('[YS Shopline] Using saved token, skipping SDK createPayment');
+                $form.find('input[name="ys_shopline_pay_session"]').remove();
+                $form.append($('<input>').attr({
+                    type: 'hidden',
+                    name: 'ys_shopline_pay_session',
+                    value: '{}'
+                }));
+                return true; // 讓 WC 處理 form submit（會帶 wc-{id}-payment-token）
             }
 
             // Check if paySession already exists (means SDK already processed)
@@ -1580,32 +1656,29 @@ jQuery(function ($) {
             // 移除舊的綁定
             $form.off('.ys_shopline_add_method');
 
-            // 綁定提交事件
+            // 永遠阻止 WC 原生 form POST
+            // 改走 AJAX：讓原 SDK 實例延續 pay(nextAction)，否則跨頁會丟失 PCI session
             $form.on('submit.ys_shopline_add_method', function (e) {
-                // 檢查是否選擇了 Shopline 付款方式
                 var selectedPayment = $('input[name="payment_method"]:checked').val();
-
                 if (!selectedPayment || selectedPayment.indexOf('ys_shopline') !== 0) {
-                    // 不是 Shopline 付款方式，讓 WooCommerce 處理
-                    return true;
+                    return true; // 非 Shopline 付款方式，讓 WC 處理
                 }
-
-                // 檢查是否已有 paySession
-                if ($form.find('input[name="ys_shopline_pay_session"]').val()) {
-                    console.log('[YS Shopline] Add method: paySession exists, submitting');
-                    return true;
-                }
-
                 e.preventDefault();
                 self.processAddPaymentMethod($form);
                 return false;
             });
 
-            console.log('[YS Shopline] Add payment method form events bound');
+            console.log('[YS Shopline] Add payment method form events bound (AJAX mode)');
         },
 
         /**
-         * Process add payment method
+         * Process add payment method (AJAX 模式，原 SDK 實例延續 3DS).
+         *
+         * 1. SDK.createPayment() → paySession
+         * 2. AJAX POST 送到後端（action=ys_shopline_add_payment_method）
+         * 3. 後端呼叫 Shopline CardBind API 回 nextAction
+         * 4. **用原 SDK 實例** pay(nextAction) → SDK 自己跳 returnUrl
+         * 5. returnUrl 觸發 handle_add_method_redirect 建 Token
          *
          * @param {jQuery} $form Form element
          */
@@ -1617,50 +1690,81 @@ jQuery(function ($) {
                 return;
             }
 
-            // Block form
             $form.addClass('processing').block({
                 message: null,
                 overlayCSS: { background: '#fff', opacity: 0.6 }
             });
 
-            console.log('[YS Shopline] Creating payment for add_payment_method...');
+            console.log('[YS Shopline] AddMethod: Creating paySession...');
 
-            // 呼叫 SDK createPayment
             this.paymentInstance.createPayment().then(function (result) {
-                console.log('[YS Shopline] Add method createPayment result:', result);
-
                 if (result.error) {
                     $form.removeClass('processing').unblock();
                     self.showError($form, result.error.message || '建立付款失敗');
                     return;
                 }
-
                 if (!result.paySession) {
                     $form.removeClass('processing').unblock();
                     self.showError($form, '付款資訊建立失敗，請重新輸入卡片資訊。');
                     return;
                 }
 
-                // 添加 paySession 到表單
                 var paySessionValue = result.paySession;
                 if (typeof paySessionValue === 'object') {
                     paySessionValue = JSON.stringify(paySessionValue);
                 }
 
-                $form.find('input[name="ys_shopline_pay_session"]').remove();
-                $form.append($('<input>').attr({
-                    type: 'hidden',
-                    name: 'ys_shopline_pay_session',
-                    value: paySessionValue
-                }));
+                console.log('[YS Shopline] AddMethod: POST to AJAX endpoint...');
 
-                console.log('[YS Shopline] Add method paySession saved, submitting form...');
+                $.ajax({
+                    type: 'POST',
+                    url: ys_shopline_params.ajax_url,
+                    data: {
+                        action: 'ys_shopline_add_payment_method',
+                        nonce: ys_shopline_params.nonce,
+                        pay_session: paySessionValue
+                    }
+                }).done(function (response) {
+                    console.log('[YS Shopline] AddMethod AJAX response:', response);
+                    if (!response || !response.success) {
+                        $form.removeClass('processing').unblock();
+                        var msg = (response && response.data && response.data.message) || '新增付款方式失敗';
+                        self.showError($form, msg);
+                        return;
+                    }
 
-                // 提交表單到 WooCommerce
-                $form.submit();
+                    var nextAction = response.data.nextAction;
+                    var returnUrl  = response.data.returnUrl;
+
+                    // 無 nextAction：SDK 不需額外步驟，直接跳 returnUrl
+                    if (!nextAction) {
+                        console.log('[YS Shopline] AddMethod: no nextAction, redirecting to returnUrl');
+                        window.location.href = returnUrl || '/my-account/payment-methods/';
+                        return;
+                    }
+
+                    // 有 nextAction：用原 SDK 實例 pay()，SDK 會處理 3DS + 自動跳 returnUrl
+                    console.log('[YS Shopline] AddMethod: calling paymentInstance.pay(nextAction)...');
+                    self.paymentInstance.pay(nextAction).then(function (payResult) {
+                        console.log('[YS Shopline] AddMethod pay result:', payResult);
+                        // 成功時 payResult 為 undefined（SDK 已跳轉）
+                        if (payResult && payResult.error) {
+                            $form.removeClass('processing').unblock();
+                            self.showError($form, payResult.error.message || '3DS 驗證失敗');
+                        }
+                    }).catch(function (err) {
+                        console.error('[YS Shopline] AddMethod pay error:', err);
+                        $form.removeClass('processing').unblock();
+                        self.showError($form, err.message || '3DS 驗證錯誤');
+                    });
+                }).fail(function (xhr) {
+                    console.error('[YS Shopline] AddMethod AJAX failed:', xhr);
+                    $form.removeClass('processing').unblock();
+                    self.showError($form, '伺服器錯誤，請稍後再試。');
+                });
 
             }).catch(function (error) {
-                console.error('[YS Shopline] Add method createPayment error:', error);
+                console.error('[YS Shopline] AddMethod createPayment error:', error);
                 $form.removeClass('processing').unblock();
                 self.showError($form, error.message || '發生錯誤');
             });

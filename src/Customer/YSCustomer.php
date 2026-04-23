@@ -387,6 +387,15 @@ class YSCustomer {
 			$expiry_month = is_scalar( $raw_month ) && '' !== $raw_month ? (string) $raw_month : '12';
 			$expiry_year  = is_scalar( $raw_year ) && '' !== $raw_year ? (string) $raw_year : gmdate( 'Y' );
 
+			// WC_Payment_Token_CC::validate() 要求 expiry_year 為 4 位、expiry_month 為 2 位
+			// SHOPLINE 回傳 "30"/"03" 格式，需轉換為 "2030"/"03"，否則 token->save() 會拋 Exception
+			if ( strlen( $expiry_year ) === 2 ) {
+				$expiry_year = '20' . $expiry_year;
+			}
+			if ( strlen( $expiry_month ) === 1 ) {
+				$expiry_month = '0' . $expiry_month;
+			}
+
 			// last4 必須是 1-4 位數字
 			if ( ! preg_match( '/^\d{1,4}$/', $last4 ) ) {
 				YSLogger::warning( 'Skipping instrument with invalid card info', array(

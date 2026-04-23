@@ -246,11 +246,17 @@ class YSRedirectHandler {
             $order->update_meta_data( YSOrderMeta::ERROR_MESSAGE, $friendly_msg );
             $order->save();
 
-            YSLogger::info( 'Redirect handler: Payment failed', array(
+            YSLogger::info( 'Redirect handler: Payment failed, redirecting to pay-for-order', array(
                 'order_id' => $order->get_id(),
                 'raw_msg'  => $raw_msg,
                 'friendly' => $friendly_msg,
             ) );
+
+            // 失敗時不讓使用者停留在感謝頁（會顯示「訂單失敗」但無重試入口）
+            // 改跳 WC pay-for-order 頁，讓客戶能立即重選付款方式重試同一張訂單
+            wc_add_notice( $friendly_msg, 'error' );
+            wp_safe_redirect( $order->get_checkout_payment_url() );
+            exit;
         }
         // 其他狀態（CREATED, PROCESSING）暫不處理，等待 Webhook 或用戶重試
 

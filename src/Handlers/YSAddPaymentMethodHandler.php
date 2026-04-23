@@ -36,11 +36,11 @@ class YSAddPaymentMethodHandler {
 	 * Initialize the handler.
 	 */
 	public static function init() {
-		// 處理 3DS 回調（優先級 5，在其他處理器之前）
+		// 處理 3DS 完成後的回調（SDK 跳至 returnUrl 後觸發，建立 WC Token）
 		add_action( 'template_redirect', array( __CLASS__, 'handle_add_method_redirect' ), 5 );
 
-		// 渲染 3DS 頁面（如果需要從 add_payment_method() 返回 nextAction）
-		add_action( 'template_redirect', array( __CLASS__, 'handle_3ds_page' ), 6 );
+		// v3.4.7 起綁卡改走 AJAX 模式（原 SDK 實例直接 pay(nextAction)），
+		// 獨立 3DS 頁因跨頁 PCI session 丟失而不可行，已移除 handle_3ds_page / render_3ds_page。
 	}
 
 	/**
@@ -149,14 +149,11 @@ class YSAddPaymentMethodHandler {
 				)
 			);
 
-			if ( ! empty( $instrument_id ) ) {
-				// 直接建立 WC Token
-				self::create_token_from_response( $user_id, $instrument_id, $credit_card, $customer_id );
-			} else {
-				// 從 API 同步所有 Token
-				$customer_manager = YSCustomer::instance();
-				$customer_manager->sync_tokens_from_api( $user_id );
-			}
+			// 統一使用 sync_tokens_from_api 建 WC Token
+			// （結帳流程已驗證穩定；早期 create_token_from_response 自建會遇到 WC_Payment_Token
+			// 「Invalid or missing payment token fields」Exception，放棄）
+			$customer_manager = YSCustomer::instance();
+			$customer_manager->sync_tokens_from_api( $user_id );
 
 			// 清理暫存資料
 			self::clear_pending_data( $user_id );
@@ -196,176 +193,6 @@ class YSAddPaymentMethodHandler {
 			) );
 			wc_add_notice( __( '綁卡正在處理中，請稍後查看。', 'ys-shopline-via-woocommerce' ), 'notice' );
 		}
-	}
-
-	/**
-	 * Handle 3DS page rendering.
-	 *
-	 * 如果 add_payment_method() 返回了 nextAction，前端需要處理 3DS。
-	 * 這個方法處理從後端返回 nextAction 需要跳轉的情況。
-	 */
-	public static function handle_3ds_page() {
-		// 檢查是否是 3DS 頁面請求
-		// phpcs:ignore WordPress.Security.NonceVerification.Recommended
-		if ( ! isset( $_GET['ys_shopline_3ds'] ) || ! isset( $_GET['add_method'] ) ) {
-			return;
-		}
-
-		$user_id = get_current_user_id();
-		if ( ! $user_id ) {
-			wp_die( esc_html__( '請先登入。', 'ys-shopline-via-woocommerce' ) );
-		}
-
-		// 取得 nextAction
-		$next_action = get_user_meta( $user_id, YSOrderMeta::ADD_METHOD_NEXT_ACTION, true );
-
-		if ( empty( $next_action ) ) {
-			wp_safe_redirect( wc_get_account_endpoint_url( 'payment-methods' ) );
-			exit;
-		}
-
-		// 清除 nextAction（只用一次）
-		delete_user_meta( $user_id, YSOrderMeta::ADD_METHOD_NEXT_ACTION );
-
-		// 渲染 3DS 頁面
-		self::render_3ds_page( $next_action );
-		exit;
-	}
-
-	/**
-	 * Render 3DS verification page.
-	 *
-	 * @param array $next_action NextAction data from API.
-	 */
-	private static function render_3ds_page( $next_action ) {
-		$return_url = add_query_arg(
-			array( 'ys_shopline_add_method' => '1' ),
-			wc_get_account_endpoint_url( 'payment-methods' )
-		);
-
-		// Get credentials
-		$testmode = 'yes' === get_option( 'ys_shopline_testmode', 'yes' );
-
-		if ( $testmode ) {
-			$client_key  = get_option( 'ys_shopline_sandbox_client_key', '' );
-			$merchant_id = get_option( 'ys_shopline_sandbox_merchant_id', '' );
-		} else {
-			$client_key  = get_option( 'ys_shopline_client_key', '' );
-			$merchant_id = get_option( 'ys_shopline_merchant_id', '' );
-		}
-
-		$env = $testmode ? 'sandbox' : 'production';
-		?>
-		<!DOCTYPE html>
-		<html>
-		<head>
-			<meta charset="UTF-8">
-			<meta name="viewport" content="width=device-width, initial-scale=1.0">
-			<title><?php esc_html_e( '驗證中...', 'ys-shopline-via-woocommerce' ); ?></title>
-			<script src="https://cdn.shoplinepayments.com/sdk/v1/payment-web.js"></script>
-			<style>
-				body {
-					font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-					display: flex;
-					justify-content: center;
-					align-items: center;
-					min-height: 100vh;
-					margin: 0;
-					background: #f5f5f5;
-				}
-				.container {
-					text-align: center;
-					padding: 40px;
-					background: white;
-					border-radius: 8px;
-					box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-					max-width: 500px;
-					width: 90%;
-				}
-				.spinner {
-					border: 3px solid #f3f3f3;
-					border-top: 3px solid #3498db;
-					border-radius: 50%;
-					width: 40px;
-					height: 40px;
-					animation: spin 1s linear infinite;
-					margin: 20px auto;
-				}
-				@keyframes spin {
-					0% { transform: rotate(0deg); }
-					100% { transform: rotate(360deg); }
-				}
-				.error { color: #e74c3c; margin-top: 20px; }
-				#paymentContainer { margin-top: 20px; }
-			</style>
-		</head>
-		<body>
-			<div class="container">
-				<h2><?php esc_html_e( '驗證信用卡', 'ys-shopline-via-woocommerce' ); ?></h2>
-				<div class="spinner"></div>
-				<p><?php esc_html_e( '正在進行安全驗證，請稍候...', 'ys-shopline-via-woocommerce' ); ?></p>
-				<div id="paymentContainer"></div>
-				<div id="errorMessage" class="error" style="display:none;"></div>
-			</div>
-			<script>
-				var nextAction = <?php echo wp_json_encode( $next_action ); ?>;
-				var returnUrl = <?php echo wp_json_encode( $return_url ); ?>;
-				var clientKey = <?php echo wp_json_encode( $client_key ); ?>;
-				var merchantId = <?php echo wp_json_encode( $merchant_id ); ?>;
-				var env = <?php echo wp_json_encode( $env ); ?>;
-
-				async function process3DS() {
-					try {
-						console.log('Initializing SDK for 3DS (add payment method)...');
-
-						var result = await ShoplinePayments({
-							clientKey: clientKey,
-							merchantId: merchantId,
-							paymentMethod: 'CreditCard',
-							element: '#paymentContainer',
-							env: env,
-							currency: 'TWD',
-							// SHOPLINE SDK 要求 amount > 0，對齊官方 CardBind 範例（不會再觸發扣款）
-							amount: 10000
-						});
-
-						console.log('SDK initialized:', result);
-
-						if (result.error) {
-							showError('SDK Error: ' + result.error.message);
-							return;
-						}
-
-						console.log('Calling payment.pay() with nextAction...');
-						var payResult = await result.payment.pay(nextAction);
-
-						console.log('pay() result:', payResult);
-
-						if (payResult && payResult.error) {
-							showError('<?php echo esc_js( __( '驗證失敗：', 'ys-shopline-via-woocommerce' ) ); ?>' + payResult.error.message);
-						} else {
-							// Success - redirect
-							window.location.href = returnUrl;
-						}
-
-					} catch (e) {
-						console.error('3DS error:', e);
-						showError('<?php echo esc_js( __( '系統錯誤：', 'ys-shopline-via-woocommerce' ) ); ?>' + e.message);
-					}
-				}
-
-				function showError(message) {
-					document.querySelector('.spinner').style.display = 'none';
-					document.getElementById('errorMessage').textContent = message;
-					document.getElementById('errorMessage').style.display = 'block';
-				}
-
-				// Start processing
-				process3DS();
-			</script>
-		</body>
-		</html>
-		<?php
 	}
 
 	/**
