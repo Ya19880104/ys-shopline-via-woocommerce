@@ -66,6 +66,20 @@ https://your-domain.com/wp-json/ys-shopline/v1/webhook
 
 ## 變更紀錄
 
+### 3.4.12 - 2026-04-23
+
+**簡化日誌系統 + 失敗訂單自動刪除 + 綁卡失敗友善訊息**
+
+- **移除 `YSBindCardLogger` 獨立日誌類別**：整合至主 `YSLogger`（debug.log），減少維運負擔
+  - 刪除 `src/Utils/YSBindCardLogger.php`
+  - 移除設定頁「綁卡紀錄」tab、啟用開關、下載功能與相關清理 cron
+  - `YSAddPaymentMethodHandler` / `YSGatewayBase` / `YSWebhookHandler` 原 `BindCardLogger::log` 呼叫點全數改用 `YSLogger::debug/info/error`
+  - 停用 hook 保留對舊版 `ys_shopline_bindcard_log_cleanup` 排程的清除，確保升級乾淨
+- **綁卡失敗顯示友善錯誤**：`add-payment-method` 流程的 `FAILED` 狀態訊息改走 `YSRedirectHandler::humanize_error_message()`，與結帳失敗訊息對齊
+- **錯誤付款不產生訂單殘留**：`YSGatewayBase::process_payment` 兩處明確失敗分支（`create_payment_trade` WP_Error、未預期狀態）直接 `$order->delete(true)` 刪除訂單
+  - 保留 3DS 失敗 → pay-for-order 的重試流程（只刪 SHOPLINE 從未受理的訂單）
+  - 配合既有 `check_prior_trade_status` 的終態白名單，不會誤刪重試中的訂單
+
 ### 3.4.11 - 2026-04-23
 
 **CardBind 佔位金額 10000 → 10100（沙盒測試相容）**

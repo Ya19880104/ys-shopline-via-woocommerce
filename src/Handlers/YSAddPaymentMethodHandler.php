@@ -20,7 +20,6 @@ namespace YangSheep\ShoplinePayment\Handlers;
 defined( 'ABSPATH' ) || exit;
 
 use YangSheep\ShoplinePayment\Utils\YSLogger;
-use YangSheep\ShoplinePayment\Utils\YSBindCardLogger;
 use YangSheep\ShoplinePayment\Utils\YSOrderMeta;
 use YangSheep\ShoplinePayment\Customer\YSCustomer;
 use WC_Payment_Tokens;
@@ -137,17 +136,12 @@ class YSAddPaymentMethodHandler {
 
 			$last4 = is_array( $credit_card ) && isset( $credit_card['last'] ) ? (string) $credit_card['last'] : '';
 
-			YSBindCardLogger::log(
-				YSBindCardLogger::EVENT_TOKEN_SAVED,
-				array(
-					'flow'           => 'add_payment_method',
-					'trade_order_id' => $trade_order_id,
-					'instrument_id'  => $instrument_id,
-					'customer_id'    => $customer_id,
-					'last4'          => $last4,
-					'brand'          => is_array( $credit_card ) && isset( $credit_card['brand'] ) ? (string) $credit_card['brand'] : '',
-				)
-			);
+			YSLogger::info( 'BindCard token saved', array(
+				'trade_order_id' => $trade_order_id,
+				'instrument_id'  => '*' . substr( (string) $instrument_id, -6 ),
+				'last4'          => $last4,
+				'brand'          => is_array( $credit_card ) && isset( $credit_card['brand'] ) ? (string) $credit_card['brand'] : '',
+			) );
 
 			// 統一使用 sync_tokens_from_api 建 WC Token
 			// （結帳流程已驗證穩定；早期 create_token_from_response 自建會遇到 WC_Payment_Token
@@ -165,26 +159,19 @@ class YSAddPaymentMethodHandler {
 			exit;
 
 		} elseif ( 'FAILED' === $status ) {
-			// 綁卡失敗
-			$error_msg = $response['paymentMsg']['msg'] ?? __( '綁卡失敗', 'ys-shopline-via-woocommerce' );
-			YSLogger::error( 'Add payment method failed', array(
+			// 綁卡失敗 — 使用與結帳失敗一致的友善錯誤訊息
+			$raw_msg      = $response['paymentMsg']['msg'] ?? __( '綁卡失敗', 'ys-shopline-via-woocommerce' );
+			$friendly_msg = \YangSheep\ShoplinePayment\Handlers\YSRedirectHandler::humanize_error_message( $raw_msg );
+
+			YSLogger::error( 'BindCard failed', array(
 				'user_id'        => $user_id,
 				'trade_order_id' => $trade_order_id,
-				'error'          => $error_msg,
+				'raw_msg'        => $raw_msg,
+				'friendly'       => $friendly_msg,
 			) );
 
-			YSBindCardLogger::log(
-				YSBindCardLogger::EVENT_ERROR,
-				array(
-					'flow'           => 'add_payment_method',
-					'trade_order_id' => $trade_order_id,
-					'status'         => $status,
-					'error'          => $error_msg,
-				)
-			);
-
 			self::clear_pending_data( $user_id );
-			wc_add_notice( __( '新增付款方式失敗：', 'ys-shopline-via-woocommerce' ) . $error_msg, 'error' );
+			wc_add_notice( __( '新增付款方式失敗：', 'ys-shopline-via-woocommerce' ) . $friendly_msg, 'error' );
 
 		} else {
 			// 其他狀態（PROCESSING, CREATED 等）- 可能尚未完成

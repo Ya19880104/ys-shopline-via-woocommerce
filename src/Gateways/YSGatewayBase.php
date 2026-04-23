@@ -720,22 +720,21 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
         if ( is_wp_error( $response ) ) {
             $raw_error    = $response->get_error_message();
             $friendly_msg = YSRedirectHandler::humanize_error_message( $raw_error );
-            YSLogger::error( 'Payment failed: ' . $raw_error );
 
-            // 訂單備註保留原始錯誤供管理員除錯
-            $order->update_status(
-                'failed',
-                sprintf(
-                    /* translators: 1: Payment method name (e.g. Apple Pay), 2: Error message */
-                    __( 'Shopline payment failed (%1$s): %2$s', 'ys-shopline-via-woocommerce' ),
-                    $this->get_payment_method(),
-                    $raw_error
-                )
-            );
-            $order->update_meta_data( YSOrderMeta::PAYMENT_STATUS, 'FAILED' );
-            $order->update_meta_data( YSOrderMeta::ERROR_CODE, $response->get_error_code() );
-            $order->update_meta_data( YSOrderMeta::ERROR_MESSAGE, $friendly_msg );
-            $order->save();
+            YSLogger::error( 'Payment failed before SHOPLINE accepted trade', array(
+                'order_id'   => $order->get_id(),
+                'error_code' => $response->get_error_code(),
+                'raw_error'  => $raw_error,
+                'friendly'   => $friendly_msg,
+            ) );
+
+            // v3.4.12: 交易從未被 SHOPLINE 受理，直接刪除訂單避免失敗訂單殘留在後台
+            $order_id_for_log = $order->get_id();
+            $order->delete( true );
+
+            YSLogger::info( 'Failed order deleted (create_payment_trade WP_Error)', array(
+                'order_id' => $order_id_for_log,
+            ) );
 
             // 前端顯示友善訊息
             wc_add_notice( $friendly_msg, 'error' );
@@ -781,12 +780,13 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
                 );
             }
 
-            // 未知狀態 — 視為失敗
-            $order->update_status( 'failed', sprintf(
-                /* translators: %s: payment status */
-                __( 'Shopline 付款回傳未預期的狀態：%s', 'ys-shopline-via-woocommerce' ),
-                $status ?: '(empty)'
+            // 未知狀態 — 視為失敗，並刪除訂單（v3.4.12：失敗訂單不留後台）
+            $order_id_for_log = $order->get_id();
+            YSLogger::error( 'Payment failed with unknown status, deleting order', array(
+                'order_id' => $order_id_for_log,
+                'status'   => $status,
             ) );
+            $order->delete( true );
             wc_add_notice( __( '付款處理異常，請重試或聯繫客服。', 'ys-shopline-via-woocommerce' ), 'error' );
             return array( 'result' => 'failure' );
         }
@@ -1982,43 +1982,29 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
             'reference_order_id' => $reference_order_id,
         ) );
 
-        \YangSheep\ShoplinePayment\Utils\YSBindCardLogger::log(
-            \YangSheep\ShoplinePayment\Utils\YSBindCardLogger::EVENT_API_REQUEST,
-            array(
-                'flow'               => 'ajax_add_payment_method',
-                'customer_id'        => $customer_id,
-                'reference_order_id' => $reference_order_id,
-                'paymentBehavior'    => 'CardBind',
-                'amount'             => 10100,
-            )
-        );
-
+        // 綁卡 API 狀態統一透過 YSLogger 記錄（debug.log 類型），不再走獨立 BindCardLogger
         $response = $this->api->create_payment_trade( $data );
 
         if ( is_wp_error( $response ) ) {
-            YSLogger::error( 'Add payment method failed: ' . $response->get_error_message() );
-            \YangSheep\ShoplinePayment\Utils\YSBindCardLogger::log(
-                \YangSheep\ShoplinePayment\Utils\YSBindCardLogger::EVENT_ERROR,
-                array(
-                    'flow'          => 'ajax_add_payment_method',
-                    'error_code'    => $response->get_error_code(),
-                    'error_message' => $response->get_error_message(),
-                )
-            );
-            return $response;
+            // 回傳友善錯誤訊息給前端（與結帳失敗一致）
+            $raw_error    = $response->get_error_message();
+            $friendly_msg = \YangSheep\ShoplinePayment\Handlers\YSRedirectHandler::humanize_error_message( $raw_error );
+            YSLogger::error( 'BindCard API failed', array(
+                'flow'        => 'ajax_add_payment_method',
+                'error_code'  => $response->get_error_code(),
+                'raw_error'   => $raw_error,
+                'friendly'    => $friendly_msg,
+            ) );
+            return new \WP_Error( $response->get_error_code(), $friendly_msg );
         }
 
         $trade_order_id = isset( $response['tradeOrderId'] ) ? $response['tradeOrderId'] : '';
-
-        \YangSheep\ShoplinePayment\Utils\YSBindCardLogger::log(
-            \YangSheep\ShoplinePayment\Utils\YSBindCardLogger::EVENT_API_RESPONSE,
-            array(
-                'flow'           => 'ajax_add_payment_method',
-                'trade_order_id' => $trade_order_id,
-                'status'         => isset( $response['status'] ) ? $response['status'] : '',
-                'has_nextAction' => isset( $response['nextAction'] ) ? 'yes' : 'no',
-            )
-        );
+        YSLogger::debug( 'BindCard API response', array(
+            'flow'           => 'ajax_add_payment_method',
+            'trade_order_id' => $trade_order_id,
+            'status'         => isset( $response['status'] ) ? $response['status'] : '',
+            'has_nextAction' => isset( $response['nextAction'] ) ? 'yes' : 'no',
+        ) );
 
         // 儲存 pending bind 資訊（供 handle_add_method_redirect 使用）
         update_user_meta( $user_id, YSOrderMeta::PENDING_BIND, array(

@@ -499,16 +499,12 @@ final class YSWebhookHandler {
         $card_info             = $pi['instrumentCard'] ?? [];
         $card_info             = is_array( $card_info ) ? $card_info : [];
 
-        \YangSheep\ShoplinePayment\Utils\YSBindCardLogger::log(
-            \YangSheep\ShoplinePayment\Utils\YSBindCardLogger::EVENT_WEBHOOK,
-            array(
-                'event'         => 'customer.instrument.binded',
-                'customer_id'   => $payment_customer_id,
-                'instrument_id' => $payment_instrument_id,
-                'last4'         => isset( $card_info['last'] ) ? (string) $card_info['last'] : '',
-                'brand'         => isset( $card_info['brand'] ) ? (string) $card_info['brand'] : '',
-            )
-        );
+        YSLogger::info( 'BindCard webhook: customer.instrument.binded', array(
+            'customer_id'   => $payment_customer_id,
+            'instrument_id' => '*' . substr( (string) $payment_instrument_id, -6 ),
+            'last4'         => isset( $card_info['last'] ) ? (string) $card_info['last'] : '',
+            'brand'         => isset( $card_info['brand'] ) ? (string) $card_info['brand'] : '',
+        ) );
 
         if ( ! $payment_instrument_id || ! $payment_customer_id ) {
             return;
