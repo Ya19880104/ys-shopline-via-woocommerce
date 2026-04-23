@@ -409,15 +409,21 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
         // phpcs:ignore WordPress.Security.NonceVerification.Missing
         $ajax_order_id = isset( $_POST['order_id'] ) ? absint( $_POST['order_id'] ) : 0;
 
-        // 新增卡片頁面：純綁卡模式，短路回傳不做任何金額查詢
-        if ( $is_add_payment_method ) {
+        // v3.4.15: 訂閱變更付款方式情境 — WCS 的 order total 可能是 $0，SDK 需走 CardBind 綁卡模式
+        // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+        $is_change_payment_method = isset( $_GET['change_payment_method'] ) || ( isset( $_POST['woocommerce_change_payment'] ) );
+
+        // 新增卡片頁面 / 訂閱變更付款方式：純綁卡模式，短路回傳不做任何金額查詢
+        if ( $is_add_payment_method || $is_change_payment_method ) {
             $amount_raw     = 0;
             $bind_only_mode = true;
         }
         // Pay-for-order（AJAX 來源）
         elseif ( $ajax_order_id ) {
             $order = wc_get_order( $ajax_order_id );
-            if ( $order && $order->needs_payment() ) {
+            // v3.4.15: 訂閱變更付款方式的 pay-for-order 訂單 total 可能為 0 且 needs_payment()=false
+            //          所以改用「能 wc_get_order 就處理」，並在 total<=0 時走 bind-only
+            if ( $order ) {
                 // 驗證訂單所有權：登入用戶比對 user_id，訪客比對 order_key
                 // phpcs:ignore WordPress.Security.NonceVerification.Missing
                 $ajax_order_key  = isset( $_POST['order_key'] ) ? sanitize_text_field( wp_unslash( $_POST['order_key'] ) ) : '';
@@ -426,8 +432,15 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
                 $is_guest_valid  = ! $current_user_id && 0 === (int) $order->get_user_id() && $ajax_order_key && $order->get_order_key() === $ajax_order_key;
 
                 if ( $is_owner || $is_guest_valid ) {
-                    $amount_raw = $order->get_total();
-                    $currency   = $order->get_currency();
+                    $raw_total = (float) $order->get_total();
+                    if ( $raw_total <= 0 ) {
+                        // 訂閱 change_payment_method 情境：走 CardBind 綁卡模式
+                        $amount_raw     = 0;
+                        $bind_only_mode = true;
+                    } else {
+                        $amount_raw = $raw_total;
+                    }
+                    $currency = $order->get_currency();
                 }
             }
         }
@@ -439,8 +452,15 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
             if ( $order_id ) {
                 $order = wc_get_order( $order_id );
                 if ( $order ) {
-                    $amount_raw = $order->get_total();
-                    $currency   = $order->get_currency();
+                    // 訂單總額為 0（如訂閱 change_payment 情境）→ 改綁卡模式
+                    $raw_total = (float) $order->get_total();
+                    if ( $raw_total <= 0 ) {
+                        $amount_raw     = 0;
+                        $bind_only_mode = true;
+                    } else {
+                        $amount_raw = $raw_total;
+                    }
+                    $currency = $order->get_currency();
                 }
             }
         }
@@ -686,10 +706,13 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
         $pay_session = $pay_session_raw;
 
         // 驗證 paySession 是有效的 JSON（至少能解析）
+        // v3.4.15: paySession 為敏感載荷（含 sessionId / device fingerprint），log 僅記 hash 不留原文
         $decoded = json_decode( $pay_session_raw, true );
         if ( json_last_error() !== JSON_ERROR_NONE ) {
-            YSLogger::error( 'Invalid paySession JSON: ' . json_last_error_msg(), array(
-                'raw_value' => substr( $pay_session_raw, 0, 100 ),
+            YSLogger::error( 'Invalid paySession JSON', array(
+                'error'  => json_last_error_msg(),
+                'length' => strlen( $pay_session_raw ),
+                'hash'   => substr( hash( 'sha256', $pay_session_raw ), 0, 8 ),
             ) );
             wc_add_notice( __( 'Invalid payment session. Please try again.', 'ys-shopline-via-woocommerce' ), 'error' );
             return array( 'result' => 'failure' );
@@ -700,7 +723,7 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
             'length'        => strlen( $pay_session_raw ),
             'decoded_ok'    => $decoded !== null ? 'yes' : 'no',
             'has_sessionId' => isset( $decoded['sessionId'] ) ? 'yes' : 'no',
-            'preview'       => substr( $pay_session_raw, 0, 100 ) . '...',
+            'hash'          => substr( hash( 'sha256', $pay_session_raw ), 0, 8 ),
             'decoded_keys'  => $decoded !== null ? array_keys( $decoded ) : array(),
         ) );
 

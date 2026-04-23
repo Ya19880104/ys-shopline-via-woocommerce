@@ -615,7 +615,11 @@ final class YSWebhookHandler {
 
         if ( $token_id ) {
             \WC_Payment_Tokens::delete( (int) $token_id );
-            YSLogger::info( "Webhook: 刪除 Payment Token: {$payment_instrument_id}" );
+            // v3.4.15: instrument_id 屬敏感識別碼，log 只保留末 6 碼
+            YSLogger::info( 'Webhook: Payment Token deleted', array(
+                'token_id'      => (int) $token_id,
+                'instrument_id' => '*' . substr( (string) $payment_instrument_id, -6 ),
+            ) );
         }
     }
 

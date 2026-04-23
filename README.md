@@ -66,6 +66,60 @@ https://your-domain.com/wp-json/ys-shopline/v1/webhook
 
 ## 變更紀錄
 
+### 3.4.15 - 2026-04-23
+
+**訂閱續扣 bound-then-default retry + 變更付款方式可行 + log 敏感欄位遮罩**
+
+#### 🔄 續扣重試邏輯（P0）
+
+改寫 `YSCreditSubscription::process_subscription_payment`：
+1. **綁定卡優先**：從 subscription meta 讀 `_ys_shopline_payment_instrument_id` 扣款
+2. **綁定卡失敗**：若使用者 WC default token 不同卡，改用預設卡重試（WP_Error 或 FAILED 都算失敗）
+3. **meta 空**：直接用使用者預設卡
+4. **每次嘗試都寫訂單備註**供管理員稽核（嘗試哪張卡 / 失敗原因 / fallback 結果 / 最終狀態）
+5. **retry 用獨立冪等鍵**（`reference_order_id-{instrument末6碼}`），避免被 SHOPLINE 冪等擋下
+
+舊函式 `get_subscription_instrument_id` 拆為：
+- `get_bound_subscription_instrument_id( $order )` — 只讀 subscription meta
+- `get_user_default_instrument_id( $user_id )` — 只讀使用者預設 token
+
+新增 helper：
+- `try_recurring_charge( $order, $amount, $customer_id, $instrument_id )` — 單次扣款
+- `is_charge_success( $response )` — 判斷是否算成功（SUCCEEDED/CAPTURED/CREATED/AUTHORIZED）
+
+#### 🔑 訂閱變更付款方式（P0）
+
+`YSCreditCard::supports` 加入：
+- `subscription_payment_method_change`
+- `subscription_payment_method_change_customer`
+- `subscription_payment_method_change_admin`
+
+新增 hook `woocommerce_subscription_payment_method_updated_to_ys_shopline_credit`，在付款方式被改為 SHOPLINE 信用卡時：
+- 從 parent order meta 抓 instrument_id（或 user default token 補位）
+- 回寫到 subscription meta
+- 加 subscription note：`訂閱付款方式已從 {old} 改為 SHOPLINE 信用卡（末 6 碼 X），續扣將使用此卡`
+
+`YSGatewayBase::get_sdk_config` 的 SDK 初始化邏輯修正：
+- AJAX 與 pay-for-order 直渲染兩條分支：偵測 `$order->get_total() <= 0` 時自動切 bind-only 模式
+- 修正訂閱 change_payment_method 情境下 SDK 初始化報 `amount is required (1004)` 的 bug
+- 解決原本「該訂閱的付款方式無法變更」錯誤訊息
+
+#### 🧪 實機驗證（[REDACTED_TEST_SITE]）
+
+- 訂閱 #1230（active、`ys_shopline_credit_subscription`）→「變更付款」按鈕進入 pay-for-order 表單
+- SDK 成功載入（amount=10100 CardBind 綁卡模式）
+- 選擇已綁 JCB 0200 → 送出 → 訂閱 meta `_ys_shopline_payment_instrument_id` 實際更新（`*515066` → `*797062`）
+- 下次續扣會用新卡執行
+
+#### 🔒 Log 敏感欄位遮罩（P1）
+
+- `YSGatewayBase` 兩處（L691 invalid JSON log、L703 PaySession received debug log）：
+  - 移除 `raw_value` / `preview`（原記錄 paySession 前 100 字元明文）
+  - 改記 `hash`（SHA256 前 8 字符，足以除錯不同 paySession，但不洩漏內容）
+- `YSWebhookHandler::handle_customer_instrument_unbinded` L618：
+  - 原 `YSLogger::info("Webhook: 刪除 Payment Token: {$payment_instrument_id}")` 明文 instrument_id
+  - 改為結構化陣列 + 只留末 6 碼
+
 ### 3.4.14 - 2026-04-23
 
 **失敗時導向 pay-for-order 訂單內頁，不再停在結帳頁**

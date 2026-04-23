@@ -10,6 +10,7 @@ namespace YangSheep\ShoplinePayment\Gateways;
 defined( 'ABSPATH' ) || exit;
 
 use WC_HTTPS;
+use YangSheep\ShoplinePayment\Utils\YSOrderMeta;
 
 /**
  * YSCreditCard Class.
@@ -29,14 +30,91 @@ class YSCreditCard extends YSGatewayBase {
         $this->method_description = __( '透過 SHOPLINE Payment 信用卡一次付清', 'ys-shopline-via-woocommerce' );
 
         // Supports
+        // v3.4.15: 加入 subscription_payment_method_change_* 讓訂閱能改扣款卡到本 gateway
+        // （訂閱初始建立仍由 YSCreditSubscription 處理，此處只接既有訂閱的「變更付款方式」）
         $this->supports = array(
             'products',
             'refunds',
             'tokenization',
             'add_payment_method',
+            'subscription_payment_method_change',
+            'subscription_payment_method_change_customer',
+            'subscription_payment_method_change_admin',
         );
 
         parent::__construct();
+
+        // 訂閱變更付款方式成功後同步 instrument_id 到 subscription meta
+        add_action(
+            'woocommerce_subscription_payment_method_updated_to_' . $this->id,
+            array( $this, 'sync_subscription_instrument_after_method_change' ),
+            10,
+            2
+        );
+    }
+
+    /**
+     * 當客戶把訂閱付款方式改為本 gateway 時，把最新的 instrument_id 寫回 subscription meta。
+     *
+     * WC Subscriptions 的 change-payment-method 流程：
+     *   1. 客戶在訂閱內點「變更付款方式」→ 進 pay-for-order 表單
+     *   2. 填新卡資訊 → 走 process_payment → YSGatewayBase 會在 order meta 寫 instrument_id
+     *   3. WCS 把 subscription 的 _payment_method 改成本 gateway → 觸發本 hook
+     *   4. 我們把 order meta 的 instrument_id 回寫到 subscription meta（否則續扣取不到）
+     *
+     * @param \WC_Subscription $subscription        Subscription being changed.
+     * @param string           $old_payment_method  Previous gateway id.
+     */
+    public function sync_subscription_instrument_after_method_change( $subscription, $old_payment_method ) {
+        if ( ! $subscription || ! is_object( $subscription ) ) {
+            return;
+        }
+
+        // WCS 會把變更過程中的 order 掛在 subscription 上，取最近一張 parent/related order
+        $parent_order = $subscription->get_parent();
+        $instrument_id = $parent_order ? (string) $parent_order->get_meta( YSOrderMeta::PAYMENT_INSTRUMENT_ID ) : '';
+
+        // 若 parent order 沒寫（不同版本 WCS 行為），改從使用者 default token 取
+        if ( empty( $instrument_id ) ) {
+            $user_id = $subscription->get_user_id();
+            if ( $user_id ) {
+                $default_token = \WC_Payment_Tokens::get_customer_default_token( $user_id );
+                if ( $default_token && YSOrderMeta::CREDIT_GATEWAY_ID === $default_token->get_gateway_id() ) {
+                    $instrument_id = $default_token->get_token();
+                }
+            }
+        }
+
+        if ( empty( $instrument_id ) ) {
+            \YangSheep\ShoplinePayment\Utils\YSLogger::warning(
+                'Subscription payment method changed but no instrument_id found to sync',
+                array(
+                    'subscription_id'     => $subscription->get_id(),
+                    'old_payment_method'  => $old_payment_method,
+                    'new_payment_method'  => $this->id,
+                )
+            );
+            return;
+        }
+
+        $subscription->update_meta_data( YSOrderMeta::PAYMENT_INSTRUMENT_ID, $instrument_id );
+        $subscription->save();
+
+        $subscription->add_order_note( sprintf(
+            /* translators: 1: old gateway id, 2: last 6 chars */
+            __( '訂閱付款方式已從 %1$s 改為 SHOPLINE 信用卡（末 6 碼 %2$s），續扣將使用此卡。', 'ys-shopline-via-woocommerce' ),
+            $old_payment_method,
+            substr( $instrument_id, -6 )
+        ) );
+
+        \YangSheep\ShoplinePayment\Utils\YSLogger::info(
+            'Subscription instrument synced after payment method change',
+            array(
+                'subscription_id'    => $subscription->get_id(),
+                'old_payment_method' => $old_payment_method,
+                'instrument_id'      => substr( $instrument_id, -6 ),
+            )
+        );
     }
 
     /**

@@ -187,7 +187,11 @@ class YSCreditSubscription extends YSGatewayBase {
     /**
      * Process subscription renewal payment (Recurring).
      *
-     * 流程控制：驗證 → 建構資料 → 呼叫 API → 處理回應。
+     * v3.4.15 流程：
+     *   1. 驗證 → 綁定卡扣款（primary，subscription meta）
+     *   2. 若綁定卡扣款失敗且使用者有不同的預設卡 → 以預設卡重試（fallback）
+     *   3. 若 subscription meta 空但使用者有預設卡 → 直接用預設卡
+     *   4. 每次嘗試都寫訂單備註供管理員稽核（綁定/fallback/成功/失敗）
      *
      * @param float     $amount Renewal amount.
      * @param \WC_Order $order  Renewal order.
@@ -216,14 +220,97 @@ class YSCreditSubscription extends YSGatewayBase {
             return;
         }
 
-        $instrument_id = $this->get_subscription_instrument_id( $order );
-        if ( ! $instrument_id ) {
-            $this->log( 'No payment instrument found for order #' . $order->get_id(), 'error' );
-            $order->update_status( 'failed', __( 'Subscription payment failed: No saved payment method.', 'ys-shopline-via-woocommerce' ) );
+        // 2. 取得候選卡（bound = subscription meta、fallback = 使用者預設卡）
+        $bound_instrument_id    = $this->get_bound_subscription_instrument_id( $order );
+        $fallback_instrument_id = $this->get_user_default_instrument_id( $user_id );
+
+        // 2a. 優先嘗試綁定卡
+        if ( $bound_instrument_id ) {
+            $order->add_order_note( sprintf(
+                /* translators: %s: last 6 chars of instrument id */
+                __( '訂閱續扣：嘗試綁定卡片（末 6 碼 %s）', 'ys-shopline-via-woocommerce' ),
+                substr( (string) $bound_instrument_id, -6 )
+            ) );
+
+            $response = $this->try_recurring_charge( $order, $amount, $customer_id, $bound_instrument_id );
+
+            if ( $this->is_charge_success( $response ) ) {
+                $this->handle_recurring_response( $order, $response );
+                return;
+            }
+
+            // 綁定卡失敗，記錄原因並評估 fallback
+            $fail_reason = is_wp_error( $response )
+                ? $response->get_error_message()
+                : ( $response['paymentMsg']['msg'] ?? $response['status'] ?? 'UNKNOWN' );
+
+            $order->add_order_note( sprintf(
+                /* translators: 1: last 6, 2: reason */
+                __( '訂閱續扣：綁定卡片（末 6 碼 %1$s）扣款失敗 — %2$s', 'ys-shopline-via-woocommerce' ),
+                substr( (string) $bound_instrument_id, -6 ),
+                $fail_reason
+            ) );
+
+            YSLogger::warning( 'Bound subscription card charge failed, evaluating default card fallback', array(
+                'order_id'            => $order->get_id(),
+                'bound_instrument'    => substr( (string) $bound_instrument_id, -6 ),
+                'fallback_instrument' => $fallback_instrument_id ? substr( (string) $fallback_instrument_id, -6 ) : null,
+                'reason'              => $fail_reason,
+            ) );
+
+            // 2b. 如果使用者預設卡不同，嘗試 fallback
+            if ( $fallback_instrument_id && $fallback_instrument_id !== $bound_instrument_id ) {
+                $order->add_order_note( sprintf(
+                    __( '訂閱續扣：改用使用者預設卡片 fallback（末 6 碼 %s）', 'ys-shopline-via-woocommerce' ),
+                    substr( (string) $fallback_instrument_id, -6 )
+                ) );
+
+                $response2 = $this->try_recurring_charge( $order, $amount, $customer_id, $fallback_instrument_id );
+
+                if ( $this->is_charge_success( $response2 ) ) {
+                    $order->add_order_note( __( '訂閱續扣：預設卡片 fallback 成功。原綁定卡請客戶檢查或更換。', 'ys-shopline-via-woocommerce' ) );
+                    $this->handle_recurring_response( $order, $response2 );
+                    return;
+                }
+
+                // Both failed
+                $order->add_order_note( __( '訂閱續扣：綁定卡與預設卡均扣款失敗，請人工處理。', 'ys-shopline-via-woocommerce' ) );
+                $this->handle_recurring_response( $order, $response2 );
+                return;
+            }
+
+            // 沒有可用的 fallback（或預設卡與綁定卡相同）
+            $this->handle_recurring_response( $order, $response );
             return;
         }
 
-        // 2. 建構 Recurring 請求資料
+        // 3. 沒有綁定卡 → 直接用預設卡
+        if ( $fallback_instrument_id ) {
+            $order->add_order_note( sprintf(
+                __( '訂閱續扣：訂閱未指定卡片，使用使用者預設卡（末 6 碼 %s）', 'ys-shopline-via-woocommerce' ),
+                substr( (string) $fallback_instrument_id, -6 )
+            ) );
+
+            $response = $this->try_recurring_charge( $order, $amount, $customer_id, $fallback_instrument_id );
+            $this->handle_recurring_response( $order, $response );
+            return;
+        }
+
+        // 4. 真的沒有任何可用卡片
+        $this->log( 'No payment instrument found for order #' . $order->get_id(), 'error' );
+        $order->update_status( 'failed', __( 'Subscription payment failed: No saved payment method.', 'ys-shopline-via-woocommerce' ) );
+    }
+
+    /**
+     * 執行單次 Recurring 扣款（供 process_subscription_payment 重試邏輯使用）。
+     *
+     * @param \WC_Order $order
+     * @param float     $amount
+     * @param string    $customer_id
+     * @param string    $instrument_id
+     * @return array|\WP_Error
+     */
+    protected function try_recurring_charge( $order, $amount, $customer_id, $instrument_id ) {
         $data = $this->build_recurring_payment_data( $order, $amount, $customer_id, $instrument_id );
 
         YSLogger::debug( 'Recurring payment request', array(
@@ -231,13 +318,31 @@ class YSCreditSubscription extends YSGatewayBase {
             'amount'        => $data['amount']['value'],
             'currency'      => $data['amount']['currency'],
             'customer_id'   => $customer_id,
-            'instrument_id' => $instrument_id,
+            'instrument_id' => substr( (string) $instrument_id, -6 ),
         ) );
 
-        // 3. 呼叫 API + 處理回應（帶冪等鍵）
-        $idempotent_key = (string) $order->get_meta( YSOrderMeta::REFERENCE_ORDER_ID );
-        $response       = $this->api->create_payment_trade( $data, $idempotent_key );
-        $this->handle_recurring_response( $order, $response );
+        // 每次嘗試使用獨立冪等鍵（reference_order_id + instrument 尾碼），避免 retry 被 SHOPLINE 冪等擋下
+        $idempotent_key = (string) $order->get_meta( YSOrderMeta::REFERENCE_ORDER_ID ) . '-' . substr( (string) $instrument_id, -6 );
+
+        return $this->api->create_payment_trade( $data, $idempotent_key );
+    }
+
+    /**
+     * 判斷 Recurring 回應是否為扣款成功。
+     *
+     * 成功: SUCCEEDED / SUCCESS / CAPTURED
+     * 待處理: CREATED / AUTHORIZED（不視為失敗，不 retry）
+     * 失敗: WP_Error / FAILED / 其他
+     *
+     * @param array|\WP_Error $response
+     * @return bool True 表示成功或 pending，不需要 fallback retry
+     */
+    protected function is_charge_success( $response ) {
+        if ( is_wp_error( $response ) ) {
+            return false;
+        }
+        $status = isset( $response['status'] ) ? strtoupper( (string) $response['status'] ) : '';
+        return in_array( $status, array( 'SUCCEEDED', 'SUCCESS', 'CAPTURED', 'CREATED', 'AUTHORIZED' ), true );
     }
 
     /**
@@ -378,15 +483,15 @@ class YSCreditSubscription extends YSGatewayBase {
     }
 
     /**
-     * Get payment instrument ID for subscription renewal.
+     * Get bound payment instrument ID from subscription meta (authoritative).
      *
-     * 統一從 subscription meta 取得，這是唯一正確來源。
-     * 首次付款時 save_subscription_meta_from_order() 會儲存 instrument ID。
+     * v3.4.15: 拆自原 get_subscription_instrument_id，只讀 subscription meta，不做 fallback。
+     * Fallback 邏輯搬到 process_subscription_payment，由「綁定卡扣款失敗」觸發。
      *
      * @param \WC_Order $order Renewal order.
      * @return string|false Instrument ID or false.
      */
-    protected function get_subscription_instrument_id( $order ) {
+    protected function get_bound_subscription_instrument_id( $order ) {
         if ( ! function_exists( 'wcs_get_subscriptions_for_renewal_order' ) ) {
             $this->log( 'WooCommerce Subscriptions not active', 'error' );
             return false;
@@ -406,21 +511,25 @@ class YSCreditSubscription extends YSGatewayBase {
             }
         }
 
-        // Fallback（read-only）：subscription meta 為空時從使用者 default token 取
-        // ⚠️ 不回寫 meta，避免「客戶 A 訂閱綁 B 卡，但 default 已改為 C 卡」時被錯卡續扣
-        // meta 的權威來源仍是 YSRedirectHandler / Webhook；此處僅避免 meta 空時續扣永久失敗
-        $user_id = $order->get_user_id();
-        if ( $user_id ) {
-            $default_token = \WC_Payment_Tokens::get_customer_default_token( $user_id );
-            if ( $default_token && YSOrderMeta::CREDIT_GATEWAY_ID === $default_token->get_gateway_id() ) {
-                $fallback_instrument_id = $default_token->get_token();
-                YSLogger::warning( 'Subscription meta empty, read-only fallback to user default WC Token (meta NOT updated, please verify manually)', array(
-                    'order_id'      => $order->get_id(),
-                    'user_id'       => $user_id,
-                    'instrument_id' => substr( (string) $fallback_instrument_id, -6 ),
-                ) );
-                return $fallback_instrument_id;
-            }
+        return false;
+    }
+
+    /**
+     * Get user's default WC Payment Token instrument_id（for SHOPLINE credit gateway only）。
+     *
+     * v3.4.15: 獨立函式供 process_subscription_payment 的 fallback 使用。
+     *
+     * @param int $user_id
+     * @return string|false Instrument ID or false.
+     */
+    protected function get_user_default_instrument_id( $user_id ) {
+        if ( ! $user_id ) {
+            return false;
+        }
+
+        $default_token = \WC_Payment_Tokens::get_customer_default_token( $user_id );
+        if ( $default_token && YSOrderMeta::CREDIT_GATEWAY_ID === $default_token->get_gateway_id() ) {
+            return $default_token->get_token();
         }
 
         return false;
