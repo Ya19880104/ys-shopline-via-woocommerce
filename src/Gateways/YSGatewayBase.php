@@ -60,7 +60,10 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
         // Define properties
         $this->title       = $this->get_option( 'title' );
         $this->description = $this->get_option( 'description' );
-        $this->enabled     = $this->get_option( 'enabled' );
+
+        // enabled 狀態由外掛自訂設定頁管理（ys_shopline_{gateway}_enabled），
+        // 非 WC 原生 payment gateway settings，因此手動同步 $this->enabled
+        $this->enabled = 'yes' === get_option( $this->id . '_enabled', 'yes' ) ? 'yes' : 'no';
 
         // Global settings
         $this->testmode = 'yes' === get_option( 'ys_shopline_testmode', 'yes' );
@@ -1836,7 +1839,9 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
         $billing_address = $this->build_user_billing_address( $user_id );
 
         // 準備 API 請求資料（純綁卡）
-        // SHOPLINE API 要求 billing + order 必填，即使 CardBind amount=0 也不例外
+        // SHOPLINE API 要求 billing + order 必填
+        // 重要：SHOPLINE API 拒絕 amount=0（錯誤碼 1025），即使 CardBind 模式也需傳 100（TWD $1）
+        // CardBind 為「純綁卡」paymentBehavior，銀行進行授權驗證但不實際請款
         $data = array(
             'paySession'       => $pay_session_raw,
             'referenceOrderId' => $reference_order_id,
@@ -1844,7 +1849,7 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
             'acquirerType'     => 'SDK',
             'language'         => $this->get_shopline_language(),
             'amount'           => array(
-                'value'    => 0,
+                'value'    => 100,
                 'currency' => 'TWD',
             ),
             'confirm'          => array(
@@ -1872,7 +1877,7 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
                         'name'     => 'Card Binding Verification',
                         'quantity' => 1,
                         'amount'   => array(
-                            'value'    => 0,
+                            'value'    => 100,
                             'currency' => 'TWD',
                         ),
                     ),

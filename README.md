@@ -4,7 +4,7 @@
 
 ## 版本資訊
 
-- **目前版本**：3.4.1
+- **目前版本**：3.4.2
 - **PHP 需求**：>= 8.0
 - **WordPress 需求**：>= 6.0
 - **WooCommerce 需求**：7.0 - 9.0
@@ -65,6 +65,19 @@ https://your-domain.com/wp-json/ys-shopline/v1/webhook
 ---
 
 ## 變更紀錄
+
+### 3.4.2 - 2026-04-23
+
+**修復**
+- 修正訂閱試用 $0 付款失敗（SHOPLINE API 錯誤 1025 `Create amount error`）
+- 修正新增卡片頁相同錯誤
+- 根因：SHOPLINE API 即使 `CardBind` 模式也不接受 `amount.value=0`，需傳 100（TWD $1）通過驗證
+- `CardBind` 為 SHOPLINE「純綁卡」paymentBehavior，銀行進行授權驗證但不實際請款
+- `YSCreditSubscription` supports 陣列加入 `add_payment_method`
+
+**修復 — 我的帳戶頁「新增付款方式」按鈕消失**
+- 根因：`$this->enabled` 讀的是 WC 原生 gateway settings，但本外掛用自訂 option `ys_shopline_{gateway}_enabled`，導致 `parent::is_available()` 回傳 false
+- 修正：`__construct()` 中手動同步 `$this->enabled` 自自訂 option
 
 ### 3.4.1 - 2026-04-09
 

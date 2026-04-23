@@ -35,6 +35,7 @@ class YSCreditSubscription extends YSGatewayBase {
             'products',
             'refunds',
             'tokenization',
+            'add_payment_method',
             'subscriptions',
             'subscription_cancellation',
             'subscription_suspension',
@@ -129,11 +130,18 @@ class YSCreditSubscription extends YSGatewayBase {
         $order_total = (float) $order->get_total();
 
         if ( $order_total <= 0 ) {
-            // 零元試用訂閱：純綁卡，API 實際 amount=0
+            // 零元試用訂閱：純綁卡
+            // SHOPLINE API 拒絕 amount=0（錯誤碼 1025），需傳最低金額 100（TWD $1）通過驗證
+            // CardBind 模式下此金額僅用於卡片授權驗證，銀行會自動解除，不會實際請款
             $data['confirm']['paymentBehavior'] = 'CardBind';
-            $data['amount']['value']             = 0;
+            $data['amount']['value']             = 100;
 
-            YSLogger::info( 'Zero-amount subscription: using CardBind paymentBehavior', array(
+            // 同步修正 order.products 的 amount（避免商品總額與 amount 不符）
+            if ( isset( $data['order']['products'][0]['amount']['value'] ) ) {
+                $data['order']['products'][0]['amount']['value'] = 100;
+            }
+
+            YSLogger::info( 'Zero-amount subscription: using CardBind paymentBehavior with placeholder amount 100', array(
                 'order_id' => $order->get_id(),
             ) );
         } else {
