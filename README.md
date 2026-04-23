@@ -66,6 +66,17 @@ https://your-domain.com/wp-json/ys-shopline/v1/webhook
 
 ## 變更紀錄
 
+### 3.4.13 - 2026-04-23
+
+**Revert v3.4.12 的 `$order->delete(true)`，回歸 WC 原生 UX**
+
+- 檢討後確認：`process_payment` 的「WP_Error 分支」與「未預期狀態分支」本質上是**系統/協定層錯誤**（API 連線、認證、參數、未知回應），不是「付款失敗」
+- 真正的付款失敗（卡片被拒、3DS 失敗）走 `YSRedirectHandler::process_payment_response` FAILED 分支 + webhook，那條路徑不刪訂單、導向 pay-for-order 供重試
+- v3.4.12 直接 delete 過於積極，會讓管理員失去除錯軌跡、也與 WC 原生 UX 脫節
+- v3.4.13 改為：訂單維持 pending 狀態 + 加訂單備註 + 錯誤 meta（`ERROR_CODE` / `ERROR_MESSAGE`）
+- `result: failure` 讓使用者停在結帳頁，WC 的 `order_awaiting_payment` session 機制會在重試時沿用同一張訂單（購物車未變的前提下），**不會新建失敗訂單堆積**
+- 與 Stripe / PayPal / 其他主流 gateway 的失敗處理模式對齊
+
 ### 3.4.12 - 2026-04-23
 
 **簡化日誌系統 + 失敗訂單自動刪除 + 綁卡失敗友善訊息**

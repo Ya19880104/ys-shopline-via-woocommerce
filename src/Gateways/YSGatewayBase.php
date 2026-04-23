@@ -728,15 +728,23 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
                 'friendly'   => $friendly_msg,
             ) );
 
-            // v3.4.12: 交易從未被 SHOPLINE 受理，直接刪除訂單避免失敗訂單殘留在後台
-            $order_id_for_log = $order->get_id();
-            $order->delete( true );
+            // v3.4.13: 不再 $order->delete — 這不是「付款失敗」而是系統錯誤（API 連線/認證/參數）
+            // 訂單保留為 pending + 加訂單備註，result:failure 讓使用者停在結帳頁重試
+            // WC 會透過 session(order_awaiting_payment) 在重試時沿用這張訂單，不會新建
+            $order->add_order_note(
+                sprintf(
+                    /* translators: 1: Payment method name, 2: Error message */
+                    __( 'Shopline API 呼叫失敗（%1$s）：%2$s', 'ys-shopline-via-woocommerce' ),
+                    $this->get_payment_method(),
+                    $raw_error
+                )
+            );
+            $order->update_meta_data( YSOrderMeta::PAYMENT_STATUS, 'ERROR' );
+            $order->update_meta_data( YSOrderMeta::ERROR_CODE, $response->get_error_code() );
+            $order->update_meta_data( YSOrderMeta::ERROR_MESSAGE, $friendly_msg );
+            $order->save();
 
-            YSLogger::info( 'Failed order deleted (create_payment_trade WP_Error)', array(
-                'order_id' => $order_id_for_log,
-            ) );
-
-            // 前端顯示友善訊息
+            // 前端顯示友善訊息，使用者停留在結帳頁可重新嘗試
             wc_add_notice( $friendly_msg, 'error' );
             return array( 'result' => 'failure' );
         }
@@ -780,13 +788,20 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
                 );
             }
 
-            // 未知狀態 — 視為失敗，並刪除訂單（v3.4.12：失敗訂單不留後台）
-            $order_id_for_log = $order->get_id();
-            YSLogger::error( 'Payment failed with unknown status, deleting order', array(
-                'order_id' => $order_id_for_log,
+            // v3.4.13: 未預期狀態也不再 delete — 這是系統/協定層錯誤，非付款失敗
+            // 訂單保留為 pending + 加備註，result:failure 讓使用者停在結帳頁重試
+            YSLogger::error( 'Payment returned unexpected status', array(
+                'order_id' => $order->get_id(),
                 'status'   => $status,
             ) );
-            $order->delete( true );
+            $order->add_order_note( sprintf(
+                /* translators: %s: payment status */
+                __( 'Shopline 付款回傳未預期的狀態：%s（未建立有效交易，使用者可於結帳頁重試）', 'ys-shopline-via-woocommerce' ),
+                $status ?: '(empty)'
+            ) );
+            $order->update_meta_data( YSOrderMeta::PAYMENT_STATUS, $status ?: 'UNKNOWN' );
+            $order->save();
+
             wc_add_notice( __( '付款處理異常，請重試或聯繫客服。', 'ys-shopline-via-woocommerce' ), 'error' );
             return array( 'result' => 'failure' );
         }
