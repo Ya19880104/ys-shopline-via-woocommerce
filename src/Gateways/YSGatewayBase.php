@@ -1929,7 +1929,7 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
             'acquirerType'     => 'SDK',
             'language'         => $this->get_shopline_language(),
             'amount'           => array(
-                'value'    => 10000,
+                'value'    => 10100,
                 'currency' => 'TWD',
             ),
             'confirm'          => array(
@@ -1957,7 +1957,7 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
                         'name'     => 'Card Binding Verification',
                         'quantity' => 1,
                         'amount'   => array(
-                            'value'    => 10000,
+                            'value'    => 10100,
                             'currency' => 'TWD',
                         ),
                     ),
@@ -1989,7 +1989,7 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
                 'customer_id'        => $customer_id,
                 'reference_order_id' => $reference_order_id,
                 'paymentBehavior'    => 'CardBind',
-                'amount'             => 10000,
+                'amount'             => 10100,
             )
         );
 

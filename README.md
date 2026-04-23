@@ -4,7 +4,7 @@
 
 ## 版本資訊
 
-- **目前版本**：3.4.10
+- **目前版本**：3.4.11
 - **PHP 需求**：>= 8.0
 - **WordPress 需求**：>= 6.0
 - **WooCommerce 需求**：7.0 - 9.0
@@ -65,6 +65,15 @@ https://your-domain.com/wp-json/ys-shopline/v1/webhook
 ---
 
 ## 變更紀錄
+
+### 3.4.11 - 2026-04-23
+
+**CardBind 佔位金額 10000 → 10100（沙盒測試相容）**
+
+- 沙盒金額規則：**非 3D 交易金額去掉末兩位後必須為奇數才會成功**（10000 → 100 偶數會 decline），造成 $0 訂閱試用綁卡被 `The payment was declined after being flagged by the issuing bank.` 拒絕
+- 全部 CardBind placeholder 金額統一改為 `10100`（TWD $101，奇數通過沙盒規則）
+- 影響：`YSGatewayBase`、`YSCreditSubscription`、`ys-shopline-checkout.js` 共 5 處
+- 生產環境不受影響（銀行授權驗證不區分奇偶，CardBind 仍只授權不請款）
 
 ### 3.4.10 - 2026-04-23
 

@@ -137,11 +137,11 @@ class YSCreditSubscription extends YSGatewayBase {
             // CardBind 為 SHOPLINE「非付款場景」paymentBehavior，銀行進行卡片授權驗證但不實際請款
             // 參考：https://docs.shoplinepayments.com/guide/quick/ 章節 4.1
             $data['confirm']['paymentBehavior'] = 'CardBind';
-            $data['amount']['value']             = 10000;
+            $data['amount']['value']             = 10100;
 
             // 同步修正 order.products 的 amount（避免商品總額與 amount 不符）
             if ( isset( $data['order']['products'][0]['amount']['value'] ) ) {
-                $data['order']['products'][0]['amount']['value'] = 10000;
+                $data['order']['products'][0]['amount']['value'] = 10100;
             }
 
             YSLogger::info( 'Zero-amount subscription: using CardBind paymentBehavior with placeholder amount 10000', array(

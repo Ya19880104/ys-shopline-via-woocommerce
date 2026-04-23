@@ -439,7 +439,7 @@ jQuery(function ($) {
                 // 後端會以 CardBind + amount=10000 處理（對齊官方 CardBind 範例，銀行只授權不請款）
                 var sdkAmount = serverConfig.amount || 0;
                 if (serverConfig.bindOnlyMode && sdkAmount <= 0) {
-                    sdkAmount = 10000; // TWD $100 對齊官方 CardBind 範例（僅授權，不請款）
+                    sdkAmount = 10100; // TWD $100 對齊官方 CardBind 範例（僅授權，不請款）
                 }
                 var options = {
                     clientKey: serverConfig.clientKey,
@@ -1502,7 +1502,7 @@ jQuery(function ($) {
                     merchantId: serverConfig.merchantId,
                     paymentMethod: 'CreditCard',
                     currency: serverConfig.currency || 'TWD',
-                    amount: serverConfig.amount || 10000, // SDK 驗證用，API 以 CardBind 處理（只授權不請款）
+                    amount: serverConfig.amount || 10100, // SDK 驗證用，API 以 CardBind 處理（只授權不請款）
                     element: '#' + $container.attr('id'),
                     env: serverConfig.env || 'production'
                 };
