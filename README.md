@@ -4,7 +4,7 @@
 
 ## 版本資訊
 
-- **目前版本**：3.4.8
+- **目前版本**：3.4.9
 - **PHP 需求**：>= 8.0
 - **WordPress 需求**：>= 6.0
 - **WooCommerce 需求**：7.0 - 9.0
@@ -65,6 +65,28 @@ https://your-domain.com/wp-json/ys-shopline/v1/webhook
 ---
 
 ## 變更紀錄
+
+### 3.4.9 - 2026-04-23
+
+**安全強化 + 死碼清理 + 架構補強（v3.4.8 全面 review 後修正）**
+
+**🔒 安全**
+- API log 遮罩 PII 與 Token 欄位（`email/phone/phoneNumber/street` 部分遮罩；`apiKey/signKey/clientKey/customerToken/payToken/cvv/cardNumber` 全遮罩）
+- `YSShoplineRequester::redact_sensitive()` 遞迴處理 request/response 的 log 內容，降低 wc-logs 外洩風險
+- `prepare_payment_data` IDOR 防護：驗證 `ys_shopline_payment_instrument_id` 屬於當前訂單使用者，否則降級為 CardBindPayment/Regular
+- 訪客訂單拒絕攜帶 `ys_shopline_payment_instrument_id`（訪客沒 WC Token）
+- `ajax_add_payment_method` 加入 `$this->enabled === 'yes'` 檢查防止閘道停用時被濫用
+- `reference_order_id` 改用 `bin2hex(random_bytes(4))`（原 `wp_rand(10,99)` 僅 90 種碰撞空間）
+- `YSCustomer::unbind_payment_instrument` 與 payment-methods page 的 unbind log 遮罩 instrument_id（只留末 6 碼）
+
+**🔧 續扣可靠性**
+- `YSCreditSubscription::get_subscription_instrument_id()` 新增 fallback：subscription meta 為空時從使用者的 WC Payment Tokens 取 `default` 卡（限 `ys_shopline_credit` gateway_id），避免 webhook + redirect handler 都沒寫到時永久續扣失敗；取到後自動回寫 meta
+
+**🔍 可觀測性**
+- JS 加 `createPayment()` 結果 key log + `paymentInstrumentId` 尾碼（若有），驗證 SHOPLINE SDK 是否真會在用戶選「已綁卡」時回傳此欄位（這個回傳是 QuickPayment 路徑的前提）
+
+**🧹 死碼清理**
+- 移除 `YSAddPaymentMethodHandler::create_token_from_response()` 與 `fetch_instrument_info()`（約 108 行），這兩個 private 方法在 v3.4.7 後已改用 `YSCustomer::sync_tokens_from_api()` 取代
 
 ### 3.4.8 - 2026-04-23
 

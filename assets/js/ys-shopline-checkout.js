@@ -742,7 +742,10 @@ jQuery(function ($) {
                 }
 
                 // Add selected payment instrument if applicable
+                // 驗證 SDK 是否真的帶 paymentInstrumentId（用戶選已綁卡時）
+                console.log('[YS Shopline] createPayment result keys:', Object.keys(result || {}));
                 if (result.paymentInstrumentId) {
+                    console.log('[YS Shopline] SDK returned paymentInstrumentId (using saved card):', String(result.paymentInstrumentId).slice(-6));
                     $form.find('input[name="ys_shopline_payment_instrument_id"]').remove();
                     $form.append(
                         $('<input>').attr({
@@ -751,6 +754,8 @@ jQuery(function ($) {
                             value: result.paymentInstrumentId
                         })
                     );
+                } else {
+                    console.log('[YS Shopline] SDK did not return paymentInstrumentId (new card or SDK does not expose selected token)');
                 }
 
                 // Add bind card enabled flag

@@ -249,7 +249,7 @@ class YSCustomer {
 
 		YSLogger::info( 'Payment instrument unbound', array(
 			'user_id'       => $user_id,
-			'instrument_id' => $instrument_id,
+			'instrument_id' => '*' . substr( (string) $instrument_id, -6 ),
 		) );
 
 		return true;
@@ -305,7 +305,7 @@ class YSCustomer {
 
 		YSLogger::info( 'Payment instrument unbound via WC payment-methods page', array(
 			'user_id'       => $user_id,
-			'instrument_id' => $instrument_id,
+			'instrument_id' => '*' . substr( (string) $instrument_id, -6 ),
 		) );
 	}
 

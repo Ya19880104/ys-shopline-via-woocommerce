@@ -121,12 +121,55 @@ final class YSShoplineRequester {
 
         YSLogger::debug( "API 請求: {$method} {$url}", [
             'request_id' => $request_id,
-            'data'       => $data,
+            'data'       => self::redact_sensitive( $data ),
         ] );
 
         $response = wp_remote_request( $url, $args );
 
         return $this->handle_response( $response, $request_id );
+    }
+
+    /**
+     * 遮罩敏感欄位（用於 log）
+     *
+     * 遮罩規則：
+     * - PII（personalInfo.email/phone、address.street）→ 部分顯示 + 星號
+     * - Token 欄位（customerToken, payToken, apiKey 等）→ 前後綴 + 星號
+     * - 其他結構保留供除錯
+     *
+     * @param mixed $data
+     * @return mixed
+     */
+    public static function redact_sensitive( $data ) {
+        if ( ! is_array( $data ) ) {
+            return $data;
+        }
+
+        $sensitive_full = [ 'apiKey', 'signKey', 'clientKey', 'customerToken', 'payToken', 'cvv', 'cardNumber' ];
+        $sensitive_pii  = [ 'email', 'phone', 'phoneNumber', 'street', 'street2', 'street3' ];
+
+        $redact_str = static function ( $val ) {
+            if ( ! is_string( $val ) || '' === $val ) {
+                return $val;
+            }
+            $len = strlen( $val );
+            if ( $len <= 4 ) {
+                return str_repeat( '*', $len );
+            }
+            return substr( $val, 0, 2 ) . str_repeat( '*', max( 4, $len - 4 ) ) . substr( $val, -2 );
+        };
+
+        array_walk_recursive( $data, static function ( &$value, $key ) use ( $sensitive_full, $sensitive_pii, $redact_str ) {
+            if ( in_array( $key, $sensitive_full, true ) ) {
+                $value = is_string( $value ) && '' !== $value ? '[REDACTED:' . strlen( $value ) . ']' : $value;
+                return;
+            }
+            if ( in_array( $key, $sensitive_pii, true ) ) {
+                $value = $redact_str( $value );
+            }
+        } );
+
+        return $data;
     }
 
     /**
@@ -147,9 +190,15 @@ final class YSShoplineRequester {
         $body = wp_remote_retrieve_body( $response );
         $code = wp_remote_retrieve_response_code( $response );
 
+        // 回應 body 可能含 customerToken / payToken / PII，解碼後遮罩再 log
+        $log_body = $body;
+        $decoded_preview = json_decode( $body, true );
+        if ( is_array( $decoded_preview ) ) {
+            $log_body = wp_json_encode( self::redact_sensitive( $decoded_preview ) );
+        }
         YSLogger::debug( "API 回應 ({$code})", [
             'request_id' => $request_id,
-            'body'       => $body,
+            'body'       => $log_body,
         ] );
 
         // 空字串 body → empty_response（不進 json_decode 以保留錯誤碼契約）

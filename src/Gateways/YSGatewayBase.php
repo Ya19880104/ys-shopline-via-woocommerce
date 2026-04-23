@@ -824,6 +824,33 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
         // phpcs:ignore WordPress.Security.NonceVerification.Missing
         $payment_instrument_id = isset( $_POST['ys_shopline_payment_instrument_id'] ) ? sanitize_text_field( wp_unslash( $_POST['ys_shopline_payment_instrument_id'] ) ) : '';
 
+        // IDOR 防護：驗證此 instrument_id 屬於當前訂單的使用者
+        // 避免攻擊者攔截 POST 把 instrument_id 改為他人的（雖然 SHOPLINE 會驗 paymentCustomerId↔instrument 綁定，但不依賴遠端防線）
+        if ( '' !== $payment_instrument_id && $order->get_user_id() ) {
+            $owned = false;
+            $user_tokens = \WC_Payment_Tokens::get_customer_tokens( $order->get_user_id(), YSOrderMeta::CREDIT_GATEWAY_ID );
+            foreach ( $user_tokens as $user_token ) {
+                if ( $user_token->get_token() === $payment_instrument_id ) {
+                    $owned = true;
+                    break;
+                }
+            }
+            if ( ! $owned ) {
+                YSLogger::warning( 'IDOR guard: instrument_id not owned by current user, falling back to Regular/CardBindPayment', array(
+                    'order_id'      => $order->get_id(),
+                    'user_id'       => $order->get_user_id(),
+                    'instrument_id' => substr( $payment_instrument_id, -6 ),
+                ) );
+                $payment_instrument_id = '';
+            }
+        } elseif ( '' !== $payment_instrument_id && ! $order->get_user_id() ) {
+            // 訪客訂單不應該有 instrument_id（訪客沒 WC Token）
+            YSLogger::warning( 'Guest order should not carry instrument_id, ignoring', array(
+                'order_id' => $order->get_id(),
+            ) );
+            $payment_instrument_id = '';
+        }
+
         // 決定是否使用 CardBindPayment
         //
         // 重要：當 SDK 初始化時有啟用 bindCard（傳了 customerToken），
@@ -1805,6 +1832,12 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
             wp_send_json_error( array( 'message' => __( '請先登入後再新增付款方式。', 'ys-shopline-via-woocommerce' ) ) );
         }
 
+        // 閘道必須啟用，防止被關閉時仍可被濫用觸發 SHOPLINE API
+        if ( 'yes' !== $this->enabled ) {
+            wp_send_json_error( array( 'message' => __( '此付款方式目前未啟用。', 'ys-shopline-via-woocommerce' ) ) );
+        }
+
+        // paySession 為 JSON 字串（不能用 sanitize_text_field 會破壞結構），由下游 json_decode 驗證
         // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
         $pay_session_raw = isset( $_POST['pay_session'] ) ? wp_unslash( $_POST['pay_session'] ) : '';
 
@@ -1848,7 +1881,8 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
             return new \WP_Error( 'no_api', __( '付款閘道尚未設定。', 'ys-shopline-via-woocommerce' ) );
         }
 
-        $reference_order_id = 'ADD' . gmdate( 'YmdHis' ) . wp_rand( 10, 99 );
+        // reference_order_id 使用亂數 hex 避免高併發碰撞（原本 `wp_rand(10,99)` 只 90 種）
+        $reference_order_id = 'ADD' . gmdate( 'YmdHis' ) . bin2hex( random_bytes( 4 ) );
 
         $return_url = add_query_arg(
             array(

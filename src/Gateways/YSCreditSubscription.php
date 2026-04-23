@@ -400,9 +400,30 @@ class YSCreditSubscription extends YSGatewayBase {
                 YSLogger::debug( 'Found instrument ID from subscription meta', array(
                     'order_id'        => $order->get_id(),
                     'subscription_id' => $subscription->get_id(),
-                    'instrument_id'   => $instrument_id,
+                    'instrument_id'   => substr( (string) $instrument_id, -6 ),
                 ) );
                 return $instrument_id;
+            }
+        }
+
+        // Fallback：subscription meta 為空（redirect handler 與 webhook 都沒寫到）
+        // 從使用者的 WC Tokens 找預設卡，避免續扣永久失敗
+        $user_id = $order->get_user_id();
+        if ( $user_id ) {
+            $default_token = \WC_Payment_Tokens::get_customer_default_token( $user_id );
+            if ( $default_token && YSOrderMeta::CREDIT_GATEWAY_ID === $default_token->get_gateway_id() ) {
+                $fallback_instrument_id = $default_token->get_token();
+                YSLogger::warning( 'Subscription meta empty, falling back to user default WC Token', array(
+                    'order_id'      => $order->get_id(),
+                    'user_id'       => $user_id,
+                    'instrument_id' => substr( (string) $fallback_instrument_id, -6 ),
+                ) );
+                // 回寫 meta 讓下次不用再 fallback
+                foreach ( $subscriptions as $subscription ) {
+                    $subscription->update_meta_data( YSOrderMeta::PAYMENT_INSTRUMENT_ID, $fallback_instrument_id );
+                    $subscription->save();
+                }
+                return $fallback_instrument_id;
             }
         }
 
