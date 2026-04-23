@@ -66,6 +66,18 @@ https://your-domain.com/wp-json/ys-shopline/v1/webhook
 
 ## 變更紀錄
 
+### 3.4.14 - 2026-04-23
+
+**失敗時導向 pay-for-order 訂單內頁，不再停在結帳頁**
+
+- **背景**：WC 核心在 `process_payment` 之前就建立訂單，gateway 層無法阻止訂單產生
+- **v3.4.13 的問題**：訂單產生了，畫面卻停在結帳頁 → UX 語意矛盾（使用者看到錯誤但訂單已在後台）
+- **v3.4.14 改動**：`process_payment` 的 WP_Error 分支與未預期狀態分支改回傳 `{result:'success', redirect: pay-for-order URL}`
+  - 使用者自動被導向訂單內頁
+  - 訂單內頁顯示訂單明細、錯誤訊息（wc_add_notice 跨頁保留）、付款方式選擇、重試按鈕
+  - 與 `YSRedirectHandler` 的 3DS FAILED 分支 UX 完全一致（同樣走 `get_checkout_payment_url()`）
+- **仍然保留的行為**：訂單 meta（`PAYMENT_STATUS=ERROR` / `ERROR_CODE` / `ERROR_MESSAGE`）+ 訂單備註供管理員除錯
+
 ### 3.4.13 - 2026-04-23
 
 **Revert v3.4.12 的 `$order->delete(true)`，回歸 WC 原生 UX**

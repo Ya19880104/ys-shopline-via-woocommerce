@@ -728,9 +728,10 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
                 'friendly'   => $friendly_msg,
             ) );
 
-            // v3.4.13: 不再 $order->delete — 這不是「付款失敗」而是系統錯誤（API 連線/認證/參數）
-            // 訂單保留為 pending + 加訂單備註，result:failure 讓使用者停在結帳頁重試
-            // WC 會透過 session(order_awaiting_payment) 在重試時沿用這張訂單，不會新建
+            // v3.4.14: 訂單保留 + 寫錯誤 meta + 導向 pay-for-order 頁
+            // - WC 核心會在 process_payment 前就建立訂單，gateway 無法阻止訂單產生
+            // - 既然訂單已存在，就引導使用者到訂單內頁重試（UX 勝於停在結帳頁）
+            // - 與 YSRedirectHandler FAILED 分支的 UX 一致
             $order->add_order_note(
                 sprintf(
                     /* translators: 1: Payment method name, 2: Error message */
@@ -744,9 +745,14 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
             $order->update_meta_data( YSOrderMeta::ERROR_MESSAGE, $friendly_msg );
             $order->save();
 
-            // 前端顯示友善訊息，使用者停留在結帳頁可重新嘗試
+            // 友善訊息跨頁帶到 pay-for-order 頁（wc_add_notice 走 session）
             wc_add_notice( $friendly_msg, 'error' );
-            return array( 'result' => 'failure' );
+
+            // result:success + redirect 讓 WC JS 導向訂單內頁
+            return array(
+                'result'   => 'success',
+                'redirect' => $order->get_checkout_payment_url(),
+            );
         }
 
         // Store trade order ID
@@ -788,22 +794,25 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
                 );
             }
 
-            // v3.4.13: 未預期狀態也不再 delete — 這是系統/協定層錯誤，非付款失敗
-            // 訂單保留為 pending + 加備註，result:failure 讓使用者停在結帳頁重試
+            // v3.4.14: 未預期狀態同樣導向 pay-for-order（不 delete、不停在結帳頁）
             YSLogger::error( 'Payment returned unexpected status', array(
                 'order_id' => $order->get_id(),
                 'status'   => $status,
             ) );
             $order->add_order_note( sprintf(
                 /* translators: %s: payment status */
-                __( 'Shopline 付款回傳未預期的狀態：%s（未建立有效交易，使用者可於結帳頁重試）', 'ys-shopline-via-woocommerce' ),
+                __( 'Shopline 付款回傳未預期的狀態：%s（使用者將被導向訂單內頁重試）', 'ys-shopline-via-woocommerce' ),
                 $status ?: '(empty)'
             ) );
             $order->update_meta_data( YSOrderMeta::PAYMENT_STATUS, $status ?: 'UNKNOWN' );
             $order->save();
 
-            wc_add_notice( __( '付款處理異常，請重試或聯繫客服。', 'ys-shopline-via-woocommerce' ), 'error' );
-            return array( 'result' => 'failure' );
+            wc_add_notice( __( '付款處理異常，請在訂單頁面重新選擇付款方式。', 'ys-shopline-via-woocommerce' ), 'error' );
+
+            return array(
+                'result'   => 'success',
+                'redirect' => $order->get_checkout_payment_url(),
+            );
         }
 
         // Payment completed immediately (confirmed SUCCEEDED/CAPTURED)
