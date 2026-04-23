@@ -403,7 +403,7 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
         // 取得金額：優先從訂單付款頁面取得，否則從購物車
         $amount_raw    = 0;
         $currency      = get_woocommerce_currency();
-        $bind_only_mode = false; // 純綁卡模式（CardBind + amount=0）
+        $bind_only_mode = false; // 純綁卡模式（CardBind + amount=10000 對齊官方範例）
 
         // AJAX 傳入的 order_id（pay-for-order 頁面的 SDK config 請求）
         // phpcs:ignore WordPress.Security.NonceVerification.Missing
@@ -468,7 +468,7 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
             'amount'        => $amount,
             'paymentMethod' => $this->get_payment_method(),
             'env'           => $this->testmode ? 'sandbox' : 'production',
-            'bindOnlyMode'  => $bind_only_mode, // 純綁卡模式標記（前端用 amount=100 通過 SDK 驗證）
+            'bindOnlyMode'  => $bind_only_mode, // 純綁卡模式標記（前端用 amount=10000 對齊官方 CardBind 範例）
         );
 
         // Debug log for troubleshooting
@@ -1840,8 +1840,9 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
 
         // 準備 API 請求資料（純綁卡）
         // SHOPLINE API 要求 billing + order 必填
-        // 重要：SHOPLINE API 拒絕 amount=0（錯誤碼 1025），即使 CardBind 模式也需傳 100（TWD $1）
-        // CardBind 為「純綁卡」paymentBehavior，銀行進行授權驗證但不實際請款
+        // 金額策略：對齊官方 CardBind 範例 amount.value=10000（TWD $100）
+        // CardBind 為「純綁卡」paymentBehavior（非付款場景），銀行進行授權驗證但不實際請款
+        // 參考：https://docs.shoplinepayments.com/guide/quick/ 章節 4.1
         $data = array(
             'paySession'       => $pay_session_raw,
             'referenceOrderId' => $reference_order_id,
@@ -1849,7 +1850,7 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
             'acquirerType'     => 'SDK',
             'language'         => $this->get_shopline_language(),
             'amount'           => array(
-                'value'    => 100,
+                'value'    => 10000,
                 'currency' => 'TWD',
             ),
             'confirm'          => array(
@@ -1877,7 +1878,7 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
                         'name'     => 'Card Binding Verification',
                         'quantity' => 1,
                         'amount'   => array(
-                            'value'    => 100,
+                            'value'    => 10000,
                             'currency' => 'TWD',
                         ),
                     ),
@@ -1909,7 +1910,7 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
                 'customer_id'        => $customer_id,
                 'reference_order_id' => $reference_order_id,
                 'paymentBehavior'    => 'CardBind',
-                'amount'             => 0,
+                'amount'             => 10000,
             )
         );
 

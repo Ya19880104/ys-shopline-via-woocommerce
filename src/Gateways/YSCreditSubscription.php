@@ -106,7 +106,8 @@ class YSCreditSubscription extends YSGatewayBase {
             ),
         );
 
-        // 偵測 $0 訂閱（試用）：SDK 需要 amount > 0 通過驗證，但實際 API 會用 CardBind + amount=0
+        // 偵測 $0 訂閱（試用）：SDK 與 API 都拒絕 amount=0
+        // 實際 API 會用 CardBind + amount=10000（對齊官方範例，銀行只授權不請款）
         if ( isset( $config['amount'] ) && (int) $config['amount'] <= 0 ) {
             $config['bindOnlyMode'] = true;
         }
@@ -118,7 +119,7 @@ class YSCreditSubscription extends YSGatewayBase {
      * Prepare payment data.
      *
      * - 一般訂閱（首期金額 > 0）：CardBindPayment（綁卡並付款）
-     * - 試用訂閱（首期金額 = 0）：CardBind（純綁卡，amount=0 通過 SHOPLINE API）
+     * - 試用訂閱（首期金額 = 0）：CardBind（純綁卡，對齊官方 amount=10000 範例）
      *
      * @param \WC_Order $order       Order object.
      * @param string    $pay_session Pay session from SDK.
@@ -131,17 +132,18 @@ class YSCreditSubscription extends YSGatewayBase {
 
         if ( $order_total <= 0 ) {
             // 零元試用訂閱：純綁卡
-            // SHOPLINE API 拒絕 amount=0（錯誤碼 1025），需傳最低金額 100（TWD $1）通過驗證
-            // CardBind 模式下此金額僅用於卡片授權驗證，銀行會自動解除，不會實際請款
+            // SHOPLINE API 拒絕 amount=0，對齊官方 CardBind 範例傳 amount.value=10000（TWD $100）
+            // CardBind 為 SHOPLINE「非付款場景」paymentBehavior，銀行進行卡片授權驗證但不實際請款
+            // 參考：https://docs.shoplinepayments.com/guide/quick/ 章節 4.1
             $data['confirm']['paymentBehavior'] = 'CardBind';
-            $data['amount']['value']             = 100;
+            $data['amount']['value']             = 10000;
 
             // 同步修正 order.products 的 amount（避免商品總額與 amount 不符）
             if ( isset( $data['order']['products'][0]['amount']['value'] ) ) {
-                $data['order']['products'][0]['amount']['value'] = 100;
+                $data['order']['products'][0]['amount']['value'] = 10000;
             }
 
-            YSLogger::info( 'Zero-amount subscription: using CardBind paymentBehavior with placeholder amount 100', array(
+            YSLogger::info( 'Zero-amount subscription: using CardBind paymentBehavior with placeholder amount 10000', array(
                 'order_id' => $order->get_id(),
             ) );
         } else {

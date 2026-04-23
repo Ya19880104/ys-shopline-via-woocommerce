@@ -4,7 +4,7 @@
 
 ## 版本資訊
 
-- **目前版本**：3.4.2
+- **目前版本**：3.4.3
 - **PHP 需求**：>= 8.0
 - **WordPress 需求**：>= 6.0
 - **WooCommerce 需求**：7.0 - 9.0
@@ -65,6 +65,18 @@ https://your-domain.com/wp-json/ys-shopline/v1/webhook
 ---
 
 ## 變更紀錄
+
+### 3.4.3 - 2026-04-23
+
+**調整 — CardBind 金額對齊官方範例**
+- `CardBind`（純綁卡）placeholder 金額 `100`（TWD $1）改為 `10000`（TWD $100）
+- 對齊 SHOPLINE 官方文件 `/guide/quick/` 章節 4.1 的 CardBind SDK 初始化範例（`amount: 10000`）
+- 統一兩條綁卡路徑：My Account「新增付款方式」、`$0` 訂閱試用結帳
+- 同步前端 SDK init、後端 API 呼叫、`order.products[0].amount` 三處金額
+- `CardBind` 為 SHOPLINE「非付款場景」paymentBehavior，銀行進行卡片授權驗證但不實際請款
+
+**修復**
+- 修正 `YSBindCardLogger` 記錄 `amount` 欄位誤植為 `0`（實際送出為 `10000`），避免日後除錯誤判
 
 ### 3.4.2 - 2026-04-23
 

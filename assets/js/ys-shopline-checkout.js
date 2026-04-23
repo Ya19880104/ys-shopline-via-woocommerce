@@ -435,11 +435,11 @@ jQuery(function ($) {
             try {
                 // Build SDK options
                 // Note: env 參數控制環境 (sandbox/production)
-                // bindOnlyMode: true 時（如 $0 訂閱試用），SDK init amount 需 >= 100 通過驗證，
-                // 後端會以 CardBind + amount=0 處理實際 API 呼叫，不會扣款
+                // bindOnlyMode: true 時（如 $0 訂閱試用），SDK 與 API 都拒絕 amount=0
+                // 後端會以 CardBind + amount=10000 處理（對齊官方 CardBind 範例，銀行只授權不請款）
                 var sdkAmount = serverConfig.amount || 0;
                 if (serverConfig.bindOnlyMode && sdkAmount <= 0) {
-                    sdkAmount = 100; // TWD $1 的 SDK 最低驗證值（不實際扣款）
+                    sdkAmount = 10000; // TWD $100 對齊官方 CardBind 範例（僅授權，不請款）
                 }
                 var options = {
                     clientKey: serverConfig.clientKey,
@@ -1490,14 +1490,14 @@ jQuery(function ($) {
 
             try {
                 // SDK 選項 - 純綁卡頁面
-                // SHOPLINE SDK 驗證 amount 必填且 > 0，但後端 API 會用 CardBind + amount=0 真正不扣款
-                // SDK init 時的 amount 只是通過驗證，不會被實際計費
+                // SHOPLINE SDK 與 API 都驗證 amount 必填且 > 0
+                // 後端 API 以 CardBind + amount=10000 處理（對齊官方範例，銀行只授權不請款）
                 var options = {
                     clientKey: serverConfig.clientKey,
                     merchantId: serverConfig.merchantId,
                     paymentMethod: 'CreditCard',
                     currency: serverConfig.currency || 'TWD',
-                    amount: serverConfig.amount || 100, // SDK 驗證用，實際 API 以 CardBind + amount=0 處理
+                    amount: serverConfig.amount || 10000, // SDK 驗證用，API 以 CardBind 處理（只授權不請款）
                     element: '#' + $container.attr('id'),
                     env: serverConfig.env || 'production'
                 };
