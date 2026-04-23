@@ -236,7 +236,7 @@ class YSCustomer {
 		if ( is_wp_error( $response ) ) {
 			YSLogger::error( 'Failed to unbind payment instrument: ' . $response->get_error_message(), array(
 				'user_id'       => $user_id,
-				'instrument_id' => $instrument_id,
+				'instrument_id' => '*' . substr( (string) $instrument_id, -6 ),
 			) );
 			return false;
 		}
@@ -283,7 +283,7 @@ class YSCustomer {
 		if ( ! $customer_id || ! $this->api ) {
 			YSLogger::warning( 'Cannot unbind payment instrument: no customer ID or API', array(
 				'user_id'       => $user_id,
-				'instrument_id' => $instrument_id,
+				'instrument_id' => '*' . substr( (string) $instrument_id, -6 ),
 			) );
 			return;
 		}
@@ -295,7 +295,7 @@ class YSCustomer {
 			// API 失敗時只記錄警告，不影響 WC Token 刪除（已經被 WC 刪除了）
 			YSLogger::warning( 'Failed to unbind payment instrument via API (WC token already deleted): ' . $response->get_error_message(), array(
 				'user_id'       => $user_id,
-				'instrument_id' => $instrument_id,
+				'instrument_id' => '*' . substr( (string) $instrument_id, -6 ),
 			) );
 			return;
 		}
@@ -400,7 +400,7 @@ class YSCustomer {
 			if ( ! preg_match( '/^\d{1,4}$/', $last4 ) ) {
 				YSLogger::warning( 'Skipping instrument with invalid card info', array(
 					'user_id'       => $user_id,
-					'instrument_id' => $instrument_id,
+					'instrument_id' => '*' . substr( (string) $instrument_id, -6 ),
 					'last4'         => $last4,
 				) );
 				return false;
@@ -426,14 +426,14 @@ class YSCustomer {
 				YSLogger::debug( 'WC Token created from instrument', array(
 					'user_id'       => $user_id,
 					'token_id'      => $token->get_id(),
-					'instrument_id' => $instrument_id,
+					'instrument_id' => '*' . substr( (string) $instrument_id, -6 ),
 				) );
 				return $token;
 			}
 		} catch ( \Throwable $e ) {
 			YSLogger::error( 'Failed to create WC Token from instrument', array(
 				'user_id'       => $user_id,
-				'instrument_id' => $instrument_id,
+				'instrument_id' => '*' . substr( (string) $instrument_id, -6 ),
 				'error'         => $e->getMessage(),
 			) );
 		}
@@ -473,7 +473,7 @@ class YSCustomer {
 			YSLogger::debug( 'WC Token deleted', array(
 				'user_id'       => $user_id,
 				'token_id'      => $token->get_id(),
-				'instrument_id' => $instrument_id,
+				'instrument_id' => '*' . substr( (string) $instrument_id, -6 ),
 			) );
 		}
 	}

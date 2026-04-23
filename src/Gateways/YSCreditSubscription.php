@@ -406,23 +406,19 @@ class YSCreditSubscription extends YSGatewayBase {
             }
         }
 
-        // Fallback：subscription meta 為空（redirect handler 與 webhook 都沒寫到）
-        // 從使用者的 WC Tokens 找預設卡，避免續扣永久失敗
+        // Fallback（read-only）：subscription meta 為空時從使用者 default token 取
+        // ⚠️ 不回寫 meta，避免「客戶 A 訂閱綁 B 卡，但 default 已改為 C 卡」時被錯卡續扣
+        // meta 的權威來源仍是 YSRedirectHandler / Webhook；此處僅避免 meta 空時續扣永久失敗
         $user_id = $order->get_user_id();
         if ( $user_id ) {
             $default_token = \WC_Payment_Tokens::get_customer_default_token( $user_id );
             if ( $default_token && YSOrderMeta::CREDIT_GATEWAY_ID === $default_token->get_gateway_id() ) {
                 $fallback_instrument_id = $default_token->get_token();
-                YSLogger::warning( 'Subscription meta empty, falling back to user default WC Token', array(
+                YSLogger::warning( 'Subscription meta empty, read-only fallback to user default WC Token (meta NOT updated, please verify manually)', array(
                     'order_id'      => $order->get_id(),
                     'user_id'       => $user_id,
                     'instrument_id' => substr( (string) $fallback_instrument_id, -6 ),
                 ) );
-                // 回寫 meta 讓下次不用再 fallback
-                foreach ( $subscriptions as $subscription ) {
-                    $subscription->update_meta_data( YSOrderMeta::PAYMENT_INSTRUMENT_ID, $fallback_instrument_id );
-                    $subscription->save();
-                }
                 return $fallback_instrument_id;
             }
         }

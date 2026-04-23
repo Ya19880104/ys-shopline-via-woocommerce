@@ -224,7 +224,7 @@ final class YSWebhookHandler {
 
             // 更新付款工具
             case 'customer.instrument.updated':
-                YSLogger::info( '付款工具已更新', [ 'data' => $data ] );
+                YSLogger::info( '付款工具已更新', [ 'data' => \YangSheep\ShoplinePayment\Api\YSShoplineRequester::redact_sensitive( $data ) ] );
                 break;
 
             // 解綁付款工具

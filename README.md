@@ -4,7 +4,7 @@
 
 ## 版本資訊
 
-- **目前版本**：3.4.9
+- **目前版本**：3.4.10
 - **PHP 需求**：>= 8.0
 - **WordPress 需求**：>= 6.0
 - **WooCommerce 需求**：7.0 - 9.0
@@ -65,6 +65,17 @@ https://your-domain.com/wp-json/ys-shopline/v1/webhook
 ---
 
 ## 變更紀錄
+
+### 3.4.10 - 2026-04-23
+
+**Review 後修正（v3.4.9 diff review 抓到 4 個 blocker + 補強）**
+
+- **B1 `wp_send_json_error` 後加 `return`**：`ajax_add_payment_method` 的三個錯誤分支補 return，避免 `wp_die_handler` 被 filter 改寫時繼續執行
+- **B2 `redact_sensitive` 欄位擴充**：`firstName/lastName/name/holder` + `identityNumber/idNumber/taxId/nationalId` + `mobile` + `cvc/pan` + `paySession` 全列入
+- **B3 redact 固定長度**：改為 `xx******yy`（固定 6 星號）+ 短於 8 字全星，不再依長度動態計算避免長度 fingerprint
+- **B4 續扣 fallback 改 read-only**：`get_subscription_instrument_id` 的 WC default token fallback 不再回寫 subscription meta（避免「default 卡與訂閱綁的卡不同」時被錯卡續扣），僅 log warning 供人工稽核
+- **S1 其他 log 點套 redact**：`YSWebhookHandler::process_webhook` 的 `customer.instrument.updated`、`YSGatewayBase::prepare_payment_data` 的 `Full payment data structure` 都接上 `redact_sensitive`
+- **S2 unbind/token log 全遮罩**：`YSCustomer` 裡剩餘 4 處 `instrument_id` log 改為末 6 碼
 
 ### 3.4.9 - 2026-04-23
 

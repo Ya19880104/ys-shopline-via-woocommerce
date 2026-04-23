@@ -1016,6 +1016,7 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
         ) );
 
         // 詳細記錄完整資料結構（用於除錯 1999 錯誤）
+        // 注意：billing_address / customer_info 經 redact_sensitive 遮罩 PII
         YSLogger::debug( 'Full payment data structure', array(
             'data_keys'           => array_keys( $data ),
             'confirm_keys'        => array_keys( $data['confirm'] ),
@@ -1023,8 +1024,8 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
             'billing_keys'        => array_keys( $data['billing'] ),
             'order_keys'          => array_keys( $data['order'] ),
             'client_keys'         => array_keys( $data['client'] ),
-            'billing_address'     => $data['billing']['address'],
-            'customer_info'       => $data['customer']['personalInfo'],
+            'billing_address'     => \YangSheep\ShoplinePayment\Api\YSShoplineRequester::redact_sensitive( $data['billing']['address'] ),
+            'customer_info'       => \YangSheep\ShoplinePayment\Api\YSShoplineRequester::redact_sensitive( $data['customer']['personalInfo'] ),
             'referenceOrderId'    => $data['referenceOrderId'],
         ) );
 
@@ -1830,11 +1831,13 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
         $user_id = get_current_user_id();
         if ( ! $user_id ) {
             wp_send_json_error( array( 'message' => __( '請先登入後再新增付款方式。', 'ys-shopline-via-woocommerce' ) ) );
+            return;
         }
 
         // 閘道必須啟用，防止被關閉時仍可被濫用觸發 SHOPLINE API
         if ( 'yes' !== $this->enabled ) {
             wp_send_json_error( array( 'message' => __( '此付款方式目前未啟用。', 'ys-shopline-via-woocommerce' ) ) );
+            return;
         }
 
         // paySession 為 JSON 字串（不能用 sanitize_text_field 會破壞結構），由下游 json_decode 驗證
@@ -1845,6 +1848,7 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
 
         if ( is_wp_error( $result ) ) {
             wp_send_json_error( array( 'message' => $result->get_error_message() ) );
+            return;
         }
 
         wp_send_json_success( $result );

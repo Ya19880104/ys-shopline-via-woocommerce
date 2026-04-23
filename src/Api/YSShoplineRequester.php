@@ -145,23 +145,37 @@ final class YSShoplineRequester {
             return $data;
         }
 
-        $sensitive_full = [ 'apiKey', 'signKey', 'clientKey', 'customerToken', 'payToken', 'cvv', 'cardNumber' ];
-        $sensitive_pii  = [ 'email', 'phone', 'phoneNumber', 'street', 'street2', 'street3' ];
+        // 完全遮罩（Token / 憑證 / 完整卡號 / CVV）
+        $sensitive_full = [
+            'apiKey', 'signKey', 'clientKey',
+            'customerToken', 'payToken', 'paySession',
+            'cvv', 'cvc', 'cardNumber', 'pan',
+        ];
+
+        // PII 部分遮罩：個人識別資訊、地址、聯絡、身分證等
+        $sensitive_pii = [
+            'email',
+            'phone', 'phoneNumber', 'mobile',
+            'firstName', 'lastName', 'name', 'holder',
+            'street', 'street2', 'street3',
+            'identityNumber', 'idNumber', 'taxId', 'nationalId',
+        ];
 
         $redact_str = static function ( $val ) {
             if ( ! is_string( $val ) || '' === $val ) {
                 return $val;
             }
             $len = strlen( $val );
-            if ( $len <= 4 ) {
-                return str_repeat( '*', $len );
+            // 固定格式 `xx****yy`（length 不外洩），短於 8 字一律全星
+            if ( $len <= 8 ) {
+                return str_repeat( '*', 6 );
             }
-            return substr( $val, 0, 2 ) . str_repeat( '*', max( 4, $len - 4 ) ) . substr( $val, -2 );
+            return substr( $val, 0, 2 ) . str_repeat( '*', 6 ) . substr( $val, -2 );
         };
 
         array_walk_recursive( $data, static function ( &$value, $key ) use ( $sensitive_full, $sensitive_pii, $redact_str ) {
             if ( in_array( $key, $sensitive_full, true ) ) {
-                $value = is_string( $value ) && '' !== $value ? '[REDACTED:' . strlen( $value ) . ']' : $value;
+                $value = ( is_string( $value ) && '' !== $value ) ? '[REDACTED]' : $value;
                 return;
             }
             if ( in_array( $key, $sensitive_pii, true ) ) {
