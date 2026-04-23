@@ -4,7 +4,7 @@
 
 ## 版本資訊
 
-- **目前版本**：3.4.5
+- **目前版本**：3.4.6
 - **PHP 需求**：>= 8.0
 - **WordPress 需求**：>= 6.0
 - **WooCommerce 需求**：7.0 - 9.0
@@ -65,6 +65,14 @@ https://your-domain.com/wp-json/ys-shopline/v1/webhook
 ---
 
 ## 變更紀錄
+
+### 3.4.6 - 2026-04-23
+
+**Hotfix — 3DS 頁面 SDK amount 為 0 導致驗證中斷**
+- v3.4.4 修好 redirect 到 3DS 頁後，3DS 頁面 SDK 初始化報錯 `SDK Error: amount is required`
+- 根因：`YSAddPaymentMethodHandler::render_3ds_page()` 的 SDK init 寫死 `amount: 0`
+- SHOPLINE SDK 要求 `amount > 0`（與結帳頁 SDK 規則一致）
+- 修法：3DS 頁 SDK init 改為 `amount: 10000`（對齊官方 CardBind 範例，此處僅用於執行 3DS `nextAction`，不會觸發扣款）
 
 ### 3.4.5 - 2026-04-23
 

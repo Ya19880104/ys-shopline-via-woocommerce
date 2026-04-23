@@ -325,7 +325,8 @@ class YSAddPaymentMethodHandler {
 							element: '#paymentContainer',
 							env: env,
 							currency: 'TWD',
-							amount: 0
+							// SHOPLINE SDK 要求 amount > 0，對齊官方 CardBind 範例（不會再觸發扣款）
+							amount: 10000
 						});
 
 						console.log('SDK initialized:', result);
