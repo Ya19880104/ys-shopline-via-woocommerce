@@ -184,15 +184,42 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
         wp_enqueue_style( 'ys-shopline-checkout' );
         wp_add_inline_style( 'ys-shopline-checkout', '#payment .ys-shopline-payment-container img { display: block !important; }' );
 
+        // v3.5.8: 取得當前用戶的預設卡末 4 碼，供前端 auto-select default card 使用
+        //
+        // 重要：payment_scripts() 會被每個 SHOPLINE gateway（credit / installment /
+        // subscription / BNPL / LinePay / ATM / Apple / JKO）各自呼叫一次，後者覆蓋前者。
+        // 我們統一查 `ys_shopline_credit` 的 tokens — SHOPLINE saved cards 在所有 CC gateway
+        // 之間共用，而非 CC gateway（LinePay/ATM 等）本來就沒 saved-card UI，last4 自然不作用。
+        //
+        // 優先順序：is_default() → fallback 用第一張 token
+        $default_card_last4 = '';
+        if ( is_user_logged_in() && class_exists( 'WC_Payment_Tokens' ) ) {
+            $tokens = WC_Payment_Tokens::get_customer_tokens( get_current_user_id(), 'ys_shopline_credit' );
+            $chosen = null;
+            foreach ( $tokens as $token ) {
+                if ( $token->is_default() ) {
+                    $chosen = $token;
+                    break;
+                }
+            }
+            if ( ! $chosen && ! empty( $tokens ) ) {
+                $chosen = reset( $tokens );
+            }
+            if ( $chosen && method_exists( $chosen, 'get_last4' ) ) {
+                $default_card_last4 = (string) $chosen->get_last4();
+            }
+        }
+
         // Localize script
         wp_localize_script(
             'ys-shopline-checkout',
             'ys_shopline_params',
             array(
-                'ajax_url'   => admin_url( 'admin-ajax.php' ),
-                'nonce'      => wp_create_nonce( 'ys_shopline_nonce' ),
-                'gateway_id' => $this->id,
-                'i18n'       => array(
+                'ajax_url'            => admin_url( 'admin-ajax.php' ),
+                'nonce'               => wp_create_nonce( 'ys_shopline_nonce' ),
+                'gateway_id'          => $this->id,
+                'default_card_last4'  => $default_card_last4, // v3.5.8
+                'i18n'                => array(
                     'payment_error'      => __( 'Payment error occurred. Please try again.', 'ys-shopline-via-woocommerce' ),
                     'config_error'       => __( 'Configuration error. Please contact support.', 'ys-shopline-via-woocommerce' ),
                     'sdk_error'          => __( 'Payment SDK failed to load. Please refresh the page.', 'ys-shopline-via-woocommerce' ),

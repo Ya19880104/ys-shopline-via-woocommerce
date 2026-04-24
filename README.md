@@ -4,7 +4,7 @@
 
 ## 版本資訊
 
-- **目前版本**：3.5.7
+- **目前版本**：3.5.8
 - **PHP 需求**：>= 8.0
 - **WordPress 需求**：>= 6.0
 - **WooCommerce 需求**：7.0 - 9.0
@@ -65,6 +65,51 @@ https://your-domain.com/wp-json/ys-shopline/v1/webhook
 ---
 
 ## 變更紀錄
+
+### 3.5.8 - 2026-04-25
+
+**Review #2 + #3 強化：error 遮罩 context-aware + SDK 預設卡 auto-select**
+
+#### #2 sanitizeErrorMessage context-aware
+v3.5.7 用 `\b\d{18,}\b` 遮 18 位以上連續數字，理論上可能誤傷訂單號/流水號等非敏感長數字。改為 **context-aware** — 只對 SHOPLINE 識別碼欄位相鄰的 10 位以上數字遮罩：
+
+```js
+var KEYS = 'customer|instrument|paymentInstrument|paymentCustomer|tradeOrder|channelDeal';
+var re = new RegExp('\\b(' + KEYS + ')(Id)?(\\s*[:=]\\s*|\\s*\\[\\s*)(\\d{10,})(\\s*\\])?', 'gi');
+```
+
+對應真實 SHOPLINE error 格式：
+- `customer [123...] instrument [456...] invalid` → `customer [*末6] instrument [*末6] invalid` ✓
+- `customerId: 123...` → `customerId: *末6` ✓
+- `交易編號 20231234567890123456`（自訂訂單號）→ **不動** ✓
+
+#### #3 SDK 預設卡 auto-select
+SHOPLINE SDK 本身沒 `setDefaultInstrument()` API，render saved cards 後**不自動 select**。使用者必須手動點，UX 痛點。
+
+**做法**：
+1. 後端 `YSGatewayBase::payment_scripts()` 新增 `default_card_last4` 到 `ys_shopline_params`
+   ```php
+   $tokens = WC_Payment_Tokens::get_customer_tokens( get_current_user_id(), $this->id );
+   foreach ( $tokens as $token ) {
+       if ( $token->is_default() ) $default_card_last4 = $token->get_last4();
+   }
+   ```
+2. 前端 `_tryAutoSelectDefaultCard()`：SDK instance stored 後觸發
+   - Poll `[class*="shoplinepayments_item_"]` 最多 3 秒
+   - 找到 `innerText` 含 `last4` 的 card element
+   - Dispatch 完整 pointer 序列 `pointerdown/up + mousedown/up + click`（React event delegation 認 native events）
+
+**Best-effort 保守設計**：
+- 訪客 / 無預設卡 → silent return
+- SDK 沒渲染 / 找不到對應 card → 3 秒後放棄，使用者仍可手動選
+- 失敗不 break 現有流程
+
+#### 三層 ID 遮罩架構
+| 層 | 實作 | 時機 |
+|---|---|---|
+| 1 後端 Log | `YSLogger::log()` + `YSShoplineRequester::redact_sensitive()` | 寫 wc-logs 時 |
+| 2 SDK error | `ShoplineCheckout.sanitizeErrorMessage()` (v3.5.8 context-aware) | 顯示給使用者前 |
+| 3 Network | URL hash + `[REDACTED]` token | API request/response |
 
 ### 3.5.7 - 2026-04-25
 

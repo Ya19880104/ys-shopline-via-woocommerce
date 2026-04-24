@@ -567,6 +567,11 @@ jQuery(function ($) {
                 // Remove loading state - SDK should have rendered its content
                 $container.find('.ys-shopline-loading').remove();
 
+                // v3.5.8: SDK render 完後 best-effort 模擬點擊預設卡
+                // 原本 SDK render 出 saved cards 但不自動 select，使用者必須手動點 →
+                // 容易 submit 後才發現沒選卡或選錯卡。auto-select 讓最常用的情境（預設卡）一鍵完成。
+                self._tryAutoSelectDefaultCard(gatewayId);
+
                 // bindOnlyMode（$0 訂閱試用）：將 PHP 渲染的綁卡提示改為試用期版本
                 if (serverConfig.bindOnlyMode) {
                     var $hint = $('.ys-bindcard-hint-subscription[data-gateway="' + gatewayId + '"]');
@@ -1068,6 +1073,60 @@ jQuery(function ($) {
          * @param {string} message Error message
          */
         /**
+         * v3.5.8: SDK render 完後自動選擇使用者預設卡（best-effort）。
+         *
+         * SHOPLINE SDK 本身沒 expose `setDefaultInstrument()` 類 API，也不會自動 select
+         * `is_default=1` 的 token。使用者手動點才 select → 常見 UX 痛點。
+         *
+         * 做法：
+         * 1. PHP 端 localize `default_card_last4`（從 WC_Payment_Tokens::is_default() 抓）
+         * 2. 前端 poll DOM 最多 3 秒等 SDK 渲染 `.shoplinepayments_item_*` list
+         * 3. 找到 innerText 含 `last4` 的 card element，dispatch 完整 pointer 序列
+         *    （React event delegation 需 native pointerdown/up + click 才認）
+         *
+         * 不 break 現有流程：失敗靜默 return，使用者仍可手動選。
+         */
+        _tryAutoSelectDefaultCard: function (gatewayId) {
+            var last4 = ys_shopline_params && ys_shopline_params.default_card_last4;
+            if (!last4 || last4.length < 4) {
+                return; // 訪客 / 無預設卡 / 資料不足
+            }
+            var attempts = 10; // 最多 poll 3 秒
+            var intervalId = setInterval(function () {
+                if (--attempts <= 0) {
+                    clearInterval(intervalId);
+                    return;
+                }
+                // SDK 渲染的 card items（class 名含隨機 hash，用 contains 選擇器）
+                var items = document.querySelectorAll('[class*="shoplinepayments_item_"]');
+                if (!items.length) return;
+                clearInterval(intervalId);
+
+                for (var i = 0; i < items.length; i++) {
+                    var text = items[i].innerText || '';
+                    if (text.indexOf(last4) >= 0) {
+                        var opts = { bubbles: true, cancelable: true, view: window };
+                        try {
+                            // React 用 root-based event delegation → 需完整 pointer 序列才認
+                            if (typeof PointerEvent !== 'undefined') {
+                                items[i].dispatchEvent(new PointerEvent('pointerdown', opts));
+                                items[i].dispatchEvent(new PointerEvent('pointerup', opts));
+                            }
+                            items[i].dispatchEvent(new MouseEvent('mousedown', opts));
+                            items[i].dispatchEvent(new MouseEvent('mouseup', opts));
+                            items[i].dispatchEvent(new MouseEvent('click', opts));
+                            console.log('[YS Shopline] v3.5.8 auto-selected default card ending ' + last4);
+                        } catch (e) {
+                            console.warn('[YS Shopline] v3.5.8 auto-select failed:', e.message);
+                        }
+                        return;
+                    }
+                }
+                console.log('[YS Shopline] v3.5.8 default card last4=' + last4 + ' not found among ' + items.length + ' SDK items');
+            }, 300);
+        },
+
+        /**
          * v3.5.7: Sanitize SHOPLINE error messages to mask long digit IDs.
          *
          * SDK 直接返回的 error message 會含 customer/instrument/trade IDs 明文
@@ -1080,7 +1139,22 @@ jQuery(function ($) {
          */
         sanitizeErrorMessage: function (msg) {
             if (typeof msg !== 'string') return msg;
-            return msg.replace(/\b(\d{18,})\b/g, function (m) { return '*' + m.slice(-6); });
+            // v3.5.8: context-aware — 只遮 SHOPLINE 識別碼欄位相鄰的 10+ 位數字，
+            // 避免誤傷非敏感的長數字（例如顯示在 error 裡的自訂訂單號 / 交易流水號）。
+            //
+            // 匹配：<key>[Id?]<sep><digits>[rightBracket?]
+            //   key: customer/instrument/paymentInstrument/paymentCustomer/tradeOrder/channelDeal
+            //   sep: ": ", "=", " [" 等
+            //
+            // 對應生產中看到的 error 格式：
+            //   customer [1028...] instrument [2023...] invalid
+            //   customerId: 1028...
+            //   tradeOrderId: 2023...
+            var KEYS = 'customer|instrument|paymentInstrument|paymentCustomer|tradeOrder|channelDeal';
+            var re = new RegExp('\\b(' + KEYS + ')(Id)?(\\s*[:=]\\s*|\\s*\\[\\s*)(\\d{10,})(\\s*\\])?', 'gi');
+            return msg.replace(re, function (_, key, idSuffix, sep, digits, rightBracket) {
+                return key + (idSuffix || '') + sep + '*' + digits.slice(-6) + (rightBracket || '');
+            });
         },
 
         showFormError: function (message) {
