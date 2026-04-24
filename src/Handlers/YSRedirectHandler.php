@@ -395,46 +395,46 @@ class YSRedirectHandler {
             $all_existing_tokens[] = $existing_token;
         }
 
-        // 取得卡片資訊（支援多種 API 回傳格式）
-        // SHOPLINE API 可能使用不同的欄位名稱
-        $card_type    = strtolower( $card_info['brand'] ?? $card_info['cardBrand'] ?? 'visa' );
-        $last4        = $card_info['last4'] ?? $card_info['last'] ?? $card_info['cardLast4'] ?? '0000';
-        $expiry_month = $card_info['expireMonth'] ?? $card_info['expiryMonth'] ?? $card_info['expMonth'] ?? '';
-        $expiry_year  = $card_info['expireYear'] ?? $card_info['expiryYear'] ?? $card_info['expYear'] ?? '';
+        // v3.5.1: 套用共用 normalizer（YSCustomer::normalize_card_payload）
+        // 為保留向後相容（SHOPLINE 多種欄位命名：last4 / cardLast4 / expiryMonth 等），
+        // 先把欄位統一成 normalizer 認得的 {brand, last, expireMonth, expireYear}，再呼叫
+        $normalized_input = array(
+            'brand'       => $card_info['brand'] ?? $card_info['cardBrand'] ?? 'visa',
+            'last'        => $card_info['last'] ?? $card_info['last4'] ?? $card_info['cardLast4'] ?? '',
+            'expireMonth' => $card_info['expireMonth'] ?? $card_info['expiryMonth'] ?? $card_info['expMonth'] ?? '',
+            'expireYear'  => $card_info['expireYear'] ?? $card_info['expiryYear'] ?? $card_info['expYear'] ?? '',
+        );
+        $normalized = \YangSheep\ShoplinePayment\Customer\YSCustomer::normalize_card_payload( $normalized_input );
 
-        // 如果 creditCard 回應沒有到期日，查詢 paymentInstrument API 取得完整資訊
-        if ( empty( $expiry_month ) || empty( $expiry_year ) ) {
-            YSLogger::debug( 'Redirect handler: creditCard missing expiry, fetching from paymentInstrument API', array(
+        // 若 creditCard 回應欄位不足，查 paymentInstrument API 補齊再 normalize
+        if ( ! $normalized ) {
+            YSLogger::debug( 'Redirect handler: creditCard missing fields, fetching from paymentInstrument API', array(
                 'payment_instrument_id' => $payment_instrument_id,
                 'payment_customer_id'   => $payment_customer_id,
             ) );
-
             $instrument_card = self::fetch_instrument_card_info( $payment_customer_id, $payment_instrument_id );
-            if ( ! empty( $instrument_card ) ) {
-                // 從 paymentInstrument API 取得到期日
-                $expiry_month = $instrument_card['expireMonth'] ?? $instrument_card['expiryMonth'] ?? $expiry_month;
-                $expiry_year  = $instrument_card['expireYear'] ?? $instrument_card['expiryYear'] ?? $expiry_year;
-                // 如果 last4 也是空的，補上
-                if ( empty( $last4 ) || '0000' === $last4 ) {
-                    $last4 = $instrument_card['last'] ?? $instrument_card['last4'] ?? $last4;
-                }
+            if ( is_array( $instrument_card ) ) {
+                $normalized = \YangSheep\ShoplinePayment\Customer\YSCustomer::normalize_card_payload( $instrument_card );
             }
         }
 
-        // 確保 expiry 欄位有有效值（WooCommerce 必須有這些欄位）
-        if ( empty( $expiry_month ) || ! is_numeric( $expiry_month ) ) {
-            $expiry_month = '12';
+        // 最後兜底：若仍不合法，用 default 值避免 token->save() 拋 exception
+        if ( ! $normalized ) {
+            YSLogger::warning( 'Redirect handler: card info could not be normalized, falling back to placeholder', array(
+                'payment_instrument_id' => $payment_instrument_id,
+            ) );
+            $normalized = array(
+                'brand'        => 'visa',
+                'last4'        => '0000',
+                'expiry_month' => '12',
+                'expiry_year'  => gmdate( 'Y' ),
+            );
         }
-        if ( empty( $expiry_year ) || ! is_numeric( $expiry_year ) ) {
-            $expiry_year = gmdate( 'Y' );
-        }
-        // 處理兩位數年份（如 "30" -> "2030"）
-        if ( strlen( (string) $expiry_year ) === 2 ) {
-            $expiry_year = '20' . $expiry_year;
-        }
-        if ( empty( $last4 ) ) {
-            $last4 = '0000';
-        }
+
+        $card_type    = $normalized['brand'];
+        $last4        = $normalized['last4'];
+        $expiry_month = $normalized['expiry_month'];
+        $expiry_year  = $normalized['expiry_year'];
 
         YSLogger::debug( 'Redirect handler: Creating payment token', array(
             'payment_instrument_id' => $payment_instrument_id,
@@ -442,7 +442,6 @@ class YSRedirectHandler {
             'last4'                 => $last4,
             'expiry_month'          => $expiry_month,
             'expiry_year'           => $expiry_year,
-            'raw_card_info'         => $card_info,
         ) );
 
         // 建立新 token
@@ -486,7 +485,8 @@ class YSRedirectHandler {
                     'payment_instrument_id' => $payment_instrument_id,
                 ) );
             }
-        } catch ( Exception $e ) {
+        } catch ( \Throwable $e ) {
+            // v3.5.1: 擴展到 \Throwable 以捕捉 TypeError / ValueError（Codex review 建議）
             YSLogger::error( 'Redirect handler: Exception when saving payment token', array(
                 'user_id'               => $user_id,
                 'payment_instrument_id' => $payment_instrument_id,

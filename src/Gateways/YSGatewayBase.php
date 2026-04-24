@@ -678,15 +678,28 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
         $order = wc_get_order( $order_id );
 
         if ( ! $order ) {
+            YSLogger::error( 'process_payment: order not found', array( 'order_id' => $order_id ) );
             wc_add_notice( __( 'Order not found.', 'ys-shopline-via-woocommerce' ), 'error' );
             return array( 'result' => 'failure' );
         }
+
+        // v3.5.1: 進入 process_payment 就立刻寫 note，確保訂單永遠有 audit trail
+        $order->add_order_note( sprintf(
+            /* translators: %s: gateway id */
+            __( 'Shopline 金流：開始處理付款（gateway=%s）', 'ys-shopline-via-woocommerce' ),
+            $this->id
+        ) );
 
         // 防呆：訂單已付款成功，不再重複呼叫 API
         if ( in_array( $order->get_status(), array( 'processing', 'completed', 'on-hold' ), true ) ) {
             YSLogger::warning( 'Duplicate payment attempt blocked (status)', array(
                 'order_id' => $order_id,
                 'status'   => $order->get_status(),
+            ) );
+            $order->add_order_note( sprintf(
+                /* translators: %s: order status */
+                __( 'Shopline 金流：偵測到重複提交，訂單已處於狀態 %s，直接導向感謝頁', 'ys-shopline-via-woocommerce' ),
+                $order->get_status()
             ) );
 
             return array(
@@ -699,11 +712,17 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
         // 查詢前一筆交易狀態，決定是否允許重新付款
         $existing_trade_id = $order->get_meta( YSOrderMeta::TRADE_ORDER_ID );
         if ( ! empty( $existing_trade_id ) && 'pending' === $order->get_status() ) {
+            $order->add_order_note( sprintf(
+                /* translators: %s: trade order id */
+                __( 'Shopline 金流：偵測到既存交易（%s），查詢前次狀態中...', 'ys-shopline-via-woocommerce' ),
+                $existing_trade_id
+            ) );
             $prior_result = $this->check_prior_trade_status( $order, $existing_trade_id );
             if ( null !== $prior_result ) {
                 return $prior_result;
             }
             // prior trade 已失敗/過期 → 清除舊 tradeOrderId，繼續建立新交易
+            $order->add_order_note( __( 'Shopline 金流：前次交易已終態（失敗/過期），允許重新建立交易', 'ys-shopline-via-woocommerce' ) );
         }
 
         // Get pay session from POST
@@ -712,6 +731,10 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
         $pay_session_raw = isset( $_POST['ys_shopline_pay_session'] ) ? wp_unslash( $_POST['ys_shopline_pay_session'] ) : '';
 
         if ( empty( $pay_session_raw ) ) {
+            YSLogger::error( 'process_payment: paySession empty', array( 'order_id' => $order_id ) );
+            $order->add_order_note( __( 'Shopline 金流：付款失敗 — paySession 資料遺失（前端 SDK 未正確回傳）', 'ys-shopline-via-woocommerce' ) );
+            $order->update_meta_data( YSOrderMeta::PAYMENT_STATUS, 'MISSING_PAY_SESSION' );
+            $order->save();
             wc_add_notice( __( 'Payment session missing. Please try again.', 'ys-shopline-via-woocommerce' ), 'error' );
             return array( 'result' => 'failure' );
         }
@@ -730,6 +753,13 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
                 'length' => strlen( $pay_session_raw ),
                 'hash'   => substr( hash( 'sha256', $pay_session_raw ), 0, 8 ),
             ) );
+            $order->add_order_note( sprintf(
+                /* translators: %s: json decode error */
+                __( 'Shopline 金流：付款失敗 — paySession 格式錯誤（%s）', 'ys-shopline-via-woocommerce' ),
+                json_last_error_msg()
+            ) );
+            $order->update_meta_data( YSOrderMeta::PAYMENT_STATUS, 'INVALID_PAY_SESSION' );
+            $order->save();
             wc_add_notice( __( 'Invalid payment session. Please try again.', 'ys-shopline-via-woocommerce' ), 'error' );
             return array( 'result' => 'failure' );
         }
@@ -745,6 +775,10 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
 
         // Check API
         if ( ! $this->api ) {
+            YSLogger::error( 'process_payment: API not configured', array( 'order_id' => $order_id ) );
+            $order->add_order_note( __( 'Shopline 金流：付款失敗 — gateway API 未設定（商家後台 API 金鑰缺失）', 'ys-shopline-via-woocommerce' ) );
+            $order->update_meta_data( YSOrderMeta::PAYMENT_STATUS, 'API_NOT_CONFIGURED' );
+            $order->save();
             wc_add_notice( __( 'Payment gateway not configured.', 'ys-shopline-via-woocommerce' ), 'error' );
             return array( 'result' => 'failure' );
         }
@@ -1649,6 +1683,17 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
      */
     protected function handle_next_action( $order, $response ) {
         $order->update_meta_data( YSOrderMeta::NEXT_ACTION, $response['nextAction'] );
+
+        // v3.5.1: 明確記錄 nextAction 類型（3DS / redirect 等）
+        $action_type = isset( $response['nextAction']['type'] ) ? (string) $response['nextAction']['type'] : 'unknown';
+        $trade_order_id = isset( $response['tradeOrderId'] ) ? $response['tradeOrderId'] : '';
+        $order->add_order_note( sprintf(
+            /* translators: 1: action type, 2: trade order id */
+            __( 'Shopline 金流：SHOPLINE 已受理交易（tradeOrderId=%2$s），下一步=%1$s，等待使用者完成 3DS/授權驗證', 'ys-shopline-via-woocommerce' ),
+            $action_type,
+            $trade_order_id
+        ) );
+
         $order->update_status( 'pending', __( 'Awaiting Shopline payment completion.', 'ys-shopline-via-woocommerce' ) );
         $order->save();
 

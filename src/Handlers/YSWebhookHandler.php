@@ -497,13 +497,13 @@ final class YSWebhookHandler {
         $payment_instrument_id = $pi['instrumentId'] ?? '';
         $payment_customer_id   = $data['customerId'] ?? '';
         $card_info             = $pi['instrumentCard'] ?? [];
-        $card_info             = is_array( $card_info ) ? $card_info : [];
 
         YSLogger::info( 'BindCard webhook: customer.instrument.binded', array(
             'customer_id'   => $payment_customer_id,
-            'instrument_id' => '*' . substr( (string) $payment_instrument_id, -6 ),
-            'last4'         => isset( $card_info['last'] ) ? (string) $card_info['last'] : '',
-            'brand'         => isset( $card_info['brand'] ) ? (string) $card_info['brand'] : '',
+            'instrument_id' => $payment_instrument_id,
+            // v3.5.1: YSLogger 會自動遮罩 customer_id / instrument_id 與 last / brand（如有）
+            'last4'         => is_array( $card_info ) && isset( $card_info['last'] ) ? (string) $card_info['last'] : '',
+            'brand'         => is_array( $card_info ) && isset( $card_info['brand'] ) ? (string) $card_info['brand'] : '',
         ) );
 
         if ( ! $payment_instrument_id || ! $payment_customer_id ) {
@@ -518,7 +518,7 @@ final class YSWebhookHandler {
         ] );
 
         if ( empty( $users ) ) {
-            YSLogger::error( "Webhook: 找不到對應使用者，customer ID: {$payment_customer_id}" );
+            YSLogger::error( 'Webhook: 找不到對應使用者', array( 'customer_id' => $payment_customer_id ) );
             return;
         }
 
@@ -533,23 +533,50 @@ final class YSWebhookHandler {
             }
         }
 
-        // 建立新的 Token（欄位名稱依 API 文件: brand, last, expireMonth, expireYear）
-        $token = new \WC_Payment_Token_CC();
-        $token->set_token( $payment_instrument_id );
-        $token->set_gateway_id( YSOrderMeta::CREDIT_GATEWAY_ID );
-        $token->set_card_type( strtolower( $card_info['brand'] ?? 'card' ) );
-        $token->set_last4( $card_info['last'] ?? '0000' );
-        $token->set_expiry_month( $card_info['expireMonth'] ?? '12' );
-        $token->set_expiry_year( $card_info['expireYear'] ?? gmdate( 'Y' ) );
-        $token->set_user_id( $user_id );
-
-        if ( empty( $existing_tokens ) ) {
-            $token->set_default( true );
+        // v3.5.1: 共用 normalizer 統一驗證
+        $normalized = \YangSheep\ShoplinePayment\Customer\YSCustomer::normalize_card_payload( $card_info );
+        if ( ! $normalized ) {
+            YSLogger::warning( 'Webhook: instrumentCard could not be normalized, skipping token creation', array(
+                'user_id'       => $user_id,
+                'instrument_id' => $payment_instrument_id,
+            ) );
+            return;
         }
 
-        $token->save();
+        try {
+            $token = new \WC_Payment_Token_CC();
+            $token->set_token( $payment_instrument_id );
+            $token->set_gateway_id( YSOrderMeta::CREDIT_GATEWAY_ID );
+            $token->set_card_type( $normalized['brand'] );
+            $token->set_last4( $normalized['last4'] );
+            $token->set_expiry_month( $normalized['expiry_month'] );
+            $token->set_expiry_year( $normalized['expiry_year'] );
+            $token->set_user_id( $user_id );
 
-        YSLogger::info( "Webhook: 為使用者 {$user_id} 建立了 Payment Token" );
+            if ( empty( $existing_tokens ) ) {
+                $token->set_default( true );
+            }
+
+            if ( $token->save() ) {
+                YSLogger::info( 'Webhook: Payment Token created', array(
+                    'user_id'       => $user_id,
+                    'token_id'      => $token->get_id(),
+                    'instrument_id' => $payment_instrument_id,
+                ) );
+            } else {
+                YSLogger::error( 'Webhook: token->save() returned false', array(
+                    'user_id'       => $user_id,
+                    'instrument_id' => $payment_instrument_id,
+                ) );
+            }
+        } catch ( \Throwable $e ) {
+            YSLogger::error( 'Webhook: token creation threw', array(
+                'user_id'       => $user_id,
+                'instrument_id' => $payment_instrument_id,
+                'error'         => $e->getMessage(),
+            ) );
+            return;
+        }
 
         // 綁卡成功後，更新尚未綁定 instrument 的 subscription
         $this->update_pending_subscriptions_instrument( $user_id, $payment_instrument_id );

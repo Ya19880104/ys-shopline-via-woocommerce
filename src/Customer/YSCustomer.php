@@ -370,54 +370,26 @@ class YSCustomer {
 			return $existing;
 		}
 
-		$card_info = $instrument['instrumentCard'] ?? array();
-		if ( ! is_array( $card_info ) ) {
-			$card_info = array();
+		// v3.5.1: 使用共用 normalizer 統一卡片欄位驗證邏輯（Redirect/Webhook 也會用）
+		$normalized = self::normalize_card_payload( $instrument['instrumentCard'] ?? null );
+		if ( ! $normalized ) {
+			YSLogger::warning( 'Skipping instrument with invalid card info', array(
+				'user_id'       => $user_id,
+				'instrument_id' => $instrument_id,
+				'reason'        => 'normalize_card_payload returned false',
+			) );
+			return false;
 		}
 
 		try {
-			// 安全提取 scalar 值，非 scalar（如 array）一律用 default
-			$raw_last4    = $card_info['last'] ?? '';
-			$raw_brand    = $card_info['brand'] ?? '';
-			$raw_month    = $card_info['expireMonth'] ?? '';
-			$raw_year     = $card_info['expireYear'] ?? '';
-
-			$last4        = is_scalar( $raw_last4 ) ? (string) $raw_last4 : '';
-			$brand        = is_scalar( $raw_brand ) && '' !== $raw_brand ? (string) $raw_brand : 'visa';
-			$expiry_month = is_scalar( $raw_month ) && '' !== $raw_month ? (string) $raw_month : '12';
-			$expiry_year  = is_scalar( $raw_year ) && '' !== $raw_year ? (string) $raw_year : gmdate( 'Y' );
-
-			// WC_Payment_Token_CC::validate() 要求 expiry_year 為 4 位、expiry_month 為 2 位
-			// SHOPLINE 回傳 "30"/"03" 格式，需轉換為 "2030"/"03"，否則 token->save() 會拋 Exception
-			if ( strlen( $expiry_year ) === 2 ) {
-				$expiry_year = '20' . $expiry_year;
-			}
-			if ( strlen( $expiry_month ) === 1 ) {
-				$expiry_month = '0' . $expiry_month;
-			}
-
-			// last4 必須是 1-4 位數字
-			if ( ! preg_match( '/^\d{1,4}$/', $last4 ) ) {
-				YSLogger::warning( 'Skipping instrument with invalid card info', array(
-					'user_id'       => $user_id,
-					'instrument_id' => '*' . substr( (string) $instrument_id, -6 ),
-					'last4'         => $last4,
-				) );
-				return false;
-			}
-
-			if ( empty( $brand ) ) {
-				$brand = 'visa';
-			}
-
 			$token = new WC_Payment_Token_CC();
 			$token->set_token( $instrument_id );
 			$token->set_gateway_id( YSOrderMeta::CREDIT_GATEWAY_ID );
 			$token->set_user_id( $user_id );
-			$token->set_card_type( strtolower( $brand ) );
-			$token->set_last4( $last4 );
-			$token->set_expiry_month( $expiry_month );
-			$token->set_expiry_year( $expiry_year );
+			$token->set_card_type( $normalized['brand'] );
+			$token->set_last4( $normalized['last4'] );
+			$token->set_expiry_month( $normalized['expiry_month'] );
+			$token->set_expiry_year( $normalized['expiry_year'] );
 
 			// 儲存 Shopline 付款工具 ID
 			$token->add_meta_data( YSOrderMeta::TOKEN_INSTRUMENT_ID, $instrument_id, true );
@@ -426,19 +398,74 @@ class YSCustomer {
 				YSLogger::debug( 'WC Token created from instrument', array(
 					'user_id'       => $user_id,
 					'token_id'      => $token->get_id(),
-					'instrument_id' => '*' . substr( (string) $instrument_id, -6 ),
+					'instrument_id' => $instrument_id,
 				) );
 				return $token;
 			}
 		} catch ( \Throwable $e ) {
 			YSLogger::error( 'Failed to create WC Token from instrument', array(
 				'user_id'       => $user_id,
-				'instrument_id' => '*' . substr( (string) $instrument_id, -6 ),
+				'instrument_id' => $instrument_id,
 				'error'         => $e->getMessage(),
 			) );
 		}
 
 		return false;
+	}
+
+	/**
+	 * v3.5.1: 共用卡片欄位 normalizer
+	 *
+	 * 統一處理：
+	 * - instrumentCard 必須是 array，否則回 false
+	 * - brand / last / expireMonth / expireYear 必須 is_scalar，否則用 default
+	 * - expireYear 2 位補 "20" 前綴（SHOPLINE 回 "30" → "2030"）
+	 * - expireMonth 1 位補 "0" 前綴
+	 * - last4 必須 1-4 位數字，否則回 false
+	 *
+	 * 給 YSCustomer / YSRedirectHandler / YSWebhookHandler 共用，
+	 * 避免各自土炮 validation 造成安全缺口。log 遮罩由 YSLogger 統一處理。
+	 *
+	 * @param mixed $raw_card_info instrumentCard 原始結構
+	 * @return array|false {brand, last4, expiry_month, expiry_year} 或 false 表示資料不合法
+	 */
+	public static function normalize_card_payload( $raw_card_info ) {
+		if ( ! is_array( $raw_card_info ) ) {
+			return false;
+		}
+
+		$raw_last4 = $raw_card_info['last'] ?? '';
+		$raw_brand = $raw_card_info['brand'] ?? '';
+		$raw_month = $raw_card_info['expireMonth'] ?? '';
+		$raw_year  = $raw_card_info['expireYear'] ?? '';
+
+		$last4        = is_scalar( $raw_last4 ) ? (string) $raw_last4 : '';
+		$brand        = is_scalar( $raw_brand ) && '' !== $raw_brand ? (string) $raw_brand : 'visa';
+		$expiry_month = is_scalar( $raw_month ) && '' !== $raw_month ? (string) $raw_month : '12';
+		$expiry_year  = is_scalar( $raw_year ) && '' !== $raw_year ? (string) $raw_year : gmdate( 'Y' );
+
+		// 格式標準化
+		if ( strlen( $expiry_year ) === 2 ) {
+			$expiry_year = '20' . $expiry_year;
+		}
+		if ( strlen( $expiry_month ) === 1 ) {
+			$expiry_month = '0' . $expiry_month;
+		}
+		if ( empty( $brand ) ) {
+			$brand = 'visa';
+		}
+
+		// last4 必須是 1-4 位數字
+		if ( ! preg_match( '/^\d{1,4}$/', $last4 ) ) {
+			return false;
+		}
+
+		return array(
+			'brand'        => strtolower( $brand ),
+			'last4'        => $last4,
+			'expiry_month' => $expiry_month,
+			'expiry_year'  => $expiry_year,
+		);
 	}
 
 	/**

@@ -66,6 +66,62 @@ https://your-domain.com/wp-json/ys-shopline/v1/webhook
 
 ## 變更紀錄
 
+### 3.5.1 - 2026-04-24
+
+**訂單 audit trail + Card normalizer 共用 + Logger 集中遮罩 + 移除 Blocks 宣告**
+
+#### 🔎 訂單 audit trail（每筆訂單都有金流狀態記錄）
+
+先前情境：訂單建立後沒有任何 order note，管理員無法追查發生什麼事。v3.5.1 補齊：
+
+| 時機 | 新增 note |
+|------|------|
+| WC 建單成功 | `Shopline 金流：訂單已由 WooCommerce 建立（gateway=X，金額=NT$Y）` |
+| WCS 訂閱建立 | `Shopline 金流：訂閱已建立（gateway=X），等待首次扣款` |
+| `process_payment` 進入 | `Shopline 金流：開始處理付款（gateway=X）` |
+| 重複提交（已付款）| `偵測到重複提交，訂單已處於狀態 {status}，直接導向感謝頁` |
+| 既有 tradeOrderId 查詢 | `偵測到既存交易（X），查詢前次狀態中...` / `前次交易已終態，允許重新建立交易` |
+| `paySession` 遺失 | `付款失敗 — paySession 資料遺失（前端 SDK 未正確回傳）` |
+| `paySession` JSON 解析失敗 | `付款失敗 — paySession 格式錯誤（{error}）` |
+| API 未設定 | `付款失敗 — gateway API 未設定（商家後台 API 金鑰缺失）` |
+| `handle_next_action`（3DS/redirect）| `SHOPLINE 已受理交易（tradeOrderId=X），下一步=confirm/redirect，等待使用者完成驗證` |
+
+新增 meta：`PAYMENT_STATUS` 記 `MISSING_PAY_SESSION` / `INVALID_PAY_SESSION` / `API_NOT_CONFIGURED` / `ERROR` 等。
+
+#### 🧩 #4 Card payload normalizer 共用（Codex review）
+
+新增 `YSCustomer::normalize_card_payload()` 靜態方法：
+- `instrumentCard` 必須 array
+- `brand` / `last` / `expireMonth` / `expireYear` 必須 is_scalar
+- `expireYear` 2 位自動補 `20` 前綴（SHOPLINE 回 `30` → `2030`）
+- `expireMonth` 1 位自動補 `0` 前綴
+- `last4` 必須 1-4 位數字，否則回 false
+
+套用位置：
+- `YSCustomer::create_wc_token_from_instrument`
+- `YSRedirectHandler::sync_payment_token`
+- `YSWebhookHandler::handle_payment_instrument_created`
+
+Redirect / Webhook 的 token->save() 也擴展到 `catch \Throwable`。
+
+#### 🔒 #5 Logger 集中遮罩（Codex review）
+
+`YSLogger::log()` 進入點遞迴 sanitize context：
+
+| 欄位類型 | 遮罩方式 |
+|---------|---------|
+| `customerToken` / `payToken` / `apiKey` / `clientKey` / `signKey` / `cardNumber` / `cvv` / `cvc` / `pan` / `password` / `secret` | `[REDACTED]` |
+| `paySession` / `pay_session_raw` / `raw_card_info` / `raw_instrument` / `instrumentCard` | `#` + SHA256 前 8 字 fingerprint |
+| `instrument_id` / `payment_instrument_id` / `customer_id` / `paymentCustomerId` / `trade_order_id` / `tradeOrderId` / `channelDealId` | `*` + 末 6 碼 |
+
+已遮罩過的值（`*` 開頭或含 `[REDACTED]`）會保留原值，不重複遮罩。
+
+不再依賴各呼叫端自己記得套用遮罩 → 安全一致性保證。
+
+#### 🚫 #6 移除 Blocks cart_checkout_blocks 宣告（Codex review）
+
+原先 `declare_compatibility('cart_checkout_blocks', ...)` 但 gateway `canMakePayment()` 回 false，API contract 不一致。移除 compatible 宣告對齊實際能力。若未來完整支援 Blocks 再重新宣告。
+
 ### 3.5.0 - 2026-04-24
 
 **結帳 JS 重寫：單一 state machine + 80ms debounce**

@@ -3,7 +3,7 @@
  * Plugin Name: YS Shopline via WooCommerce
  * Plugin URI: https://yangsheep.com.tw
  * Description: Support Shopline Payments for WooCommerce, including HPOS and Subscriptions. Supports Credit Card, ATM, JKOPay, Apple Pay, LINE Pay, and Chailease BNPL.
- * Version:           3.5.0
+ * Version:           3.5.1
  * Author: YangSheep
  * Author URI: https://yangsheep.com.tw
  * Text Domain: ys-shopline-via-woocommerce
@@ -17,7 +17,7 @@
 defined( 'ABSPATH' ) || exit;
 
 // Define plugin constants
-define( 'YS_SHOPLINE_VERSION', '3.5.0' );
+define( 'YS_SHOPLINE_VERSION', '3.5.1' );
 define( 'YS_SHOPLINE_PLUGIN_FILE', __FILE__ );
 define( 'YS_SHOPLINE_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 define( 'YS_SHOPLINE_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
@@ -170,12 +170,10 @@ final class YSShoplinePayment {
                 true
             );
 
-            // Cart and Checkout Blocks - now compatible via new architecture
-            \Automattic\WooCommerce\Utilities\FeaturesUtil::declare_compatibility(
-                'cart_checkout_blocks',
-                YS_SHOPLINE_PLUGIN_FILE,
-                true
-            );
+            // v3.5.1: 移除 cart_checkout_blocks 宣告
+            // 原先宣告 compatible 但 gateway 的 canMakePayment() 回 false，API contract 不一致。
+            // 目前只支援傳統結帳頁（非 Blocks），明確不宣告反而比假宣告準確。
+            // 若未來完整支援 Blocks 再重新宣告。
         }
     }
 
@@ -225,6 +223,55 @@ final class YSShoplinePayment {
 
         // Handle 3DS/redirect payment - 必須在主外掛中註冊，因為閘道可能還沒被實例化
         add_action( 'template_redirect', array( $this, 'handle_3ds_redirect' ), 5 );
+
+        // v3.5.1: 訂單建立時立刻記 audit note（確保任何 WC 建單必留痕跡，
+        // 即使後續 process_payment 因 fatal 沒跑也有紀錄）
+        add_action( 'woocommerce_checkout_order_processed', array( $this, 'log_order_created' ), 10, 3 );
+        add_action( 'woocommerce_checkout_subscription_created', array( $this, 'log_subscription_created' ), 10, 3 );
+    }
+
+    /**
+     * v3.5.1: WC 建單後立刻在訂單寫 audit note。
+     *
+     * @param int   $order_id Order ID.
+     * @param array $posted_data POST data.
+     * @param \WC_Order $order Order object.
+     */
+    public function log_order_created( $order_id, $posted_data = array(), $order = null ) {
+        if ( ! $order ) {
+            $order = wc_get_order( $order_id );
+        }
+        if ( ! $order ) {
+            return;
+        }
+        $gw = $order->get_payment_method();
+        if ( 0 !== strpos( $gw, 'ys_shopline_' ) ) {
+            return;
+        }
+        $order->add_order_note( sprintf(
+            /* translators: 1: gateway id, 2: order total */
+            __( 'Shopline 金流：訂單已由 WooCommerce 建立（gateway=%1$s，金額=%2$s）', 'ys-shopline-via-woocommerce' ),
+            $gw,
+            $order->get_formatted_order_total()
+        ) );
+    }
+
+    /**
+     * v3.5.1: 訂閱建立也記一筆（覆蓋 WooCommerce Subscriptions 情境）。
+     */
+    public function log_subscription_created( $subscription, $order = null, $recurring_cart = null ) {
+        if ( ! $subscription || ! is_object( $subscription ) ) {
+            return;
+        }
+        $gw = method_exists( $subscription, 'get_payment_method' ) ? $subscription->get_payment_method() : '';
+        if ( 0 !== strpos( (string) $gw, 'ys_shopline_' ) ) {
+            return;
+        }
+        $subscription->add_order_note( sprintf(
+            /* translators: %s: gateway id */
+            __( 'Shopline 金流：訂閱已建立（gateway=%s），等待首次扣款', 'ys-shopline-via-woocommerce' ),
+            $gw
+        ) );
     }
 
     /**
