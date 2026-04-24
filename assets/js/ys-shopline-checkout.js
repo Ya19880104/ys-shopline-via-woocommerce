@@ -957,6 +957,7 @@ jQuery(function ($) {
                 if (payResult && payResult.error) {
                     console.error('[YS Shopline] pay() error:', { code: payResult.error.code, message: payResult.error.message });
                     $form.removeClass('processing').unblock();
+                    self.resetAllSubmitLocks($form);  // v3.5.7: 解所有 handler 的 submit lock + button disabled
                     self.showFormError('付款失敗：' + (payResult.error.message || '未知錯誤'));
                     // v3.5.5: 主結帳頁走到這裡代表 WC 訂單已建立（tradeOrderId 已寫入 meta），
                     // 如果停在結帳頁使用者會誤以為沒下單；導向 pay-for-order 頁讓訂單可見 + 支援重試。
@@ -980,6 +981,7 @@ jQuery(function ($) {
             } catch (e) {
                 console.error('[YS Shopline] pay() exception:', e);
                 $form.removeClass('processing').unblock();
+                self.resetAllSubmitLocks($form);  // v3.5.7: 解所有 handler 的 submit lock + button disabled
                 self.showFormError('付款處理發生錯誤：' + (e.message || '未知錯誤'));
                 // v3.5.5: 同 pay().error 分支，訂單已建立就要導去 pay-for-order
                 if (failureUrl) {
@@ -987,6 +989,32 @@ jQuery(function ($) {
                     setTimeout(function () { window.location.href = failureUrl; }, 1500);
                 }
             }
+        },
+
+        /**
+         * v3.5.7: 解除所有 handler 的 submit lock + re-enable submit button。
+         *
+         * 過去 bug：processNextAction error 分支只 reset ShoplineCheckout._isSubmitting，
+         * 但使用者可能從 PayForOrderHandler / AddPaymentMethodHandler 入口觸發過來，
+         * 那些 handler 的 _isSubmitting 沒 reset → 使用者看到紅框但按鈕卡死、必須重整才能重試。
+         *
+         * @param {jQuery} $form 當前 form (可選，用於 re-enable submit button)
+         */
+        resetAllSubmitLocks: function ($form) {
+            this._isSubmitting = false;
+            try {
+                if (typeof PayForOrderHandler !== 'undefined' && PayForOrderHandler._isSubmitting !== undefined) {
+                    PayForOrderHandler._isSubmitting = false;
+                }
+                if (typeof AddPaymentMethodHandler !== 'undefined' && AddPaymentMethodHandler._isSubmitting !== undefined) {
+                    AddPaymentMethodHandler._isSubmitting = false;
+                }
+            } catch (_) { /* ignore undefined handler lookups */ }
+            // Re-enable submit buttons（WC 或外部 theme 可能把 button 加 disabled）
+            if ($form && $form.length) {
+                $form.find('#place_order, button[type="submit"], input[type="submit"]').prop('disabled', false).removeClass('disabled');
+            }
+            $('#place_order').prop('disabled', false).removeClass('disabled');
         },
 
         /**
@@ -1039,7 +1067,25 @@ jQuery(function ($) {
          *
          * @param {string} message Error message
          */
+        /**
+         * v3.5.7: Sanitize SHOPLINE error messages to mask long digit IDs.
+         *
+         * SDK 直接返回的 error message 會含 customer/instrument/trade IDs 明文
+         * （例：`customer [10282601157350923963645829361] instrument [20232...997970] invalid`）。
+         * 後端 log 用 sensitive_last6 遮罩；前端使用者可見訊息也必須遮，避免 support
+         * 截圖 / 客訴對話洩漏識別碼。
+         *
+         * @param {string} msg SHOPLINE SDK 原始 error message
+         * @return {string} 遮罩後訊息（20 位以上純數字 → *末6）
+         */
+        sanitizeErrorMessage: function (msg) {
+            if (typeof msg !== 'string') return msg;
+            return msg.replace(/\b(\d{18,})\b/g, function (m) { return '*' + m.slice(-6); });
+        },
+
         showFormError: function (message) {
+            // v3.5.7: 前置遮罩，任何呼叫點都自動 sanitize（防止 SHOPLINE ID 洩漏）
+            message = this.sanitizeErrorMessage(message);
             // v3.5.6: 三頁面 robust fallback（主結帳 / pay-for-order / add-payment-method）
             var $form = $('form.checkout');
             if (!$form.length) { $form = $('#order_review'); }
@@ -1058,9 +1104,18 @@ jQuery(function ($) {
                 '</div>'
             );
 
-            // v3.5.6: offset() 可能是 undefined（例如 $form=body 且 scroll top），加防衛
-            var offset = $form.offset();
-            var scrollTarget = (offset && typeof offset.top === 'number') ? Math.max(0, offset.top - 100) : 0;
+            // v3.5.7: 改滾到**剛插入的紅框 notice 位置**而非 form 頂（form 可能很長、notice 在頁面中間看不到）
+            // Notice 剛插入後 offset 已是最終位置。
+            var $notice = $form.find('.woocommerce-NoticeGroup-checkout').first();
+            var noticeOffset = $notice.length ? $notice.offset() : null;
+            var scrollTarget;
+            if (noticeOffset && typeof noticeOffset.top === 'number') {
+                scrollTarget = Math.max(0, noticeOffset.top - 80);
+            } else {
+                // Fallback: form 頂或頁首
+                var formOffset = $form.offset();
+                scrollTarget = (formOffset && typeof formOffset.top === 'number') ? Math.max(0, formOffset.top - 100) : 0;
+            }
             $('html, body').animate({ scrollTop: scrollTarget }, 500);
 
             // Trigger WC event

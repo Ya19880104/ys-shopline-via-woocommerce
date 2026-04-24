@@ -4,7 +4,7 @@
 
 ## 版本資訊
 
-- **目前版本**：3.5.6
+- **目前版本**：3.5.7
 - **PHP 需求**：>= 8.0
 - **WordPress 需求**：>= 6.0
 - **WooCommerce 需求**：7.0 - 9.0
@@ -65,6 +65,71 @@ https://your-domain.com/wp-json/ys-shopline/v1/webhook
 ---
 
 ## 變更紀錄
+
+### 3.5.7 - 2026-04-25
+
+**SDK error message ID 遮罩 + 失敗後 auto-scroll + 解鎖所有 submit lock**
+
+#### 新增 3 個修正
+
+##### 1. 前端 error message 遮罩
+使用者 pay-for-order 重試時被 SHOPLINE 擋下，紅框訊息明文顯示 29 位 customer/instrument ID。後端 log 有 `sensitive_last6` 遮罩，但前端使用者可見的 message 來自 **SDK `payResult.error.message`**，沒過後端 `humanize_error_message`。
+
+新增 `ShoplineCheckout.sanitizeErrorMessage()`：
+```js
+return msg.replace(/\b(\d{18,})\b/g, function (m) {
+    return '*' + m.slice(-6);
+});
+```
+`showFormError` 入口自動 sanitize，使用者現在只看到 `customer [*829361] instrument [*997970] invalid`。
+
+##### 2. 失敗後 auto-scroll 到紅框位置
+原本 scroll 滾到 form 頂，但訂單明細很長時 notice 可能在頁面中間看不到。改為：
+- 滾到 **剛插入的 `.woocommerce-NoticeGroup-checkout` notice offset**
+- 偏移 80 px 留出視覺空間
+- Notice 不存在才 fallback 到 form 頂
+
+##### 3. 解鎖所有 handler 的 submit lock
+新增 `ShoplineCheckout.resetAllSubmitLocks($form)`：
+- Reset `ShoplineCheckout._isSubmitting`
+- Reset `PayForOrderHandler._isSubmitting`（若存在）
+- Reset `AddPaymentMethodHandler._isSubmitting`（若存在）
+- Re-enable `#place_order` + `button[type="submit"]` 的 `disabled` / `disabled` class
+
+過去 bug：processNextAction 的 error / catch 分支只在 ShoplineCheckout 空間 reset，但使用者可能從 PayForOrderHandler 入口觸發 → PayForOrderHandler 的 `_isSubmitting` 仍是 `true` → 紅框看得到但按鈕按不下去，必須重整頁面才能重試。
+
+三條失敗路徑（pay().error / catch(e) / 未來新增）都會呼叫此 reset。
+
+### 3.5.6 - 2026-04-25
+
+#### 問題
+使用者 pay-for-order 重試時被 SHOPLINE 擋下，紅框訊息實例：
+```
+付款失敗：customer [10282601157350923963645829361] instrument
+[20232604247494483690177997970] invalid
+```
+兩個 29 位數字是 **customer ID + instrument ID 明文**。後端 log 已用 `sensitive_last6` 遮成 `*末6`，但前端使用者可見的 error message 來自 **SDK `payResult.error.message` 直接回的字串**，完全沒經過後端 `humanize_error_message`。Support 截圖 / 客服對話會外洩識別碼。
+
+#### 修正
+`ShoplineCheckout.showFormError()` 前置統一 sanitize：
+```js
+sanitizeErrorMessage: function (msg) {
+    if (typeof msg !== 'string') return msg;
+    return msg.replace(/\b(\d{18,})\b/g, function (m) {
+        return '*' + m.slice(-6);
+    });
+}
+```
+
+18 位以上連續數字（SHOPLINE 的 customer/instrument/trade IDs 均為 29 位）→ `*末6`，與後端 log 遮罩格式一致。
+
+修正後顯示：
+```
+付款失敗：customer [*829361] instrument [*997970] invalid
+```
+
+#### 防禦層
+加在 `showFormError` 入口 → 任何呼叫點（主結帳、pay-for-order、add-payment-method）自動 sanitize，不必每處個別處理。
 
 ### 3.5.6 - 2026-04-25
 
