@@ -65,35 +65,19 @@ jQuery(function ($) {
     };
 
     /**
-     * Payment instances cache
+     * v3.5.0: 簡化 state management
+     *
+     * 單一狀態機：每個 gateway 只有 idle / loading / mounted 三態
+     * 加一個 debounce timer 把 WooCommerce 連發的 updated_checkout event 折成一次 mount。
+     *
+     * 移除了 v3.4.19/20 累積的 sdkInitializing / sdkGeneration / ajaxGeneration /
+     * $container.data 雙層 flag，避免守衛互相干擾導致 SDK 卡死。
      */
-    var paymentInstances = {};
-
-    /**
-     * Current active gateway
-     */
-    var activeGateway = null;
-
-    /**
-     * SDK loaded flag
-     */
-    var sdkLoaded = false;
-
-    /**
-     * SDK initialization in progress (prevent duplicate calls)
-     */
-    var sdkInitializing = {};
-
-    /**
-     * Pending AJAX requests (for abort on clearAllInstances)
-     */
-    var pendingAjax = {};
-
-    /**
-     * Generation counter per gateway — incremented on clear, checked after async SDK init.
-     * Prevents stale ShoplinePayments() callbacks from rendering into a cleared container.
-     */
-    var sdkGeneration = {};
+    var paymentInstances = {};       // { gatewayId: sdkPaymentObject } — SDK 成功後存
+    var gatewayState = {};           // { gatewayId: 'idle' | 'loading' | 'mounted' }
+    var pendingAjax = {};            // { gatewayId: jqXHR } — 供 abort
+    var mountTimer = null;           // debounce timer
+    var sdkLoaded = false;           // 全域 SDK JS 載入 flag
 
     /**
      * Main Shopline Checkout Handler
@@ -178,292 +162,239 @@ jQuery(function ($) {
         },
 
         /**
-         * Handle payment method change
-         *
-         * 同類型 paymentMethod（如 CreditCard）切換時，需先清除舊實例，
-         * 因為 Shopline SDK 不允許同頁面同時掛載多個相同 paymentMethod 的實例。
+         * v3.5.0: 事件入口統一呼叫 requestMount
          */
         onPaymentMethodChange: function () {
             var gatewayId = this.getSelectedGateway();
-
-            if (gatewayId) {
-                // 同一個 gateway 且已有 instance → 不需重新初始化
-                if (gatewayId === activeGateway && paymentInstances[gatewayId]) {
-                    return;
-                }
-                this.clearConflictingInstances(gatewayId);
-                activeGateway = gatewayId;
-                this.initSDK(gatewayId);
-            } else {
-                activeGateway = null;
-            }
+            if (!gatewayId) return;
+            // 把其他 shopline gateway 的 container + state 清掉
+            this.unmountOthers(gatewayId);
+            this.requestMount(gatewayId);
         },
 
         /**
-         * Clear SDK instances that share the same paymentMethod as the target gateway.
+         * v3.5.0: WC DOM 更新後的處理
          *
-         * @param {string} targetGatewayId The gateway about to be initialized
-         */
-        clearConflictingInstances: function (targetGatewayId) {
-            var targetConfig = GATEWAY_CONFIG[targetGatewayId];
-            if (!targetConfig) return;
-
-            var targetMethod = targetConfig.paymentMethod;
-
-            $.each(GATEWAY_CONFIG, function (existingId, existingConfig) {
-                if (existingId === targetGatewayId) return; // 跳過自己
-                if (existingConfig.paymentMethod !== targetMethod) return; // 不同類型不衝突
-
-                // v3.4.19: 無條件清除 DOM + state（即使 paymentInstances 尚未寫入，
-                //         也可能有 SDK 正在 mount、iframe 已進 DOM 的中間態）
-                // v3.4.20: 不再重置 sdkInitializing，避免並行 mount
-                console.log('[YS Shopline] Clearing conflicting SDK instance:', existingId, '→', targetGatewayId);
-                sdkGeneration[existingId] = (sdkGeneration[existingId] || 0) + 1;
-                if (pendingAjax[existingId]) {
-                    pendingAjax[existingId].abort();
-                    delete pendingAjax[existingId];
-                }
-                delete paymentInstances[existingId];
-
-                var $oldContainer = $('#' + existingConfig.containerId);
-                if ($oldContainer.length) {
-                    $oldContainer.empty();
-                    $oldContainer.removeData('sdk-initialized');
-                    $oldContainer.removeData('sdk-initializing');
-                }
-            });
-        },
-
-        /**
-         * Handle checkout update (cart changes, etc.)
+         * WC 觸發 updated_checkout 可能因為運費/地址變化重新 render #payment 區塊。
+         * 策略：
+         * 1. 每個 gateway 狀態若為 mounted 但 DOM 已無 iframe → 視為 idle（被 WC 清了）
+         * 2. 重新排程當前 selected gateway 的 mount（debounce）
          */
         onUpdatedCheckout: function () {
-            // 重新綁定事件（表單可能被替換）
             this.bindCheckoutEvents();
 
-            // 清除舊的 paySession（購物車更新後需要重新建立）
+            // WC 可能重建表單 → 清 paySession hidden input
             $('form.checkout').find('input[name="ys_shopline_pay_session"]').remove();
 
-            // checkout 更新時 DOM 被替換，所有舊的 SDK 實例都需要清除重建
-            this.clearAllInstances();
+            // 檢查每個 gateway 的 DOM 是否還活著；被 WC 替換掉的 mark 為 idle
+            $.each(GATEWAY_CONFIG, function (gatewayId, config) {
+                if (gatewayState[gatewayId] !== 'mounted') return;
+                var $c = $('#' + config.containerId);
+                if (!$c.length || $c.find('iframe').length === 0) {
+                    // WC 砍掉 DOM → 清狀態讓後續 requestMount 能重 mount
+                    gatewayState[gatewayId] = 'idle';
+                    delete paymentInstances[gatewayId];
+                }
+            });
 
             var gatewayId = this.getSelectedGateway();
-
-            if (gatewayId) {
-                activeGateway = gatewayId;
-                this.initSDK(gatewayId);
-            }
+            if (gatewayId) this.requestMount(gatewayId);
         },
 
         /**
-         * Clear all SDK instances (used when checkout DOM is replaced).
+         * v3.5.0: 清掉其他 gateway container 與 state
+         *
+         * @param {string} keepGatewayId 保留不動的 gateway id
          */
-        clearAllInstances: function () {
+        unmountOthers: function (keepGatewayId) {
             $.each(GATEWAY_CONFIG, function (gatewayId, config) {
-                // Increment generation to invalidate in-flight ShoplinePayments() calls
-                sdkGeneration[gatewayId] = (sdkGeneration[gatewayId] || 0) + 1;
+                if (gatewayId === keepGatewayId) return;
+                if (gatewayState[gatewayId] === 'idle' || !gatewayState[gatewayId]) return;
 
-                // Abort pending AJAX request to prevent stale callback
+                // abort 正在進行的 AJAX
                 if (pendingAjax[gatewayId]) {
-                    pendingAjax[gatewayId].abort();
+                    try { pendingAjax[gatewayId].abort(); } catch (e) {}
                     delete pendingAjax[gatewayId];
                 }
+                delete paymentInstances[gatewayId];
+                gatewayState[gatewayId] = 'idle';
 
-                if (paymentInstances[gatewayId]) {
-                    console.log('[YS Shopline] Clearing SDK instance on checkout update:', gatewayId);
-                    delete paymentInstances[gatewayId];
-                }
-                // v3.4.20: 不再重置 sdkInitializing
-                // 若有 mount 正在進行，讓它自己跑完再由 generation guard 丟棄結果
-                // 否則第二個 initSDK 會看到 initializing=false 而並行 mount → 雙重渲染
-
-                var $container = $('#' + config.containerId);
-                if ($container.length) {
-                    // v3.4.19: 主動 empty() 確保 SDK iframe 不遺留，避免下次 init 疊加渲染
-                    $container.empty();
-                    $container.removeData('sdk-initialized');
-                    $container.removeData('sdk-initializing');
-                }
+                var $c = $('#' + config.containerId);
+                if ($c.length) $c.empty();
             });
         },
 
         /**
-         * Initialize SDK for specific gateway
+         * v3.5.0: 排程 mount（debounce 80ms）
+         *
+         * 80ms 視窗吸收 WC 連發的 updated_checkout（radio change 通常同時觸發
+         * `change` + `update_order_review` AJAX → 多次 updated_checkout），
+         * 只真正 mount 一次。
+         */
+        requestMount: function (gatewayId) {
+            var self = this;
+            clearTimeout(mountTimer);
+            mountTimer = setTimeout(function () { self.doMount(gatewayId); }, 80);
+        },
+
+        /**
+         * v3.5.0: 實際 mount SDK
+         *
+         * 狀態機：
+         *   idle    → 從 AJAX 取 config → mount → mounted
+         *   loading → 已在進行中，不重複
+         *   mounted → 若 DOM 還有 iframe 則 skip；否則降為 idle 重 mount
+         */
+        doMount: async function (gatewayId) {
+            if (!GATEWAY_CONFIG[gatewayId]) return;
+            var self = this;
+            var config = GATEWAY_CONFIG[gatewayId];
+            var $container = $('#' + config.containerId);
+            if (!$container.length) return;
+
+            // 已 mounted 且 DOM 還活著 → 不需動
+            if (gatewayState[gatewayId] === 'mounted') {
+                if ($container.find('iframe').length > 0 && paymentInstances[gatewayId]) return;
+                // DOM 失效 → 降為 idle 繼續 mount
+                gatewayState[gatewayId] = 'idle';
+                delete paymentInstances[gatewayId];
+            }
+
+            // 已在 loading（AJAX 或 SDK mount 進行中）→ 不重複啟動
+            if (gatewayState[gatewayId] === 'loading') return;
+
+            gatewayState[gatewayId] = 'loading';
+            $container.html('<div class="ys-shopline-loading" style="text-align:center;padding:20px;"><span class="spinner is-active" style="float:none;"></span></div>');
+
+            // 取 SDK config
+            var serverConfig;
+            try {
+                serverConfig = await this.fetchSdkConfig(gatewayId);
+            } catch (e) {
+                if (e && e.aborted) {
+                    // 被使用者切掉，正常情況不提示
+                    return;
+                }
+                gatewayState[gatewayId] = 'idle';
+                self.showError($container, (e && e.message) || 'Configuration error');
+                return;
+            }
+
+            // 期間使用者可能切走 → 放棄 mount
+            if (gatewayState[gatewayId] !== 'loading') return;
+            // 使用者 select 的 gateway 已改 → 放棄 mount
+            if (this.getSelectedGateway() !== gatewayId) {
+                gatewayState[gatewayId] = 'idle';
+                $container.empty();
+                return;
+            }
+
+            try {
+                await this.renderPayment(gatewayId, serverConfig);
+                // renderPayment 成功後會 set paymentInstances[gatewayId]
+                if (paymentInstances[gatewayId]) {
+                    gatewayState[gatewayId] = 'mounted';
+                } else {
+                    // renderPayment 內部 error 但沒 throw（已 showError）
+                    gatewayState[gatewayId] = 'idle';
+                }
+            } catch (e) {
+                console.error('[YS Shopline] doMount error:', e);
+                gatewayState[gatewayId] = 'idle';
+                self.showError($container, (e && e.message) || 'SDK initialization failed');
+            }
+        },
+
+        /**
+         * v3.5.0: 從 server 取 SDK config（Promise）
+         */
+        fetchSdkConfig: function (gatewayId) {
+            var self = this;
+            return new Promise(function (resolve, reject) {
+                var ajaxData = {
+                    action: 'ys_shopline_get_sdk_config',
+                    nonce: ys_shopline_params.nonce,
+                    gateway: gatewayId
+                };
+
+                var orderPayMatch = window.location.pathname.match(/order-pay\/(\d+)/);
+                if (orderPayMatch) {
+                    ajaxData.order_id = orderPayMatch[1];
+                    var urlParams = new URLSearchParams(window.location.search);
+                    if (urlParams.get('key')) ajaxData.order_key = urlParams.get('key');
+                    if (urlParams.get('change_payment_method')) ajaxData.is_change_payment_method = '1';
+                }
+
+                // abort 同 gateway 舊的 request
+                if (pendingAjax[gatewayId]) {
+                    try { pendingAjax[gatewayId].abort(); } catch (e) {}
+                }
+
+                pendingAjax[gatewayId] = $.ajax({
+                    type: 'POST',
+                    url: ys_shopline_params.ajax_url,
+                    data: ajaxData,
+                    success: function (response) {
+                        delete pendingAjax[gatewayId];
+                        if (response.success) {
+                            resolve(response.data);
+                        } else {
+                            var msg = (response.data && response.data.message) ||
+                                ys_shopline_params.i18n.config_error || 'Configuration error';
+                            reject(new Error(msg));
+                        }
+                    },
+                    error: function (jqXHR, textStatus) {
+                        delete pendingAjax[gatewayId];
+                        if (textStatus === 'abort') {
+                            var err = new Error('aborted');
+                            err.aborted = true;
+                            reject(err);
+                        } else {
+                            var errMsg = (ys_shopline_params.i18n.connection_error || 'Connection error') + ': ' + textStatus;
+                            reject(new Error(errMsg));
+                        }
+                    }
+                });
+            });
+        },
+
+        /**
+         * v3.5.0 相容介面：保留 initSDK 方法名給外部呼叫（PayForOrderHandler 等）
+         * 內部轉呼叫 requestMount → doMount 新流程
          *
          * @param {string} gatewayId Gateway ID
          */
         initSDK: function (gatewayId) {
-            var self = this;
-            var config = GATEWAY_CONFIG[gatewayId];
-
-            if (!config) {
-                console.error('Unknown gateway:', gatewayId);
-                return;
-            }
-
-            // Prevent duplicate initialization
-            if (paymentInstances[gatewayId]) {
-                console.log('[YS Shopline] SDK already initialized for:', gatewayId);
-                return;
-            }
-
-            // Prevent concurrent initialization
-            if (sdkInitializing[gatewayId]) {
-                console.log('[YS Shopline] SDK initialization already in progress for:', gatewayId);
-                return;
-            }
-
-            // Mark as initializing
-            sdkInitializing[gatewayId] = true;
-
-            var $container = $('#' + config.containerId);
-
-            // If container doesn't exist, skip
-            if (!$container.length) {
-                sdkInitializing[gatewayId] = false;
-                return;
-            }
-
-            // Check if container already has SDK content or is being initialized
-            // This prevents double initialization from rapid event firing
-            if ($container.data('sdk-initializing') || $container.data('sdk-initialized')) {
-                console.log('[YS Shopline] Container already has SDK or is initializing for:', gatewayId);
-                sdkInitializing[gatewayId] = false;
-                return;
-            }
-
-            // Mark container as initializing
-            $container.data('sdk-initializing', true);
-
-            // v3.4.19: 捕捉 AJAX 發起時的 generation，用於 stale callback guard
-            // 若在 AJAX 進行中發生 clearAllInstances / clearConflictingInstances
-            // （會把 sdkGeneration 往上 +1），response 回來時就能識別是過期回覆並丟棄
-            var ajaxGeneration = sdkGeneration[gatewayId] || 0;
-
-            // Show loading state
-            $container.html('<div class="ys-shopline-loading" style="text-align: center; padding: 20px;"><span class="spinner is-active" style="float: none;"></span></div>');
-
-            // Fetch SDK config from server
-            var ajaxData = {
-                action: 'ys_shopline_get_sdk_config',
-                nonce: ys_shopline_params.nonce,
-                gateway: gatewayId
-            };
-
-            // Pay-for-order 頁面：傳遞 order_id + order_key 讓後端取得正確金額與驗證權限
-            var orderPayMatch = window.location.pathname.match(/order-pay\/(\d+)/);
-            if (orderPayMatch) {
-                ajaxData.order_id = orderPayMatch[1];
-                var urlParams = new URLSearchParams(window.location.search);
-                if (urlParams.get('key')) {
-                    ajaxData.order_key = urlParams.get('key');
-                }
-                // v3.4.16: 訂閱變更付款方式 → 通知後端切 bind-only 模式（強制 CardBind + forceSaveCard）
-                if (urlParams.get('change_payment_method')) {
-                    ajaxData.is_change_payment_method = '1';
-                }
-            }
-
-            // Abort any previous pending request for this gateway
-            if (pendingAjax[gatewayId]) {
-                pendingAjax[gatewayId].abort();
-            }
-
-            pendingAjax[gatewayId] = $.ajax({
-                type: 'POST',
-                url: ys_shopline_params.ajax_url,
-                data: ajaxData,
-                success: function (response) {
-                    delete pendingAjax[gatewayId];
-
-                    // v3.4.19: generation guard —— 拒絕 stale response（切換 gateway / updated_checkout 後）
-                    if ((sdkGeneration[gatewayId] || 0) !== ajaxGeneration) {
-                        console.log('[YS Shopline] Stale AJAX response discarded for:', gatewayId,
-                            '(gen', ajaxGeneration, '→', sdkGeneration[gatewayId], ')');
-                        return;
-                    }
-
-                    if (response.success) {
-                        self.renderPayment(gatewayId, response.data, ajaxGeneration);
-                    } else {
-                        sdkInitializing[gatewayId] = false;
-                        $container.data('sdk-initializing', false);
-                        var errorMsg = (response.data && response.data.message)
-                            ? response.data.message
-                            : ys_shopline_params.i18n.config_error || 'Configuration error';
-                        self.showError($container, errorMsg);
-                    }
-                },
-                error: function (jqXHR, textStatus) {
-                    delete pendingAjax[gatewayId];
-                    // Silently ignore aborted requests (cleared by clearAllInstances)
-                    if (textStatus === 'abort') {
-                        console.log('[YS Shopline] SDK config request aborted for:', gatewayId);
-                        return;
-                    }
-                    // generation guard 同樣套用在錯誤回呼
-                    if ((sdkGeneration[gatewayId] || 0) !== ajaxGeneration) {
-                        console.log('[YS Shopline] Stale AJAX error discarded for:', gatewayId);
-                        return;
-                    }
-                    sdkInitializing[gatewayId] = false;
-                    $container.data('sdk-initializing', false);
-                    var errorMsg = ys_shopline_params.i18n.connection_error || 'Connection error';
-                    self.showError($container, errorMsg + ': ' + textStatus);
-                }
-            });
+            if (gatewayId) this.requestMount(gatewayId);
         },
 
         /**
          * Render payment SDK
          *
+         * v3.5.0: 由 doMount 呼叫，不再直接由 initSDK 呼叫
+         *
          * @param {string} gatewayId Gateway ID
          * @param {Object} serverConfig Server configuration
-         * @param {number} [ajaxGeneration] v3.4.19: 取自 initSDK 時的 generation，用於 stale guard
          */
-        renderPayment: async function (gatewayId, serverConfig, ajaxGeneration) {
+        renderPayment: async function (gatewayId, serverConfig) {
             var self = this;
             var gatewayConfig = GATEWAY_CONFIG[gatewayId];
             var $container = $('#' + gatewayConfig.containerId);
 
-            // Final guard: if instance already created (race condition), skip
-            if (paymentInstances[gatewayId]) {
-                console.log('[YS Shopline] renderPayment skipped - instance already exists for:', gatewayId);
-                sdkInitializing[gatewayId] = false;
-                $container.data('sdk-initializing', false);
-                return;
-            }
-
-            // v3.4.19: 進入 renderPayment 時再檢查一次 generation（double-defense）
-            if (typeof ajaxGeneration === 'number' && (sdkGeneration[gatewayId] || 0) !== ajaxGeneration) {
-                console.log('[YS Shopline] renderPayment stale on entry, discarding:', gatewayId);
-                sdkInitializing[gatewayId] = false;
-                $container.data('sdk-initializing', false);
-                return;
-            }
-
-            // Check SDK loaded
+            // v3.5.0: doMount 已檢查重複呼叫；renderPayment 只需要最基本 validation
             if (!sdkLoaded && typeof ShoplinePayments === 'undefined') {
-                sdkInitializing[gatewayId] = false;
-                $container.data('sdk-initializing', false);
                 self.showError($container, ys_shopline_params.i18n.sdk_not_loaded || 'Payment SDK not loaded');
                 return;
             }
-
             sdkLoaded = true;
 
-            // Validate config
             if (!serverConfig.clientKey || !serverConfig.merchantId) {
-                sdkInitializing[gatewayId] = false;
-                $container.data('sdk-initializing', false);
                 self.showError($container, ys_shopline_params.i18n.missing_config || 'Missing configuration');
                 return;
             }
 
-            // Capture generation before async work（v3.4.19: 優先用外部傳入的 ajaxGeneration，向後相容）
-            var myGeneration = (typeof ajaxGeneration === 'number') ? ajaxGeneration : (sdkGeneration[gatewayId] || 0);
-
-            // Clear container
+            // 清掉 loading spinner，準備給 SDK mount
             $container.empty();
 
             try {
@@ -543,30 +474,28 @@ jQuery(function ($) {
                     hasBindCard: !!options.paymentInstrument
                 });
 
+                // v3.5.0: mount 前再 verify 這個 gateway 還是 loading 狀態（doMount 控制）
+                // 若使用者切走了，gatewayState 已被改，這裡直接放棄 SDK 初始化
+                if (gatewayState[gatewayId] !== 'loading') {
+                    console.log('[YS Shopline] mount cancelled (state changed) for:', gatewayId);
+                    $container.empty();
+                    return;
+                }
+
                 // Initialize SDK
                 var result = await ShoplinePayments(options);
 
-                // Stale check: if generation changed while awaiting, this init is outdated
-                if ((sdkGeneration[gatewayId] || 0) !== myGeneration) {
-                    console.log('[YS Shopline] Stale SDK result discarded for:', gatewayId,
-                        '(gen', myGeneration, '→', sdkGeneration[gatewayId], ')');
-                    sdkInitializing[gatewayId] = false;
-                    // v3.4.20: mount 已產生 iframe 在 container，stale 時必須清掉才不會疊加
+                // v3.5.0: mount 完成後再次 verify；期間若使用者切走則清掉 iframe 不存 instance
+                if (gatewayState[gatewayId] !== 'loading' || self.getSelectedGateway() !== gatewayId) {
+                    console.log('[YS Shopline] mount result discarded (gateway switched) for:', gatewayId);
                     try { $container.empty(); } catch (e) {}
                     return;
                 }
 
-                console.log('[YS Shopline] SDK Result:', result);
-                console.log('[YS Shopline] SDK Result payment object:', result.payment);
-
                 if (result.error) {
                     console.error('Shopline SDK Error:', result.error);
-                    sdkInitializing[gatewayId] = false;
-                    $container.data('sdk-initializing', false);
-
                     var errorCode = result.error.code;
                     var friendlyMsg = self.getFriendlySDKError(errorCode, gatewayConfig.paymentMethod);
-
                     if (friendlyMsg) {
                         self.showFriendlyNotice($container, friendlyMsg);
                     } else {
@@ -576,11 +505,8 @@ jQuery(function ($) {
                     return;
                 }
 
-                // Store payment instance and clear initializing flag
+                // 成功：存 instance（狀態由 doMount 升為 mounted）
                 paymentInstances[gatewayId] = result.payment;
-                sdkInitializing[gatewayId] = false;
-                $container.data('sdk-initializing', false);
-                $container.data('sdk-initialized', true);
                 console.log('[YS Shopline] Payment instance stored for:', gatewayId);
                 console.log('[YS Shopline] Payment instance has createPayment:', typeof result.payment?.createPayment);
 
@@ -629,9 +555,8 @@ jQuery(function ($) {
 
             } catch (e) {
                 console.error('Shopline SDK Exception:', e);
-                sdkInitializing[gatewayId] = false;
-                $container.data('sdk-initializing', false);
                 self.showError($container, e.message || 'SDK initialization failed');
+                throw e; // 讓 doMount catch 到，改狀態為 idle
             }
         },
 
@@ -1191,28 +1116,26 @@ jQuery(function ($) {
         /**
          * Refresh SDK for specific gateway
          *
+         * v3.5.0: 使用 state machine 重新 mount
+         *
          * @param {string} gatewayId Gateway ID
          */
         refreshGateway: function (gatewayId) {
             var config = GATEWAY_CONFIG[gatewayId];
+            if (!config) return;
 
-            if (paymentInstances[gatewayId]) {
-                delete paymentInstances[gatewayId];
+            // abort pending AJAX
+            if (pendingAjax[gatewayId]) {
+                try { pendingAjax[gatewayId].abort(); } catch (e) {}
+                delete pendingAjax[gatewayId];
             }
-            if (sdkInitializing[gatewayId]) {
-                delete sdkInitializing[gatewayId];
-            }
+            delete paymentInstances[gatewayId];
+            gatewayState[gatewayId] = 'idle';
 
-            // Clear container data flags
-            if (config) {
-                var $container = $('#' + config.containerId);
-                if ($container.length) {
-                    $container.data('sdk-initializing', false);
-                    $container.data('sdk-initialized', false);
-                }
-            }
+            var $container = $('#' + config.containerId);
+            if ($container.length) $container.empty();
 
-            this.initSDK(gatewayId);
+            this.requestMount(gatewayId);
         }
     };
 
@@ -1248,12 +1171,12 @@ jQuery(function ($) {
                 ShoplineCheckout.initSDK(gatewayId);
             }
 
-            // 監聽付款方式變更
+            // 監聽付款方式變更（v3.5.0: unmountOthers + requestMount 取代 clearConflicting+initSDK）
             $form.on('change', 'input[name="payment_method"]', function () {
                 var newGatewayId = $(this).val();
                 if (newGatewayId && GATEWAY_CONFIG[newGatewayId]) {
-                    ShoplineCheckout.clearConflictingInstances(newGatewayId);
-                    ShoplineCheckout.initSDK(newGatewayId);
+                    ShoplineCheckout.unmountOthers(newGatewayId);
+                    ShoplineCheckout.requestMount(newGatewayId);
                 }
             });
 
