@@ -216,6 +216,7 @@ jQuery(function ($) {
 
                 // v3.4.19: 無條件清除 DOM + state（即使 paymentInstances 尚未寫入，
                 //         也可能有 SDK 正在 mount、iframe 已進 DOM 的中間態）
+                // v3.4.20: 不再重置 sdkInitializing，避免並行 mount
                 console.log('[YS Shopline] Clearing conflicting SDK instance:', existingId, '→', targetGatewayId);
                 sdkGeneration[existingId] = (sdkGeneration[existingId] || 0) + 1;
                 if (pendingAjax[existingId]) {
@@ -223,7 +224,6 @@ jQuery(function ($) {
                     delete pendingAjax[existingId];
                 }
                 delete paymentInstances[existingId];
-                sdkInitializing[existingId] = false;
 
                 var $oldContainer = $('#' + existingConfig.containerId);
                 if ($oldContainer.length) {
@@ -273,7 +273,9 @@ jQuery(function ($) {
                     console.log('[YS Shopline] Clearing SDK instance on checkout update:', gatewayId);
                     delete paymentInstances[gatewayId];
                 }
-                sdkInitializing[gatewayId] = false;
+                // v3.4.20: 不再重置 sdkInitializing
+                // 若有 mount 正在進行，讓它自己跑完再由 generation guard 丟棄結果
+                // 否則第二個 initSDK 會看到 initializing=false 而並行 mount → 雙重渲染
 
                 var $container = $('#' + config.containerId);
                 if ($container.length) {
@@ -549,6 +551,8 @@ jQuery(function ($) {
                     console.log('[YS Shopline] Stale SDK result discarded for:', gatewayId,
                         '(gen', myGeneration, '→', sdkGeneration[gatewayId], ')');
                     sdkInitializing[gatewayId] = false;
+                    // v3.4.20: mount 已產生 iframe 在 container，stale 時必須清掉才不會疊加
+                    try { $container.empty(); } catch (e) {}
                     return;
                 }
 

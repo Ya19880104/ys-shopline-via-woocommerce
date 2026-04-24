@@ -66,6 +66,18 @@ https://your-domain.com/wp-json/ys-shopline/v1/webhook
 
 ## 變更紀錄
 
+### 3.4.20 - 2026-04-23
+
+**v3.4.19 續修：lock 要嚴格，clear 時不能重置 sdkInitializing**
+
+- 問題：v3.4.19 generation guard 修了 **stale AJAX response**，但沒修 **並行 mount**
+- 情境：隨機切換 10 次中約 2 次出現 8 iframes（雙重渲染）
+- 根因：`clearAllInstances` / `clearConflictingInstances` 執行時會把 `sdkInitializing[gateway]=false`。若有 SDK mount 正在進行，第二個 `initSDK` 看到 false → 並行進入 mount → 兩個 `await ShoplinePayments()` 同時跑 → iframe 疊加
+- 修正：
+  - `clearAllInstances` / `clearConflictingInstances` **不再重置** `sdkInitializing`
+  - 讓當前 mount 跑完，由 `await ShoplinePayments()` 之後的 generation guard 判斷 stale → return
+  - Stale path 新增 `$container.empty()` 清掉可能已 mount 的 iframe，避免殘留
+
 ### 3.4.19 - 2026-04-23
 
 **修多個付款方式切換後 SDK 重複渲染的 race condition**
