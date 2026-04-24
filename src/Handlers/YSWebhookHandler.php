@@ -277,13 +277,14 @@ final class YSWebhookHandler {
         $order = $this->get_order_by_trade_id( $trade_order_id );
 
         if ( ! $order ) {
-            YSLogger::error( "Webhook: 找不到對應訂單，trade ID: {$trade_order_id}" );
+            // v3.5.2: Codex F7 — 改走 context，讓 YSLogger 集中遮罩生效
+            YSLogger::error( 'Webhook: 找不到對應訂單', array( 'trade_order_id' => $trade_order_id ) );
             return;
         }
 
         // 檢查是否已付款
         if ( $order->is_paid() ) {
-            YSLogger::info( 'Webhook: 訂單已付款，跳過處理: ' . $order->get_id() );
+            YSLogger::info( 'Webhook: 訂單已付款，跳過處理', array( 'order_id' => $order->get_id() ) );
             return;
         }
 
@@ -498,12 +499,14 @@ final class YSWebhookHandler {
         $payment_customer_id   = $data['customerId'] ?? '';
         $card_info             = $pi['instrumentCard'] ?? [];
 
+        // v3.5.2: Codex F5 — is_scalar guard，避免 malformed payload 觸發 Array to string conversion warning
+        $raw_last  = is_array( $card_info ) && isset( $card_info['last'] ) ? $card_info['last'] : '';
+        $raw_brand = is_array( $card_info ) && isset( $card_info['brand'] ) ? $card_info['brand'] : '';
         YSLogger::info( 'BindCard webhook: customer.instrument.binded', array(
             'customer_id'   => $payment_customer_id,
             'instrument_id' => $payment_instrument_id,
-            // v3.5.1: YSLogger 會自動遮罩 customer_id / instrument_id 與 last / brand（如有）
-            'last4'         => is_array( $card_info ) && isset( $card_info['last'] ) ? (string) $card_info['last'] : '',
-            'brand'         => is_array( $card_info ) && isset( $card_info['brand'] ) ? (string) $card_info['brand'] : '',
+            'last4'         => is_scalar( $raw_last ) ? (string) $raw_last : '(non-scalar)',
+            'brand'         => is_scalar( $raw_brand ) ? (string) $raw_brand : '(non-scalar)',
         ) );
 
         if ( ! $payment_instrument_id || ! $payment_customer_id ) {
@@ -611,8 +614,9 @@ final class YSWebhookHandler {
             $subscription->update_meta_data( YSOrderMeta::PAYMENT_INSTRUMENT_ID, $instrument_id );
             $subscription->save();
 
-            YSLogger::info( "Webhook: 更新 subscription #{$subscription->get_id()} 的 instrument ID", [
-                'instrument_id' => $instrument_id,
+            YSLogger::info( 'Webhook: 更新 subscription 的 instrument ID', [
+                'subscription_id' => $subscription->get_id(),
+                'instrument_id'   => $instrument_id,
             ] );
         }
     }

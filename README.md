@@ -66,6 +66,55 @@ https://your-domain.com/wp-json/ys-shopline/v1/webhook
 
 ## 變更紀錄
 
+### 3.5.2 - 2026-04-24
+
+**Codex review 第二輪 8 項 findings 修完**
+
+#### 🔒 F1 runId/domVersion guard（state machine 補強）
+
+雖然 v3.5.0 state machine 測試通過，但 `updated_checkout` 在 `ShoplinePayments()` in-flight 時可能讓舊 async result 被接受為 current instance。
+
+v3.5.2 新增：
+- `domVersion` 計數器：`onUpdatedCheckout` 每次 +1
+- `activeRuns[gatewayId] = { runId, domVersion, el: containerEl }`
+- `isRunValid()`：驗證 runId 還是當前 active、domVersion 沒變、container 還在 document
+
+守衛點：`fetchSdkConfig` 前後、`ShoplinePayments()` 前後、`paymentInstances` 寫入前。
+
+#### 🔒 F2 移除 raw paySession console log
+
+`placeOrder` 裡 `console.log('createPayment result:', result)` / `paySession value:` 會在瀏覽器 devtools / support screenshot 暴露付款 session material。v3.5.2 改只 log keys / length / type，移除所有 raw 值。
+
+#### 🚫 F3 停用 `YSBlocksSupport::init()`
+
+v3.5.1 只移除 compatibility 宣告，但仍呼叫 Blocks init 註冊 `canMakePayment=false` 的空殼。v3.5.2 註解掉 init 呼叫與 use import，類別檔保留供未來啟用。
+
+#### 🚫 F4 Redirect fallback 不建 placeholder token
+
+原先 card normalizer 失敗時用 `visa/0000/當前年` 建 token 避免 fatal，但會在 My Account 留誤導性 saved card。v3.5.2 改為 **skip token creation**，`return` 直接跳出；交易 meta 仍正常寫入不影響付款。
+
+#### 🛡️ F5 / F6 Webhook / AddPaymentMethod is_scalar guard
+
+原先對 `card_info['last']` / `['brand']` 直接 `(string)` cast，若 SHOPLINE 傳 array-valued 欄位會觸發 `Array to string conversion` warning，strict handler 可能升級成 exception。v3.5.2 改用 `is_scalar()` guard，非 scalar 記 `(non-scalar)`。
+
+#### 📝 F7 Logger message 內插 ID 改走 context
+
+`YSLogger::log()` 只遮罩 context array，直接內插進 message 的 ID 會繞過集中遮罩。v3.5.2 修正 Webhook 兩處內插訊息改走 context（`trade_order_id` / `order_id` / `subscription_id`）。
+
+#### 💀 F8 刪除死碼 `handle_pay_redirect` / `render_pay_page`
+
+主 plugin 從 v3.4.7 起在 priority 5 處理 `ys_shopline_pay` query 並 exit，gateway base 的 handle_pay_redirect 已走不到。該死碼包含寫死 `amount: 0`（違反 v3.4.11 10100 規則）+ raw result console log，保留會有未來復活舊 bug 風險。v3.5.2 整段移除（約 130 行）。
+
+#### 🔒 F9 Pay-for-order / AddPaymentMethod / pay() 殘留 raw console log 清理
+
+Review 第二輪再補抓到主流程之外還有殘留：
+- `placeOrder.pay()` 返回 raw payResult（含 SDK 內部 token）
+- Pay-for-order `createPayment result` / WC response / AJAX response 都 log 完整物件
+- AddPaymentMethod SDK result / AJAX response / pay result 全是 raw
+- WC AJAX error 路徑記 `xhr.responseText`
+
+v3.5.2 全部改為 meta-only log（keys / length / hasError / type / status code），不再洩漏物件原文。
+
 ### 3.5.1 - 2026-04-24
 
 **訂單 audit trail + Card normalizer 共用 + Logger 集中遮罩 + 移除 Blocks 宣告**

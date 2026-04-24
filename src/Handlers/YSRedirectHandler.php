@@ -418,17 +418,15 @@ class YSRedirectHandler {
             }
         }
 
-        // 最後兜底：若仍不合法，用 default 值避免 token->save() 拋 exception
+        // v3.5.2: Codex F4 — 不再建立 placeholder token
+        // 若卡片資料取不齊，skip token creation 避免 My Account 出現 Visa/0000 誤導性 saved card
+        // 訂單交易結果仍會由 redirect/webhook 寫入 order meta，不影響付款成功
         if ( ! $normalized ) {
-            YSLogger::warning( 'Redirect handler: card info could not be normalized, falling back to placeholder', array(
+            YSLogger::warning( 'Redirect handler: card info could not be normalized, skipping token creation', array(
                 'payment_instrument_id' => $payment_instrument_id,
+                'payment_customer_id'   => $payment_customer_id,
             ) );
-            $normalized = array(
-                'brand'        => 'visa',
-                'last4'        => '0000',
-                'expiry_month' => '12',
-                'expiry_year'  => gmdate( 'Y' ),
-            );
+            return;
         }
 
         $card_type    = $normalized['brand'];

@@ -134,13 +134,15 @@ class YSAddPaymentMethodHandler {
 			$credit_card        = $response['creditCard'] ?? $response['payment']['creditCard'] ?? $payment_instrument['instrumentCard'] ?? array();
 			$instrument_id      = $payment_instrument['paymentInstrumentId'] ?? $payment_instrument['instrumentId'] ?? '';
 
-			$last4 = is_array( $credit_card ) && isset( $credit_card['last'] ) ? (string) $credit_card['last'] : '';
+			// v3.5.2: Codex F6 — is_scalar guard，避免 malformed payload 觸發 warning
+			$raw_last  = is_array( $credit_card ) && isset( $credit_card['last'] ) ? $credit_card['last'] : '';
+			$raw_brand = is_array( $credit_card ) && isset( $credit_card['brand'] ) ? $credit_card['brand'] : '';
 
 			YSLogger::info( 'BindCard token saved', array(
 				'trade_order_id' => $trade_order_id,
-				'instrument_id'  => '*' . substr( (string) $instrument_id, -6 ),
-				'last4'          => $last4,
-				'brand'          => is_array( $credit_card ) && isset( $credit_card['brand'] ) ? (string) $credit_card['brand'] : '',
+				'instrument_id'  => $instrument_id,
+				'last4'          => is_scalar( $raw_last ) ? (string) $raw_last : '(non-scalar)',
+				'brand'          => is_scalar( $raw_brand ) ? (string) $raw_brand : '(non-scalar)',
 			) );
 
 			// 統一使用 sync_tokens_from_api 建 WC Token

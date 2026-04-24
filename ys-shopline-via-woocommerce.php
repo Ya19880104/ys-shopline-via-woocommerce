@@ -3,7 +3,7 @@
  * Plugin Name: YS Shopline via WooCommerce
  * Plugin URI: https://yangsheep.com.tw
  * Description: Support Shopline Payments for WooCommerce, including HPOS and Subscriptions. Supports Credit Card, ATM, JKOPay, Apple Pay, LINE Pay, and Chailease BNPL.
- * Version:           3.5.1
+ * Version:           3.5.2
  * Author: YangSheep
  * Author URI: https://yangsheep.com.tw
  * Text Domain: ys-shopline-via-woocommerce
@@ -17,7 +17,7 @@
 defined( 'ABSPATH' ) || exit;
 
 // Define plugin constants
-define( 'YS_SHOPLINE_VERSION', '3.5.1' );
+define( 'YS_SHOPLINE_VERSION', '3.5.2' );
 define( 'YS_SHOPLINE_PLUGIN_FILE', __FILE__ );
 define( 'YS_SHOPLINE_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 define( 'YS_SHOPLINE_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
@@ -66,7 +66,8 @@ use YangSheep\ShoplinePayment\Handlers\YSRedirectHandler;
 use YangSheep\ShoplinePayment\Handlers\YSAddPaymentMethodHandler;
 use YangSheep\ShoplinePayment\Handlers\YSWebhookHandler;
 use YangSheep\ShoplinePayment\Handlers\YSStatusManager;
-use YangSheep\ShoplinePayment\Blocks\YSBlocksSupport;
+// v3.5.2: YSBlocksSupport 已停用（見 init()），保留類別但不 use/init
+// use YangSheep\ShoplinePayment\Blocks\YSBlocksSupport;
 
 /**
  * Main plugin class.
@@ -215,8 +216,10 @@ final class YSShoplinePayment {
         // Initialize status manager
         YSStatusManager::init();
 
-        // Initialize WooCommerce Blocks support
-        YSBlocksSupport::init();
+        // v3.5.2: Blocks 支援整體停用（Codex F3）
+        // 既然 canMakePayment=false，在 Blocks registry 註冊只會造成 UI 空殼。
+        // 類別保留但不初始化，未來完整支援時可再啟用。
+        // YSBlocksSupport::init();
 
         // Register AJAX handlers
         $this->register_ajax_handlers();

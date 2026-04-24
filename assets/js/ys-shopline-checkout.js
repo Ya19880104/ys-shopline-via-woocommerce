@@ -80,6 +80,19 @@ jQuery(function ($) {
     var sdkLoaded = false;           // 全域 SDK JS 載入 flag
 
     /**
+     * v3.5.2: runId + domVersion guard（Codex review F1）
+     *
+     * - domVersion：每次 WC updated_checkout 會 +1（WC 替換 #payment DOM 的訊號）
+     * - activeRunId：每次 mount 會產生 unique id；若 run 中 state 被 reset 就能辨識出過期結果
+     * - containerRef：mount 開始時記的 container DOM 指標，結束前比對確認沒被 DOM 替換
+     *
+     * 守衛放在三處：fetchSdkConfig 前後、ShoplinePayments() 前後、寫 paymentInstances 前。
+     */
+    var domVersion = 0;
+    var runCounter = 0;
+    var activeRuns = {};             // { gatewayId: { runId, domVersion, $container DOM } }
+
+    /**
      * Main Shopline Checkout Handler
      */
     var ShoplineCheckout = {
@@ -181,6 +194,15 @@ jQuery(function ($) {
          * 2. 重新排程當前 selected gateway 的 mount（debounce）
          */
         onUpdatedCheckout: function () {
+            // v3.5.2: WC 可能已替換 DOM → 所有既有 runs 立刻失效
+            domVersion++;
+            activeRuns = {};
+            // v3.5.2 fix: 既然舊 runs 都作廢，對應 loading 狀態也要 reset
+            // 否則後續 requestMount 會被 "state==loading 不重複" 擋住，導致 SDK 永遠 mount 不上
+            $.each(gatewayState, function (gw, st) {
+                if (st === 'loading') gatewayState[gw] = 'idle';
+            });
+
             this.bindCheckoutEvents();
 
             // WC 可能重建表單 → 清 paySession hidden input
@@ -238,12 +260,16 @@ jQuery(function ($) {
         },
 
         /**
-         * v3.5.0: 實際 mount SDK
+         * v3.5.0: 實際 mount SDK；v3.5.2 加入 runId/domVersion/containerEl guard
          *
          * 狀態機：
          *   idle    → 從 AJAX 取 config → mount → mounted
          *   loading → 已在進行中，不重複
          *   mounted → 若 DOM 還有 iframe 則 skip；否則降為 idle 重 mount
+         *
+         * v3.5.2: 每個 run 有 runId + domVersion + containerEl snapshot。
+         *         任何 async 節點後都驗證 run 是否仍然有效（containerEl 還在 document 裡、
+         *         domVersion 沒變、activeRuns[gw].runId 還是我）。
          */
         doMount: async function (gatewayId) {
             if (!GATEWAY_CONFIG[gatewayId]) return;
@@ -263,6 +289,21 @@ jQuery(function ($) {
             // 已在 loading（AJAX 或 SDK mount 進行中）→ 不重複啟動
             if (gatewayState[gatewayId] === 'loading') return;
 
+            // v3.5.2: 建立本 run 的身分標記
+            var runId = ++runCounter;
+            var runDomVersion = domVersion;
+            var containerEl = $container.get(0);
+            activeRuns[gatewayId] = { runId: runId, domVersion: runDomVersion, el: containerEl };
+
+            // 判斷 run 是否還有效（container 還在 document、domVersion 沒變、還是當前 active run）
+            var isRunValid = function () {
+                var a = activeRuns[gatewayId];
+                if (!a || a.runId !== runId) return false;
+                if (a.domVersion !== domVersion) return false;
+                if (!containerEl || !document.body.contains(containerEl)) return false;
+                return true;
+            };
+
             gatewayState[gatewayId] = 'loading';
             $container.html('<div class="ys-shopline-loading" style="text-align:center;padding:20px;"><span class="spinner is-active" style="float:none;"></span></div>');
 
@@ -271,18 +312,20 @@ jQuery(function ($) {
             try {
                 serverConfig = await this.fetchSdkConfig(gatewayId);
             } catch (e) {
-                if (e && e.aborted) {
-                    // 被使用者切掉，正常情況不提示
-                    return;
+                if (e && e.aborted) return;
+                if (isRunValid()) {
+                    gatewayState[gatewayId] = 'idle';
+                    self.showError($container, (e && e.message) || 'Configuration error');
                 }
-                gatewayState[gatewayId] = 'idle';
-                self.showError($container, (e && e.message) || 'Configuration error');
                 return;
             }
 
-            // 期間使用者可能切走 → 放棄 mount
+            // v3.5.2: fetchSdkConfig 回來後驗證 run 仍有效
+            if (!isRunValid()) {
+                console.log('[YS Shopline] run invalidated after fetchSdkConfig:', gatewayId, 'runId=' + runId);
+                return;
+            }
             if (gatewayState[gatewayId] !== 'loading') return;
-            // 使用者 select 的 gateway 已改 → 放棄 mount
             if (this.getSelectedGateway() !== gatewayId) {
                 gatewayState[gatewayId] = 'idle';
                 $container.empty();
@@ -290,18 +333,20 @@ jQuery(function ($) {
             }
 
             try {
-                await this.renderPayment(gatewayId, serverConfig);
+                await this.renderPayment(gatewayId, serverConfig, { runId: runId, isRunValid: isRunValid });
                 // renderPayment 成功後會 set paymentInstances[gatewayId]
-                if (paymentInstances[gatewayId]) {
+                if (paymentInstances[gatewayId] && isRunValid()) {
                     gatewayState[gatewayId] = 'mounted';
                 } else {
-                    // renderPayment 內部 error 但沒 throw（已 showError）
-                    gatewayState[gatewayId] = 'idle';
+                    // renderPayment 內部 error 但沒 throw（已 showError），或 run 被作廢
+                    if (isRunValid()) gatewayState[gatewayId] = 'idle';
                 }
             } catch (e) {
                 console.error('[YS Shopline] doMount error:', e);
-                gatewayState[gatewayId] = 'idle';
-                self.showError($container, (e && e.message) || 'SDK initialization failed');
+                if (isRunValid()) {
+                    gatewayState[gatewayId] = 'idle';
+                    self.showError($container, (e && e.message) || 'SDK initialization failed');
+                }
             }
         },
 
@@ -373,11 +418,13 @@ jQuery(function ($) {
          * Render payment SDK
          *
          * v3.5.0: 由 doMount 呼叫，不再直接由 initSDK 呼叫
+         * v3.5.2: 增加 runGuard 參數（doMount 傳入 runId / isRunValid）
          *
          * @param {string} gatewayId Gateway ID
          * @param {Object} serverConfig Server configuration
+         * @param {Object} [runGuard] { runId, isRunValid } — v3.5.2 跨 async 驗證
          */
-        renderPayment: async function (gatewayId, serverConfig) {
+        renderPayment: async function (gatewayId, serverConfig, runGuard) {
             var self = this;
             var gatewayConfig = GATEWAY_CONFIG[gatewayId];
             var $container = $('#' + gatewayConfig.containerId);
@@ -425,9 +472,8 @@ jQuery(function ($) {
                 // 只有在有 customerToken 時才啟用儲存卡片功能
                 // 後端已經根據登入狀態決定是否傳 paymentInstrument
                 if (serverConfig.paymentInstrument) {
-                    // 使用後端傳來的配置
+                    // 使用後端傳來的配置（v3.5.2: 不 log raw object，避免暴露 protocol 細節）
                     options.paymentInstrument = serverConfig.paymentInstrument;
-                    console.log('[YS Shopline] Using server paymentInstrument config:', serverConfig.paymentInstrument);
                 } else if (gatewayConfig.supportsBindCard && serverConfig.customerToken) {
                     // 如果後端沒傳但有 customerToken，使用預設配置
                     var forceSave = gatewayConfig.forceSaveCard || serverConfig.forceSaveCard || false;
@@ -474,26 +520,35 @@ jQuery(function ($) {
                     hasBindCard: !!options.paymentInstrument
                 });
 
-                // v3.5.0: mount 前再 verify 這個 gateway 還是 loading 狀態（doMount 控制）
-                // 若使用者切走了，gatewayState 已被改，這裡直接放棄 SDK 初始化
+                // v3.5.0/5.2: mount 前再 verify 這個 gateway 還是 loading 狀態
                 if (gatewayState[gatewayId] !== 'loading') {
                     console.log('[YS Shopline] mount cancelled (state changed) for:', gatewayId);
                     $container.empty();
+                    return;
+                }
+                if (runGuard && typeof runGuard.isRunValid === 'function' && !runGuard.isRunValid()) {
+                    console.log('[YS Shopline] mount cancelled (run invalidated) for:', gatewayId);
                     return;
                 }
 
                 // Initialize SDK
                 var result = await ShoplinePayments(options);
 
-                // v3.5.0: mount 完成後再次 verify；期間若使用者切走則清掉 iframe 不存 instance
+                // v3.5.0/5.2: mount 完成後再次 verify + runGuard
                 if (gatewayState[gatewayId] !== 'loading' || self.getSelectedGateway() !== gatewayId) {
                     console.log('[YS Shopline] mount result discarded (gateway switched) for:', gatewayId);
                     try { $container.empty(); } catch (e) {}
                     return;
                 }
+                if (runGuard && typeof runGuard.isRunValid === 'function' && !runGuard.isRunValid()) {
+                    console.log('[YS Shopline] mount result discarded (run invalidated, DOM may have changed) for:', gatewayId);
+                    try { $container.empty(); } catch (e) {}
+                    return;
+                }
 
                 if (result.error) {
-                    console.error('Shopline SDK Error:', result.error);
+                    // v3.5.2: 不 log raw result object（含 SDK 內部資訊可能洩漏 paySession 片段）
+                    console.error('[YS Shopline] SDK error', { code: result.error.code, message: result.error.message });
                     var errorCode = result.error.code;
                     var friendlyMsg = self.getFriendlySDKError(errorCode, gatewayConfig.paymentMethod);
                     if (friendlyMsg) {
@@ -508,7 +563,6 @@ jQuery(function ($) {
                 // 成功：存 instance（狀態由 doMount 升為 mounted）
                 paymentInstances[gatewayId] = result.payment;
                 console.log('[YS Shopline] Payment instance stored for:', gatewayId);
-                console.log('[YS Shopline] Payment instance has createPayment:', typeof result.payment?.createPayment);
 
                 // Remove loading state - SDK should have rendered its content
                 $container.find('.ys-shopline-loading').remove();
@@ -648,15 +702,16 @@ jQuery(function ($) {
             console.log('Calling createPayment...');
 
             // Create payment via SDK
+            // v3.5.2: 移除 raw paySession / result console log（Codex review F2）
+            // paySession 是付款 session material，在 production devtools / support screenshot
+            // 暴露會造成 replay / information leak 風險。只記 meta（keys/length/hash）。
             paymentInstance.createPayment().then(function (result) {
-                console.log('createPayment result:', result);
-                console.log('createPayment result keys:', result ? Object.keys(result) : 'null');
-                console.log('createPayment paySession:', result ? result.paySession : 'undefined');
+                var resultKeys = result ? Object.keys(result) : [];
+                console.log('[YS Shopline] createPayment returned, keys:', resultKeys);
 
                 if (result.error) {
-                    // Payment creation failed
                     var msg = result.error.message || ys_shopline_params.i18n.payment_failed || 'Payment failed';
-                    console.error('createPayment error:', result.error);
+                    console.error('[YS Shopline] createPayment error:', { code: result.error.code, message: result.error.message });
                     self._isSubmitting = false;
                     $form.removeClass('processing').unblock();
                     self.showFormError(msg);
@@ -665,7 +720,7 @@ jQuery(function ($) {
 
                 // Check if paySession exists
                 if (!result.paySession) {
-                    console.error('createPayment: No paySession returned', result);
+                    console.error('[YS Shopline] createPayment: No paySession in result, keys=', resultKeys);
                     self._isSubmitting = false;
                     $form.removeClass('processing').unblock();
                     self.showFormError('付款資訊建立失敗，請重新輸入卡片資訊。');
@@ -678,8 +733,8 @@ jQuery(function ($) {
                 if (typeof paySessionValue === 'object') {
                     paySessionValue = JSON.stringify(paySessionValue);
                 }
-                console.log('[YS Shopline] paySession type:', typeof result.paySession);
-                console.log('[YS Shopline] paySession value:', paySessionValue);
+                // v3.5.2: 只 log type + length（不記 value）
+                console.log('[YS Shopline] paySession ready, type=' + (typeof result.paySession) + ', length=' + (paySessionValue ? paySessionValue.length : 0));
 
                 $form.find('input[name="ys_shopline_pay_session"]').remove();
                 $form.append(
@@ -704,9 +759,8 @@ jQuery(function ($) {
 
                 // Add selected payment instrument if applicable
                 // 驗證 SDK 是否真的帶 paymentInstrumentId（用戶選已綁卡時）
-                console.log('[YS Shopline] createPayment result keys:', Object.keys(result || {}));
                 if (result.paymentInstrumentId) {
-                    console.log('[YS Shopline] SDK returned paymentInstrumentId (using saved card):', String(result.paymentInstrumentId).slice(-6));
+                    console.log('[YS Shopline] SDK returned paymentInstrumentId (saved card), last6=' + String(result.paymentInstrumentId).slice(-6));
                     $form.find('input[name="ys_shopline_payment_instrument_id"]').remove();
                     $form.append(
                         $('<input>').attr({
@@ -732,7 +786,6 @@ jQuery(function ($) {
                 // 所以我們只需要告訴後端「SDK 有啟用綁卡功能」
                 var bindCardEnabled = self.isBindCardEnabled(gatewayId);
 
-                console.log('[YS Shopline] createPayment result:', result);
                 console.log('[YS Shopline] bindCardEnabled:', bindCardEnabled);
 
                 $form.find('input[name="ys_shopline_bind_card_enabled"]').remove();
@@ -794,7 +847,8 @@ jQuery(function ($) {
                 data: formData,
                 dataType: 'json',
                 success: function (response) {
-                    console.log('[YS Shopline] WooCommerce response:', response);
+                    // v3.5.2: 不 log raw response（含 nextAction 內的 customerToken/payToken）
+                    console.log('[YS Shopline] WooCommerce response result:', response ? response.result : 'none');
 
                     // 移除現有訊息
                     $('.woocommerce-NoticeGroup-checkout, .woocommerce-error, .woocommerce-message').remove();
@@ -802,11 +856,11 @@ jQuery(function ($) {
                     if (response.result === 'success') {
                         // 檢查是否有 nextAction 需要處理（3DS/Confirm）
                         if (response.nextAction) {
-                            console.log('[YS Shopline] Got nextAction, processing with SDK...');
+                            console.log('[YS Shopline] Got nextAction (type=' + (response.nextAction.type || 'unknown') + '), processing with SDK...');
                             self.processNextAction(gatewayId, response.nextAction, response.returnUrl);
                         } else if (response.redirect) {
                             // 直接跳轉（無需額外驗證）
-                            console.log('[YS Shopline] Redirecting to:', response.redirect);
+                            console.log('[YS Shopline] Redirecting (has redirect URL)');
                             window.location.href = response.redirect;
                         }
                     } else if (response.result === 'failure') {
@@ -826,7 +880,8 @@ jQuery(function ($) {
                         // 觸發 WC 事件
                         $(document.body).trigger('checkout_error', [response.messages]);
                     } else {
-                        console.warn('[YS Shopline] Unexpected response:', response);
+                        // v3.5.2: 不 log raw response，改記 keys
+                        console.warn('[YS Shopline] Unexpected response, keys:', response ? Object.keys(response) : []);
                         self._isSubmitting = false;
                         $form.removeClass('processing').unblock();
                         self.showFormError('發生未預期的錯誤，請重試。');
@@ -834,7 +889,7 @@ jQuery(function ($) {
                 },
                 error: function (xhr, status, error) {
                     console.error('[YS Shopline] AJAX error:', status, error);
-                    console.error('[YS Shopline] Response:', xhr.responseText);
+                    // v3.5.2: 不記 raw responseText（可能含 SDK 錯誤訊息）
                     self._isSubmitting = false;
                     $form.removeClass('processing').unblock();
                     self.showFormError('網路錯誤，請檢查連線後重試。');
@@ -881,7 +936,8 @@ jQuery(function ($) {
 
                 var payResult = await paymentInstance.pay(nextAction);
 
-                console.log('[YS Shopline] pay() returned:', payResult);
+                // v3.5.2: 不 log raw payResult（含 SDK 內部 nextAction / token 資訊）
+                console.log('[YS Shopline] pay() returned, hasError=' + !!(payResult && payResult.error));
 
                 // 根據 SDK 文件：
                 // - 成功時 payResult 為 undefined，SDK 自動跳轉到 returnUrl
@@ -891,7 +947,7 @@ jQuery(function ($) {
                 // 如果執行到這裡且沒有 error，表示 SDK 沒有自動跳轉
                 // 這可能是 SDK 版本或設定問題，作為備援手動跳轉
                 if (payResult && payResult.error) {
-                    console.error('[YS Shopline] pay() error:', payResult.error);
+                    console.error('[YS Shopline] pay() error:', { code: payResult.error.code, message: payResult.error.message });
                     $form.removeClass('processing').unblock();
                     self.showFormError('付款失敗：' + (payResult.error.message || '未知錯誤'));
                 } else {
@@ -1244,9 +1300,11 @@ jQuery(function ($) {
 
             // 呼叫 SDK 取得 paySession
             paymentInstance.createPayment().then(function (result) {
-                console.log('[YS Shopline] Pay-for-order createPayment result:', result);
+                // v3.5.2: 不 log raw result（含 paySession 原文）
+                console.log('[YS Shopline] Pay-for-order createPayment returned, keys:', result ? Object.keys(result) : []);
 
                 if (result.error) {
+                    console.error('[YS Shopline] Pay-for-order createPayment error:', { code: result.error.code, message: result.error.message });
                     self._isSubmitting = false;
                     $form.removeClass('processing').unblock();
                     alert(result.error.message || 'Payment failed');
@@ -1294,12 +1352,13 @@ jQuery(function ($) {
                     data: ajaxData,
                     dataType: 'json',
                     success: function (response) {
-                        console.log('[YS Shopline] Pay-for-order response:', response);
+                        // v3.5.2: 不 log raw response（可能含 nextAction 中的 customerToken/payToken）
+                        console.log('[YS Shopline] Pay-for-order response result:', response ? response.result : 'none');
 
                         if (response.result === 'success') {
                             if (response.nextAction) {
                                 // 需要 SDK 處理 nextAction（3DS/Confirm）
-                                console.log('[YS Shopline] Pay-for-order: processing nextAction');
+                                console.log('[YS Shopline] Pay-for-order: processing nextAction (type=' + (response.nextAction.type || 'unknown') + ')');
                                 ShoplineCheckout.processNextAction(gatewayId, response.nextAction, response.returnUrl);
                             } else if (response.redirect) {
                                 window.location.href = response.redirect;
@@ -1496,10 +1555,11 @@ jQuery(function ($) {
                 // 初始化 SDK
                 var result = await ShoplinePayments(options);
 
-                console.log('[YS Shopline] Add payment method SDK result:', result);
+                // v3.5.2: 不 log raw SDK result（可能含 SDK 內部資訊）
+                console.log('[YS Shopline] Add payment method SDK returned, hasError=' + !!(result && result.error) + ', hasPayment=' + !!(result && result.payment));
 
                 if (result.error) {
-                    console.error('[YS Shopline] Add payment method SDK error:', result.error);
+                    console.error('[YS Shopline] Add payment method SDK error:', { code: result.error.code, message: result.error.message });
                     $container.html('<div class="woocommerce-error">' + (result.error.message || 'SDK 錯誤') + '</div>');
                     return;
                 }
@@ -1613,7 +1673,8 @@ jQuery(function ($) {
                         pay_session: paySessionValue
                     }
                 }).done(function (response) {
-                    console.log('[YS Shopline] AddMethod AJAX response:', response);
+                    // v3.5.2: 不 log raw response（含 nextAction 內的 customerToken/payToken）
+                    console.log('[YS Shopline] AddMethod AJAX response success:', response ? !!response.success : false);
                     if (!response || !response.success) {
                         $form.removeClass('processing').unblock();
                         var msg = (response && response.data && response.data.message) || '新增付款方式失敗';
@@ -1632,21 +1693,23 @@ jQuery(function ($) {
                     }
 
                     // 有 nextAction：用原 SDK 實例 pay()，SDK 會處理 3DS + 自動跳 returnUrl
-                    console.log('[YS Shopline] AddMethod: calling paymentInstance.pay(nextAction)...');
+                    console.log('[YS Shopline] AddMethod: calling paymentInstance.pay(nextAction, type=' + (nextAction.type || 'unknown') + ')...');
                     self.paymentInstance.pay(nextAction).then(function (payResult) {
-                        console.log('[YS Shopline] AddMethod pay result:', payResult);
+                        // v3.5.2: 不 log raw payResult（可能含 SDK 內部 token 資訊）
+                        console.log('[YS Shopline] AddMethod pay returned, hasError=' + !!(payResult && payResult.error));
                         // 成功時 payResult 為 undefined（SDK 已跳轉）
                         if (payResult && payResult.error) {
                             $form.removeClass('processing').unblock();
                             self.showError($form, payResult.error.message || '3DS 驗證失敗');
                         }
                     }).catch(function (err) {
-                        console.error('[YS Shopline] AddMethod pay error:', err);
+                        console.error('[YS Shopline] AddMethod pay error:', { message: err && err.message });
                         $form.removeClass('processing').unblock();
                         self.showError($form, err.message || '3DS 驗證錯誤');
                     });
                 }).fail(function (xhr) {
-                    console.error('[YS Shopline] AddMethod AJAX failed:', xhr);
+                    // v3.5.2: 不 log raw xhr 物件（responseText 可能含 SDK 錯誤內容）
+                    console.error('[YS Shopline] AddMethod AJAX failed, status=' + (xhr ? xhr.status : 'unknown'));
                     $form.removeClass('processing').unblock();
                     self.showError($form, '伺服器錯誤，請稍後再試。');
                 });
