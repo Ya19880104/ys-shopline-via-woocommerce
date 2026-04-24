@@ -214,23 +214,22 @@ jQuery(function ($) {
                 if (existingId === targetGatewayId) return; // 跳過自己
                 if (existingConfig.paymentMethod !== targetMethod) return; // 不同類型不衝突
 
-                // 有舊實例或進行中的請求 → 清除
-                if (paymentInstances[existingId] || pendingAjax[existingId]) {
-                    console.log('[YS Shopline] Clearing conflicting SDK instance:', existingId, '→', targetGatewayId);
-                    sdkGeneration[existingId] = (sdkGeneration[existingId] || 0) + 1;
-                    if (pendingAjax[existingId]) {
-                        pendingAjax[existingId].abort();
-                        delete pendingAjax[existingId];
-                    }
-                    delete paymentInstances[existingId];
-                    sdkInitializing[existingId] = false;
+                // v3.4.19: 無條件清除 DOM + state（即使 paymentInstances 尚未寫入，
+                //         也可能有 SDK 正在 mount、iframe 已進 DOM 的中間態）
+                console.log('[YS Shopline] Clearing conflicting SDK instance:', existingId, '→', targetGatewayId);
+                sdkGeneration[existingId] = (sdkGeneration[existingId] || 0) + 1;
+                if (pendingAjax[existingId]) {
+                    pendingAjax[existingId].abort();
+                    delete pendingAjax[existingId];
+                }
+                delete paymentInstances[existingId];
+                sdkInitializing[existingId] = false;
 
-                    var $oldContainer = $('#' + existingConfig.containerId);
-                    if ($oldContainer.length) {
-                        $oldContainer.empty();
-                        $oldContainer.removeData('sdk-initialized');
-                        $oldContainer.removeData('sdk-initializing');
-                    }
+                var $oldContainer = $('#' + existingConfig.containerId);
+                if ($oldContainer.length) {
+                    $oldContainer.empty();
+                    $oldContainer.removeData('sdk-initialized');
+                    $oldContainer.removeData('sdk-initializing');
                 }
             });
         },
@@ -278,6 +277,8 @@ jQuery(function ($) {
 
                 var $container = $('#' + config.containerId);
                 if ($container.length) {
+                    // v3.4.19: 主動 empty() 確保 SDK iframe 不遺留，避免下次 init 疊加渲染
+                    $container.empty();
                     $container.removeData('sdk-initialized');
                     $container.removeData('sdk-initializing');
                 }
@@ -332,6 +333,11 @@ jQuery(function ($) {
             // Mark container as initializing
             $container.data('sdk-initializing', true);
 
+            // v3.4.19: 捕捉 AJAX 發起時的 generation，用於 stale callback guard
+            // 若在 AJAX 進行中發生 clearAllInstances / clearConflictingInstances
+            // （會把 sdkGeneration 往上 +1），response 回來時就能識別是過期回覆並丟棄
+            var ajaxGeneration = sdkGeneration[gatewayId] || 0;
+
             // Show loading state
             $container.html('<div class="ys-shopline-loading" style="text-align: center; padding: 20px;"><span class="spinner is-active" style="float: none;"></span></div>');
 
@@ -367,8 +373,16 @@ jQuery(function ($) {
                 data: ajaxData,
                 success: function (response) {
                     delete pendingAjax[gatewayId];
+
+                    // v3.4.19: generation guard —— 拒絕 stale response（切換 gateway / updated_checkout 後）
+                    if ((sdkGeneration[gatewayId] || 0) !== ajaxGeneration) {
+                        console.log('[YS Shopline] Stale AJAX response discarded for:', gatewayId,
+                            '(gen', ajaxGeneration, '→', sdkGeneration[gatewayId], ')');
+                        return;
+                    }
+
                     if (response.success) {
-                        self.renderPayment(gatewayId, response.data);
+                        self.renderPayment(gatewayId, response.data, ajaxGeneration);
                     } else {
                         sdkInitializing[gatewayId] = false;
                         $container.data('sdk-initializing', false);
@@ -385,6 +399,11 @@ jQuery(function ($) {
                         console.log('[YS Shopline] SDK config request aborted for:', gatewayId);
                         return;
                     }
+                    // generation guard 同樣套用在錯誤回呼
+                    if ((sdkGeneration[gatewayId] || 0) !== ajaxGeneration) {
+                        console.log('[YS Shopline] Stale AJAX error discarded for:', gatewayId);
+                        return;
+                    }
                     sdkInitializing[gatewayId] = false;
                     $container.data('sdk-initializing', false);
                     var errorMsg = ys_shopline_params.i18n.connection_error || 'Connection error';
@@ -398,8 +417,9 @@ jQuery(function ($) {
          *
          * @param {string} gatewayId Gateway ID
          * @param {Object} serverConfig Server configuration
+         * @param {number} [ajaxGeneration] v3.4.19: 取自 initSDK 時的 generation，用於 stale guard
          */
-        renderPayment: async function (gatewayId, serverConfig) {
+        renderPayment: async function (gatewayId, serverConfig, ajaxGeneration) {
             var self = this;
             var gatewayConfig = GATEWAY_CONFIG[gatewayId];
             var $container = $('#' + gatewayConfig.containerId);
@@ -407,6 +427,14 @@ jQuery(function ($) {
             // Final guard: if instance already created (race condition), skip
             if (paymentInstances[gatewayId]) {
                 console.log('[YS Shopline] renderPayment skipped - instance already exists for:', gatewayId);
+                sdkInitializing[gatewayId] = false;
+                $container.data('sdk-initializing', false);
+                return;
+            }
+
+            // v3.4.19: 進入 renderPayment 時再檢查一次 generation（double-defense）
+            if (typeof ajaxGeneration === 'number' && (sdkGeneration[gatewayId] || 0) !== ajaxGeneration) {
+                console.log('[YS Shopline] renderPayment stale on entry, discarding:', gatewayId);
                 sdkInitializing[gatewayId] = false;
                 $container.data('sdk-initializing', false);
                 return;
@@ -430,8 +458,8 @@ jQuery(function ($) {
                 return;
             }
 
-            // Capture generation before async work
-            var myGeneration = sdkGeneration[gatewayId] || 0;
+            // Capture generation before async work（v3.4.19: 優先用外部傳入的 ajaxGeneration，向後相容）
+            var myGeneration = (typeof ajaxGeneration === 'number') ? ajaxGeneration : (sdkGeneration[gatewayId] || 0);
 
             // Clear container
             $container.empty();

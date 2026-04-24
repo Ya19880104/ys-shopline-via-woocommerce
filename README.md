@@ -66,6 +66,20 @@ https://your-domain.com/wp-json/ys-shopline/v1/webhook
 
 ## 變更紀錄
 
+### 3.4.19 - 2026-04-23
+
+**修多個付款方式切換後 SDK 重複渲染的 race condition**
+
+- 問題：切換多個付款方式（或 cart update 時）偶發「同一個 gateway 裡出現兩組卡號/姓名/有效期/安全碼表單」
+- 根因：
+  1. initSDK AJAX response 抵達時，若期間發生 `clearAllInstances` / `clearConflictingInstances`（generation 被 bump），舊 response 仍 fall through 進入 renderPayment（原 stale guard 只在 `await ShoplinePayments` 之後檢查）
+  2. clearAllInstances 未呼叫 `$container.empty()` → SDK iframe 遺留 DOM
+- 修正：
+  - AJAX success/error callback 先比對 `ajaxGeneration` (initSDK 時捕捉)，不符合直接丟棄
+  - renderPayment 進入時再檢查一次 (double-defense)
+  - `clearAllInstances` 主動 `$container.empty()` 清 SDK iframe
+  - `clearConflictingInstances` 改為無條件清 DOM + state（不再要求 `paymentInstances` 已寫入）
+
 ### 3.4.18 - 2026-04-23
 
 **v3.4.17 續修：bind-only 情境必須 `mustAccept=true` 才能真正鎖住 checkbox**
