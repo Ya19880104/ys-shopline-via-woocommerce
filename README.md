@@ -66,6 +66,48 @@ https://your-domain.com/wp-json/ys-shopline/v1/webhook
 
 ## 變更紀錄
 
+### 3.5.0 - 2026-04-24
+
+**結帳 JS 重寫：單一 state machine + 80ms debounce**
+
+#### 背景
+
+v3.4.19/20 為了修多 gateway 切換 race 累積了多層守衛（`sdkInitializing` / `sdkGeneration` / `ajaxGeneration` / `$container.data` 雙層 flag），守衛互相干擾導致 SDK mount 中途被 cancel → `ERR_CONNECTION_CLOSED` + SDK 卡在 loading 不顯示。
+
+#### 重寫範圍
+
+**只動** `assets/js/ys-shopline-checkout.js` 裡 `ShoplineCheckout` 的 state 管理段。完全不動：
+- Token 儲存 / 同步邏輯（YSCustomer）
+- Gateway `process_payment` / 各 gateway PHP
+- Webhook / RedirectHandler / AddPaymentMethodHandler PHP
+- Admin 設定頁
+- `placeOrder` / Block 支援 / `ajax_add_payment_method` JS
+
+#### 新設計
+
+| 元素 | 說明 |
+|------|------|
+| `gatewayState[gw]` | 單一狀態：`idle` / `loading` / `mounted` |
+| `requestMount(gw)` | 80ms debounce，吸收 WC 連發 events |
+| `doMount(gw)` | 狀態機 + iframe-check（DOM 已活就不重 mount）|
+| `unmountOthers(gw)` | 切換時清其他 gateway container |
+| `fetchSdkConfig(gw)` | AJAX wrapped in Promise |
+
+#### 移除內容
+
+- `sdkInitializing` / `$container.data('sdk-initializing' \| 'sdk-initialized')`
+- `sdkGeneration` / `ajaxGeneration` / `myGeneration` 計數器
+- `clearAllInstances` / `clearConflictingInstances` 繁複函式
+- `activeGateway` 追蹤變數（改以 `getSelectedGateway()` 即時查詢）
+
+程式行數 1767 → 1690（-77 行）。
+
+#### 相容性
+
+- `initSDK()` 保留為 alias → `requestMount()`（供 PayForOrderHandler 等呼叫）
+- `refreshGateway()` 改用 state machine
+- `paymentInstances` 保留為 SDK instance 存儲
+
 ### 3.4.20 - 2026-04-23
 
 **v3.4.19 續修：lock 要嚴格，clear 時不能重置 sdkInitializing**
