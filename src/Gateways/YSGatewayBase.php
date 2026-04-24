@@ -1524,6 +1524,9 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
             'result'     => 'success',
             'nextAction' => $response['nextAction'],
             'returnUrl'  => $this->get_return_url( $order ),
+            // v3.5.5: 3DS/Confirm 失敗時前端導向 pay-for-order 頁
+            // （WC 訂單已建立 + tradeOrderId 已寫入 meta，不能讓使用者停在結帳頁誤以為沒下單）
+            'failureUrl' => $order->get_checkout_payment_url(),
             'orderId'    => $order->get_id(),
         );
     }

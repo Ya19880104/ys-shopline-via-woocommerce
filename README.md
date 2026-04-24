@@ -4,7 +4,7 @@
 
 ## 版本資訊
 
-- **目前版本**：3.5.4
+- **目前版本**：3.5.5
 - **PHP 需求**：>= 8.0
 - **WordPress 需求**：>= 6.0
 - **WooCommerce 需求**：7.0 - 9.0
@@ -65,6 +65,50 @@ https://your-domain.com/wp-json/ys-shopline/v1/webhook
 ---
 
 ## 變更紀錄
+
+### 3.5.5 - 2026-04-25
+
+**3DS / Confirm 失敗時自動導向 pay-for-order，不再停在結帳頁**
+
+#### 問題
+使用者真實情境（沙盒 error 4463 / 4454 / issuer decline 等）：
+1. 結帳頁填卡送出 → 後端 `process_payment` 呼叫 SHOPLINE API → API 回 `nextAction: Confirm`
+2. WC 訂單已建立（customer_id/billing/tradeOrderId meta 全部寫入，庫存已扣）
+3. 前端 SDK `payment.pay(nextAction)` 執行 3DS → 被 issuing bank decline
+4. v3.5.4 行為：`pay().error` → 只在結帳頁顯示紅框「付款失敗：...」→ **使用者停在結帳頁**
+5. **但訂單實際已產生**，使用者必須重整才看得到 pending 訂單
+
+這違反 v3.4.14 為 `WP_Error`（API 連線失敗）分支定下的 UX 原則：「訂單已建立 → 必須導向 pay-for-order 頁讓訂單可見 + 支援重試」。
+
+#### 修正
+
+**後端** `YSGatewayBase::handle_next_action` 回應新增 `failureUrl` 欄位：
+```php
+return array(
+    'result'     => 'success',
+    'nextAction' => $response['nextAction'],
+    'returnUrl'  => $this->get_return_url( $order ),
+    'failureUrl' => $order->get_checkout_payment_url(),  // v3.5.5 新增
+    'orderId'    => $order->get_id(),
+);
+```
+
+**前端** `processNextAction` 新增 4th 參數 `failureUrl`：
+- `pay().error` 分支 → 顯示錯誤 1.5 秒 → `window.location.href = failureUrl`
+- `catch (e)` exception 分支 → 同樣 redirect
+- `submitCheckoutAjax` 呼叫時傳 `response.failureUrl`
+- **Pay-for-order 頁本身呼叫 processNextAction 不傳 failureUrl**（已在目的地，錯誤原地顯示即可）
+- AddPaymentMethod 頁同理，不影響
+
+#### UX 對齊
+現在**三條失敗路徑都導向 pay-for-order**：
+| 失敗情境 | 版本 | 行為 |
+|---|---|---|
+| API 連線失敗（`is_wp_error`）| v3.4.14 | → pay-for-order |
+| `process_payment` 未預期狀態 | v3.4.14 | → pay-for-order |
+| **3DS / Confirm 被 decline** | **v3.5.5** | **→ pay-for-order** |
+
+訂單備註 + PAYMENT_STATUS meta 繼續運作，管理員可完整追蹤。
 
 ### 3.5.4 - 2026-04-24
 

@@ -857,7 +857,8 @@ jQuery(function ($) {
                         // 檢查是否有 nextAction 需要處理（3DS/Confirm）
                         if (response.nextAction) {
                             console.log('[YS Shopline] Got nextAction (type=' + (response.nextAction.type || 'unknown') + '), processing with SDK...');
-                            self.processNextAction(gatewayId, response.nextAction, response.returnUrl);
+                            // v3.5.5: 傳 failureUrl（pay-for-order），3DS/Confirm 失敗時自動導過去
+                            self.processNextAction(gatewayId, response.nextAction, response.returnUrl, response.failureUrl);
                         } else if (response.redirect) {
                             // 直接跳轉（無需額外驗證）
                             console.log('[YS Shopline] Redirecting (has redirect URL)');
@@ -909,8 +910,9 @@ jQuery(function ($) {
          * @param {string} gatewayId Gateway ID
          * @param {Object} nextAction Next action data from API
          * @param {string} returnUrl Return URL after success (SDK 會自動使用)
+         * @param {string} [failureUrl] v3.5.5: 3DS/Confirm 失敗時導向的 pay-for-order URL（主結帳頁才傳）
          */
-        processNextAction: async function (gatewayId, nextAction, returnUrl) {
+        processNextAction: async function (gatewayId, nextAction, returnUrl, failureUrl) {
             var self = this;
             var $form = $('form.checkout');
             var paymentInstance = paymentInstances[gatewayId];
@@ -919,7 +921,8 @@ jQuery(function ($) {
                 gatewayId: gatewayId,
                 hasInstance: !!paymentInstance,
                 nextActionType: nextAction.type || 'unknown',
-                nextActionKeys: nextAction ? Object.keys(nextAction) : []
+                nextActionKeys: nextAction ? Object.keys(nextAction) : [],
+                hasFailureUrl: !!failureUrl
             });
 
             if (!paymentInstance) {
@@ -949,6 +952,13 @@ jQuery(function ($) {
                     console.error('[YS Shopline] pay() error:', { code: payResult.error.code, message: payResult.error.message });
                     $form.removeClass('processing').unblock();
                     self.showFormError('付款失敗：' + (payResult.error.message || '未知錯誤'));
+                    // v3.5.5: 主結帳頁走到這裡代表 WC 訂單已建立（tradeOrderId 已寫入 meta），
+                    // 如果停在結帳頁使用者會誤以為沒下單；導向 pay-for-order 頁讓訂單可見 + 支援重試。
+                    // pay-for-order 本頁呼叫 processNextAction 時不傳 failureUrl，保持原地顯示錯誤。
+                    if (failureUrl) {
+                        console.log('[YS Shopline] Order was created; redirecting to pay-for-order in 1.5s');
+                        setTimeout(function () { window.location.href = failureUrl; }, 1500);
+                    }
                 } else {
                     // SDK 應該已經自動跳轉，但如果沒有（某些情況下）
                     // 等待一下看 SDK 是否會跳轉
@@ -965,6 +975,11 @@ jQuery(function ($) {
                 console.error('[YS Shopline] pay() exception:', e);
                 $form.removeClass('processing').unblock();
                 self.showFormError('付款處理發生錯誤：' + (e.message || '未知錯誤'));
+                // v3.5.5: 同 pay().error 分支，訂單已建立就要導去 pay-for-order
+                if (failureUrl) {
+                    console.log('[YS Shopline] pay() exception with existing order; redirecting to pay-for-order in 1.5s');
+                    setTimeout(function () { window.location.href = failureUrl; }, 1500);
+                }
             }
         },
 
