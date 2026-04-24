@@ -4,7 +4,7 @@
 
 ## 版本資訊
 
-- **目前版本**：3.5.5
+- **目前版本**：3.5.6
 - **PHP 需求**：>= 8.0
 - **WordPress 需求**：>= 6.0
 - **WooCommerce 需求**：7.0 - 9.0
@@ -65,6 +65,43 @@ https://your-domain.com/wp-json/ys-shopline/v1/webhook
 ---
 
 ## 變更紀錄
+
+### 3.5.6 - 2026-04-25
+
+**Pay-for-order 頁 `processNextAction` / `showFormError` form selector 硬編碼修正**
+
+#### 問題（v3.5.5 部署後浮現）
+v3.5.5 把「3DS/Confirm decline」的使用者導到 pay-for-order 頁重試。使用者**在 pay-for-order 頁再次失敗**時：
+
+1. Console 炸 `TypeError: Cannot read properties of undefined (reading 'top')` @ `showFormError:1053`
+2. 錯誤訊息完全沒顯示（`$form.prepend(...)` 對空 jQuery collection 無效）
+3. 畫面卡住無法操作（`$form.removeClass('processing').unblock()` 一樣 no-op，#order_review 的 blockUI overlay 沒移除）
+
+根因：
+- `showFormError` 硬寫 `var $form = $('form.checkout')`
+- `processNextAction` 也硬寫同樣 selector
+- pay-for-order 頁 form 是 `#order_review`；add-payment-method 頁是 `form#add_payment_method` → 都找不到 `form.checkout` → `$form.offset()` 返 `undefined` → 讀 `.top` 炸
+
+#### 修正
+兩個函數都加 fallback chain：
+```js
+var $form = $('form.checkout');
+if (!$form.length) { $form = $('#order_review'); }
+if (!$form.length) { $form = $('form#add_payment_method'); }
+```
+
+`showFormError` 再加最後 fallback：`.woocommerce-notices-wrapper, main, body`，且 `offset()` 存在性檢查：
+```js
+var offset = $form.offset();
+var scrollTarget = (offset && typeof offset.top === 'number') ? Math.max(0, offset.top - 100) : 0;
+```
+
+#### 影響三個頁面 UX 都修正
+| 頁面 | form selector | v3.5.5 以前行為 | v3.5.6 |
+|---|---|---|---|
+| 主結帳 | `form.checkout` | 正常 | 正常 |
+| Pay-for-order | `#order_review` | **炸 TypeError + 卡住** | 顯示紅框 + 可操作 |
+| Add-payment-method | `form#add_payment_method` | 同上潛在風險 | 同上修復 |
 
 ### 3.5.5 - 2026-04-25
 

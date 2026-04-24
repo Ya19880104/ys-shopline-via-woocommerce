@@ -914,7 +914,13 @@ jQuery(function ($) {
          */
         processNextAction: async function (gatewayId, nextAction, returnUrl, failureUrl) {
             var self = this;
+            // v3.5.6: 三個頁面共用此 method，form selector 要 fallback
+            // - 主結帳頁: form.checkout
+            // - Pay-for-order 頁: #order_review
+            // - Add-payment-method 頁: form#add_payment_method
             var $form = $('form.checkout');
+            if (!$form.length) { $form = $('#order_review'); }
+            if (!$form.length) { $form = $('form#add_payment_method'); }
             var paymentInstance = paymentInstances[gatewayId];
 
             console.log('[YS Shopline] processNextAction called', {
@@ -1034,7 +1040,11 @@ jQuery(function ($) {
          * @param {string} message Error message
          */
         showFormError: function (message) {
+            // v3.5.6: 三頁面 robust fallback（主結帳 / pay-for-order / add-payment-method）
             var $form = $('form.checkout');
+            if (!$form.length) { $form = $('#order_review'); }
+            if (!$form.length) { $form = $('form#add_payment_method'); }
+            if (!$form.length) { $form = $('.woocommerce-notices-wrapper, main, body').first(); }
 
             // Remove existing errors
             $('.woocommerce-NoticeGroup-checkout, .woocommerce-error, .woocommerce-message').remove();
@@ -1048,10 +1058,10 @@ jQuery(function ($) {
                 '</div>'
             );
 
-            // Scroll to top
-            $('html, body').animate({
-                scrollTop: ($form.offset().top - 100)
-            }, 500);
+            // v3.5.6: offset() 可能是 undefined（例如 $form=body 且 scroll top），加防衛
+            var offset = $form.offset();
+            var scrollTarget = (offset && typeof offset.top === 'number') ? Math.max(0, offset.top - 100) : 0;
+            $('html, body').animate({ scrollTop: scrollTarget }, 500);
 
             // Trigger WC event
             $(document.body).trigger('checkout_error', [message]);
