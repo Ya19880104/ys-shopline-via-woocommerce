@@ -152,6 +152,12 @@ final class YSShoplineRequester {
             'cvv', 'cvc', 'cardNumber', 'pan',
         ];
 
+        $sensitive_last6 = [
+            'instrumentId', 'paymentInstrumentId',
+            'customerId', 'paymentCustomerId', 'referenceCustomerId',
+            'tradeOrderId', 'channelDealId',
+        ];
+
         // PII 部分遮罩：個人識別資訊、地址、聯絡、身分證等
         $sensitive_pii = [
             'email',
@@ -173,9 +179,31 @@ final class YSShoplineRequester {
             return substr( $val, 0, 2 ) . str_repeat( '*', 6 ) . substr( $val, -2 );
         };
 
-        array_walk_recursive( $data, static function ( &$value, $key ) use ( $sensitive_full, $sensitive_pii, $redact_str ) {
+        $redact_last6 = static function ( $val ) {
+            if ( ! is_string( $val ) || '' === $val ) {
+                return $val;
+            }
+            return strlen( $val ) > 6 ? '*' . substr( $val, -6 ) : '***';
+        };
+
+        $redact_url = static function ( $val ) {
+            if ( ! is_string( $val ) || '' === $val ) {
+                return $val;
+            }
+            return '[URL_REDACTED:' . substr( hash( 'sha256', $val ), 0, 8 ) . ']';
+        };
+
+        array_walk_recursive( $data, static function ( &$value, $key ) use ( $sensitive_full, $sensitive_last6, $sensitive_pii, $redact_str, $redact_last6, $redact_url ) {
             if ( in_array( $key, $sensitive_full, true ) ) {
                 $value = ( is_string( $value ) && '' !== $value ) ? '[REDACTED]' : $value;
+                return;
+            }
+            if ( in_array( $key, $sensitive_last6, true ) ) {
+                $value = $redact_last6( $value );
+                return;
+            }
+            if ( in_array( $key, [ 'url', 'returnUrl' ], true ) ) {
+                $value = $redact_url( $value );
                 return;
             }
             if ( in_array( $key, $sensitive_pii, true ) ) {

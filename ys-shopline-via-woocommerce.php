@@ -3,7 +3,7 @@
  * Plugin Name: YS Shopline via WooCommerce
  * Plugin URI: https://yangsheep.com.tw
  * Description: Support Shopline Payments for WooCommerce, including HPOS and Subscriptions. Supports Credit Card, ATM, JKOPay, Apple Pay, LINE Pay, and Chailease BNPL.
- * Version:           3.5.2
+ * Version:           3.5.4
  * Author: YangSheep
  * Author URI: https://yangsheep.com.tw
  * Text Domain: ys-shopline-via-woocommerce
@@ -17,7 +17,7 @@
 defined( 'ABSPATH' ) || exit;
 
 // Define plugin constants
-define( 'YS_SHOPLINE_VERSION', '3.5.2' );
+define( 'YS_SHOPLINE_VERSION', '3.5.4' );
 define( 'YS_SHOPLINE_PLUGIN_FILE', __FILE__ );
 define( 'YS_SHOPLINE_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 define( 'YS_SHOPLINE_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
@@ -509,7 +509,13 @@ final class YSShoplinePayment {
                 var amount = <?php echo (int) $amount; ?>;
                 var currency = <?php echo wp_json_encode( $currency ); ?>;
 
-                console.log('3DS Page Loaded', { nextAction: nextAction, env: env, amount: amount, currency: currency });
+                console.log('3DS Page Loaded', {
+                    nextActionType: nextAction && nextAction.type ? nextAction.type : 'unknown',
+                    nextActionKeys: nextAction ? Object.keys(nextAction) : [],
+                    env: env,
+                    amount: amount,
+                    currency: currency
+                });
 
                 async function processPayment() {
                     try {
@@ -525,7 +531,7 @@ final class YSShoplinePayment {
                             amount: amount
                         });
 
-                        console.log('SDK initialized:', result);
+                        console.log('SDK initialized, hasError=' + !!(result && result.error));
 
                         if (result.error) {
                             showError('SDK Error: ' + result.error.message);
@@ -535,7 +541,7 @@ final class YSShoplinePayment {
                         console.log('Calling payment.pay() with nextAction...');
                         var payResult = await result.payment.pay(nextAction);
 
-                        console.log('pay() result:', payResult);
+                        console.log('pay() returned, hasError=' + !!(payResult && payResult.error));
 
                         if (payResult && payResult.error) {
                             showError('Payment Failed: ' + payResult.error.message);

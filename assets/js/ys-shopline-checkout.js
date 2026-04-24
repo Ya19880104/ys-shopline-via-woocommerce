@@ -919,8 +919,7 @@ jQuery(function ($) {
                 gatewayId: gatewayId,
                 hasInstance: !!paymentInstance,
                 nextActionType: nextAction.type || 'unknown',
-                nextActionKeys: nextAction ? Object.keys(nextAction) : [],
-                nextAction: nextAction // 完整輸出 nextAction 內容
+                nextActionKeys: nextAction ? Object.keys(nextAction) : []
             });
 
             if (!paymentInstance) {

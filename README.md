@@ -4,7 +4,7 @@
 
 ## 版本資訊
 
-- **目前版本**：3.4.11
+- **目前版本**：3.5.4
 - **PHP 需求**：>= 8.0
 - **WordPress 需求**：>= 6.0
 - **WooCommerce 需求**：7.0 - 9.0
@@ -65,6 +65,35 @@ https://your-domain.com/wp-json/ys-shopline/v1/webhook
 ---
 
 ## 變更紀錄
+
+### 3.5.4 - 2026-04-24
+
+**F9 延伸：3DS 內嵌頁 raw log 清理 + API Requester log 遮罩強化**
+
+v3.5.2 F9 只清到 `placeOrder.pay()` / Pay-for-order / AddPaymentMethod；第二輪瀏覽器實測 devtools 又抓到兩處殘留：
+
+#### 🔒 3DS 內嵌頁（主 plugin inline JS）
+- `console.log('3DS Page Loaded', { nextAction: nextAction, ... })` 完整印 `nextAction`（含 customerToken/payToken）
+- `SDK initialized: <result object>` 印 SDK 內部結構
+- `pay() result: <payResult object>` 印 payResult 原文
+
+三處改為 meta-only log（`nextActionType` / `nextActionKeys` / `hasError`），與主結帳頁 F2/F9 策略一致。
+
+#### 🔒 `processNextAction` 殘留 `nextAction: nextAction` 行
+checkout.js L922 仍保留完整輸出 nextAction，移除。
+
+#### 🛡️ `YSShoplineRequester::redact_sensitive_data()` 新增兩組遮罩 bucket
+| Bucket | 欄位 | 遮罩方式 |
+|--------|------|---------|
+| `sensitive_last6` | `instrumentId` / `paymentInstrumentId` / `customerId` / `paymentCustomerId` / `referenceCustomerId` / `tradeOrderId` / `channelDealId` | `*{末6碼}`（長度 ≤ 6 改 `***`） |
+| URL | `url` / `returnUrl` | `[URL_REDACTED:{sha256前8}]`（避免 returnUrl 帶的 cart session 外洩） |
+
+原本 `sensitive_full` 只遮 `apiKey` / `signKey` / `cvv` / `cardNumber`，這組識別碼會被完整寫進 API request/response log；生產 debug.log 被支援人員截圖時會曝露顧客 ID 對應 / 交易 ID，雖非 PCI 敏感，但仍屬可追蹤 PII。
+
+#### 🧪 實機驗證
+- 對方 agent：訂閱 #1256 續扣 `processing` + Recurring API `SUCCEEDED`
+- 1251–1255 共 5 筆（含 2 訂閱 + 3 信用卡 + 1 沙盒刻意 decline 測試卡）全部流程正常
+- `php -l` 全 34 檔、`node --check` checkout.js + blocks.js 通過
 
 ### 3.5.2 - 2026-04-24
 
