@@ -59,3 +59,62 @@ tmpclaude-*
 # Vendor（排除但保留 hub-client）
 !vendor/autoload.php
 !vendor/yangsheep/
+
+# ============================================
+# Security — added by audit 2026-04-24
+# DO NOT REMOVE without security review.
+# ============================================
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+!.env.sample
+
+# Keys / certs
+*.pem
+*.key
+!*.php.key
+id_rsa*
+*.ppk
+*.p12
+*.pfx
+
+# Credentials / service accounts
+credentials*.json
+service-account*.json
+secrets*.json
+auth.json
+.npmrc
+.pypirc
+
+# SSH
+.ssh/
+known_hosts
+
+# Local dev / deploy helpers that may hold creds
+deploy.py
+deploy.sh
+deploy.local.*
+temp_*.py
+temp_*.sh
+*.local.py
+*.local.js
+*.local.json
+*.local.php
+.env-deploy
+
+# WordPress-specific
+wp-config.php
+wp-config-local.php
+!wp-config-sample.php
+
+# Claude / tooling artifacts
+.claude/
+.review_tmp/
+tmpclaude-*
+
+# Local backups
+*.backup
+*.bak
+*.orig
