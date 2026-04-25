@@ -4,7 +4,7 @@
 
 ## 版本資訊
 
-- **目前版本**：3.5.8
+- **目前版本**：3.5.9
 - **PHP 需求**：>= 8.0
 - **WordPress 需求**：>= 6.0
 - **WooCommerce 需求**：7.0 - 9.0
@@ -65,6 +65,54 @@ https://your-domain.com/wp-json/ys-shopline/v1/webhook
 ---
 
 ## 變更紀錄
+
+### 3.5.9 - 2026-04-25
+
+**Codex review 殘留 sanitize gap 補齊 + 訂閱 fallback 設計決策說明**
+
+#### P2 sanitizeErrorMessage 覆蓋盲區（3 處補齊）
+
+v3.5.7 引入 `ShoplineCheckout.sanitizeErrorMessage()` 並在 `showFormError` 入口統一遮罩；但有三條路徑沒走這條主流程，仍直接顯示 SHOPLINE SDK 原文 error message（含 customer / instrument / trade ID 明文）。本版補齊：
+
+| 路徑 | 檔案 | 修法 |
+|---|---|---|
+| Pay-for-order `createPayment.error` 的 `alert()` | checkout.js L1463 | `alert(window.ShoplineCheckout.sanitizeErrorMessage(...))` |
+| Pay-for-order `createPayment.catch` 的 `alert()` | checkout.js L1540 | 同上 |
+| `AddPaymentMethodHandler.showError()` | checkout.js L1883 | 入口呼叫 `window.ShoplineCheckout.sanitizeErrorMessage` + 加 offset() 防衛 |
+| 主 plugin 3DS inline page `showError()` | ys-shopline-via-woocommerce.php L537/547/556 | inline JS 自帶 `sanitizeMsg()` 函數（同邏輯複製，因 inline 在獨立 page 沒 ShoplineCheckout 全域） |
+
+實際效果：所有失敗顯示路徑現在統一遮罩成 `customer [*末6] instrument [*末6]` 格式。
+
+#### P3 一般 CC 結帳「後續定期扣款」誤導文案隱藏
+
+啟用 `customerToken` / `savePaymentInstrument` 後，SHOPLINE SDK 會在 footer 自動顯示
+「**SHOPLINE Payments 將依本次交易所使用之付款資訊，進行後續定期扣款**」字樣。
+- 訂閱訂單：文案正確
+- 一般單次訂單：**誤導**（使用者誤以為會被自動扣後續款項）
+
+新增 `_hideMisleadingRecurringHint(gatewayId)`：
+- 僅對非 `ys_shopline_credit_subscription` gateway 觸發
+- Poll 最多 3 秒等 SDK render
+- Text-based 找出 leaf element 含「後續定期扣款」→ `.hide()`
+- 用 text 不用 class（SDK class 是 CSS-in-JS hash，不穩定）
+
+#### 📘 P1 設計決策註記（codex review 提及，**非 bug**，於此明確說明）
+
+##### 訂閱續扣 fallback 行為
+**檔案**：`src/Gateways/YSCreditSubscription.php` L223-295
+**行為**：當訂閱續扣的 `paymentInstrumentId` 失效或扣款失敗時，會 fallback 到使用者**目前的 default token** 重試。
+**設計理由**：v3.4.15-18 刻意實作此 fallback，目的是降低訂閱因卡片過期/被刪而中斷續扣的比例。
+**潛在影響**：使用者若於 My Account 換 default 卡，**既有訂閱續扣會跟著換成新 default 卡**。
+**管理員建議**：教育使用者「My Account 預設卡 = 訂閱續扣 fallback 卡」；或在客戶服務 SOP 加上「換預設卡會影響既有訂閱」提醒。
+若需改為「續扣失敗就停止，不 fallback」嚴格模式，可在 admin setting 加開關（未來版本）。
+
+##### change-payment hook 同樣 fallback default
+**檔案**：`src/Gateways/YSCreditCard.php` L77-91
+**行為**：訂閱變更付款方式時，先讀 parent order meta，若無則 fallback 用使用者目前 default token 寫入 subscription meta。
+**設計理由**：parent order 沒寫 SHOPLINE instrument 是極少數情境（多為手動建單或 API 建單），fallback 確保訂閱仍能續扣。
+**潛在影響**：與上述同步——使用者換 default 卡會影響既有訂閱。
+
+> **共同緩解**：兩個 fallback 路徑都會寫 order/subscription note 記錄使用了哪張 instrument，管理員可從備註追蹤。
 
 ### 3.5.8 - 2026-04-25
 

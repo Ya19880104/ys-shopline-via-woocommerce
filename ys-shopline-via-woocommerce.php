@@ -3,7 +3,7 @@
  * Plugin Name: YS Shopline via WooCommerce
  * Plugin URI: https://yangsheep.com.tw
  * Description: Support Shopline Payments for WooCommerce, including HPOS and Subscriptions. Supports Credit Card, ATM, JKOPay, Apple Pay, LINE Pay, and Chailease BNPL.
- * Version:           3.5.8
+ * Version:           3.5.9
  * Author: YangSheep
  * Author URI: https://yangsheep.com.tw
  * Text Domain: ys-shopline-via-woocommerce
@@ -17,7 +17,7 @@
 defined( 'ABSPATH' ) || exit;
 
 // Define plugin constants
-define( 'YS_SHOPLINE_VERSION', '3.5.8' );
+define( 'YS_SHOPLINE_VERSION', '3.5.9' );
 define( 'YS_SHOPLINE_PLUGIN_FILE', __FILE__ );
 define( 'YS_SHOPLINE_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 define( 'YS_SHOPLINE_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
@@ -534,7 +534,7 @@ final class YSShoplinePayment {
                         console.log('SDK initialized, hasError=' + !!(result && result.error));
 
                         if (result.error) {
-                            showError('SDK Error: ' + result.error.message);
+                            showError('SDK Error: ' + sanitizeMsg(result.error.message));
                             return;
                         }
 
@@ -544,7 +544,7 @@ final class YSShoplinePayment {
                         console.log('pay() returned, hasError=' + !!(payResult && payResult.error));
 
                         if (payResult && payResult.error) {
-                            showError('Payment Failed: ' + payResult.error.message);
+                            showError('Payment Failed: ' + sanitizeMsg(payResult.error.message));
                         } else {
                             // Success - redirect to thank you page
                             console.log('Payment successful, redirecting to:', returnUrl);
@@ -553,8 +553,22 @@ final class YSShoplinePayment {
 
                     } catch (e) {
                         console.error('Payment error:', e);
-                        showError('System Error: ' + e.message);
+                        showError('System Error: ' + sanitizeMsg(e.message));
                     }
+                }
+
+                /**
+                 * v3.5.9: 3DS inline page 的訊息遮罩（複製 ShoplineCheckout.sanitizeErrorMessage 邏輯，
+                 * 因為 inline JS 在獨立 page，沒有 ShoplineCheckout global scope）。
+                 * 詳見 README v3.5.7 / v3.5.8：SHOPLINE error message 含 customer/instrument/trade ID 明文。
+                 */
+                function sanitizeMsg(s) {
+                    if (typeof s !== 'string') return s;
+                    var KEYS = 'customer|instrument|paymentInstrument|paymentCustomer|tradeOrder|channelDeal';
+                    var re = new RegExp('\\b(' + KEYS + ')(Id)?(\\s*[:=]\\s*|\\s*\\[\\s*)(\\d{10,})(\\s*\\])?', 'gi');
+                    return s.replace(re, function (_, k, idS, sep, d, rb) {
+                        return k + (idS || '') + sep + '*' + d.slice(-6) + (rb || '');
+                    });
                 }
 
                 function showError(message) {

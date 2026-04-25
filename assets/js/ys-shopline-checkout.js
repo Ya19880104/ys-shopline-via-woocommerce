@@ -572,6 +572,12 @@ jQuery(function ($) {
                 // 容易 submit 後才發現沒選卡或選錯卡。auto-select 讓最常用的情境（預設卡）一鍵完成。
                 self._tryAutoSelectDefaultCard(gatewayId);
 
+                // v3.5.9: 一般 CC checkout 上 SDK 自動顯示「將依本次交易所使用之付款資訊，進行後續定期扣款」
+                // 文案，但這對非訂閱訂單是誤導（一般訂單不會自動扣後續款項）。只在非 subscription gateway hide。
+                if (gatewayId !== 'ys_shopline_credit_subscription') {
+                    self._hideMisleadingRecurringHint(gatewayId);
+                }
+
                 // bindOnlyMode（$0 訂閱試用）：將 PHP 渲染的綁卡提示改為試用期版本
                 if (serverConfig.bindOnlyMode) {
                     var $hint = $('.ys-bindcard-hint-subscription[data-gateway="' + gatewayId + '"]');
@@ -1127,6 +1133,35 @@ jQuery(function ($) {
         },
 
         /**
+         * v3.5.9: 隱藏 SDK 對一般 CC 訂單誤顯示的「後續定期扣款」文案。
+         *
+         * 啟用 customerToken / savePaymentInstrument 的 SDK config 會在 footer 加上
+         * 「SHOPLINE Payments 將依本次交易所使用之付款資訊，進行後續定期扣款」字樣 —
+         * 這對訂閱情境正確，但一般單次訂單看到會誤以為「之後會自動再扣款」。
+         *
+         * 處理方式：text-based hide（SDK class 名是 hash，文字 match 比 class match 穩定）。
+         * Poll 最多 3 秒等 SDK render，找到 leaf element 且含關鍵詞就 hide。
+         */
+        _hideMisleadingRecurringHint: function (gatewayId) {
+            var KEYWORD = '後續定期扣款';
+            var attempts = 10;
+            var iv = setInterval(function () {
+                if (--attempts <= 0) { clearInterval(iv); return; }
+                var $container = $('#' + gatewayId + '_container');
+                if (!$container.length) return;
+                var $hits = $container.find('*').filter(function () {
+                    return this.children.length === 0
+                        && (this.textContent || '').indexOf(KEYWORD) >= 0;
+                });
+                if ($hits.length) {
+                    clearInterval(iv);
+                    $hits.hide();
+                    console.log('[YS Shopline] v3.5.9 hidden ' + $hits.length + ' misleading recurring hint(s) on ' + gatewayId);
+                }
+            }, 300);
+        },
+
+        /**
          * v3.5.7: Sanitize SHOPLINE error messages to mask long digit IDs.
          *
          * SDK 直接返回的 error message 會含 customer/instrument/trade IDs 明文
@@ -1460,7 +1495,9 @@ jQuery(function ($) {
                     console.error('[YS Shopline] Pay-for-order createPayment error:', { code: result.error.code, message: result.error.message });
                     self._isSubmitting = false;
                     $form.removeClass('processing').unblock();
-                    alert(result.error.message || 'Payment failed');
+                    // v3.5.9: 透過 ShoplineCheckout.sanitizeErrorMessage 遮罩 SHOPLINE 識別碼（與一般 checkout 一致）
+                    var rawMsg1 = result.error.message || 'Payment failed';
+                    alert(window.ShoplineCheckout && window.ShoplineCheckout.sanitizeErrorMessage ? window.ShoplineCheckout.sanitizeErrorMessage(rawMsg1) : rawMsg1);
                     return;
                 }
 
@@ -1535,7 +1572,9 @@ jQuery(function ($) {
                 console.error('[YS Shopline] Pay-for-order createPayment error:', error);
                 self._isSubmitting = false;
                 $form.removeClass('processing').unblock();
-                alert(error.message || 'Payment error occurred');
+                // v3.5.9: 與 createPayment.error 分支一致 — sanitize SHOPLINE 識別碼
+                var rawMsg2 = error.message || 'Payment error occurred';
+                alert(window.ShoplineCheckout && window.ShoplineCheckout.sanitizeErrorMessage ? window.ShoplineCheckout.sanitizeErrorMessage(rawMsg2) : rawMsg2);
             });
         }
     };
@@ -1881,20 +1920,25 @@ jQuery(function ($) {
          * @param {string} message Error message
          */
         showError: function ($form, message) {
+            // v3.5.9: 與 ShoplineCheckout.showFormError 共用同一遮罩策略，避免綁卡頁洩漏 SHOPLINE 識別碼
+            var safe = (window.ShoplineCheckout && typeof window.ShoplineCheckout.sanitizeErrorMessage === 'function')
+                ? window.ShoplineCheckout.sanitizeErrorMessage(message)
+                : message;
+
             // 移除現有錯誤
             $form.find('.woocommerce-error, .woocommerce-message').remove();
 
             // 添加新錯誤
             $form.prepend(
                 '<ul class="woocommerce-error" role="alert"><li>' +
-                $('<div>').text(message).html() +
+                $('<div>').text(safe).html() +
                 '</li></ul>'
             );
 
-            // 捲動到錯誤位置
-            $('html, body').animate({
-                scrollTop: $form.offset().top - 100
-            }, 500);
+            // v3.5.9: offset() 防衛
+            var off = $form.offset();
+            var target = (off && typeof off.top === 'number') ? Math.max(0, off.top - 100) : 0;
+            $('html, body').animate({ scrollTop: target }, 500);
         }
     };
 
