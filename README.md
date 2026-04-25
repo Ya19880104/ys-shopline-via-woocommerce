@@ -4,7 +4,7 @@
 
 ## 版本資訊
 
-- **目前版本**：3.5.9
+- **目前版本**：3.5.10
 - **PHP 需求**：>= 8.0
 - **WordPress 需求**：>= 6.0
 - **WooCommerce 需求**：7.0 - 9.0
@@ -65,6 +65,48 @@ https://your-domain.com/wp-json/ys-shopline/v1/webhook
 ---
 
 ## 變更紀錄
+
+### 3.5.10 - 2026-04-25
+
+**新卡儲存失敗的明確警告（CardBindPayment silent fail 偵測）**
+
+#### 問題（v3.5.9 實測 #1270）
+登入用戶用新卡 + 勾儲存下單 NT$95：
+- 我們**正確發送**：`paymentBehavior=CardBindPayment` + `savePaymentInstrument=true`
+- SHOPLINE 第一次回（CREATED）：**降級** `paymentBehavior=Regular`
+- SHOPLINE 第二次回（SUCCEEDED）：`savePaymentInstrument=false` + **沒有 paymentInstrumentId**
+- 訂單付款成功 → `processing`，但 **WC 沒建 token**
+- 管理員只看 order notes 完全不知為何沒儲卡 → **silent fail**
+
+根因（最常見）：**SHOPLINE sandbox non-3D 流程不支援 CardBindPayment**（amount 去末兩位為奇數會走 non-3D 直接成功）。生產環境少見此降級，但其他可能：
+1. 卡片不支援 binding（issuer 限制）
+2. 商家帳號未開通 binding 功能
+3. 金額/風控未觸發 3DS
+
+#### 修正
+**Step 1 - process_payment 階段標記**（`YSGatewayBase.php`）：
+```php
+if ( 'CardBindPayment' === $payment_behavior && empty( $payment_instrument_id ) && $user_id ) {
+    $order->update_meta_data( '_ys_shopline_bind_card_attempted', 'yes' );
+}
+```
+
+**Step 2 - redirect handler 收到 SHOPLINE response 後判斷**（`YSRedirectHandler.php`）：
+- 若 `paymentInstrumentId` 為空 **且** order meta `_ys_shopline_bind_card_attempted=yes`
+  → 寫 order note 警告 + meta `PAYMENT_STATUS=SUCCEEDED_BIND_NOT_PERSISTED`
+  → log warning（含 SHOPLINE response 的 savePaymentInstrument flag 與降級後的 paymentBehavior）
+
+#### 管理員體驗
+之前：訂單 processing，沒 token，沒任何訂單備註說明 → 完全黑箱
+現在：訂單 processing，沒 token，**訂單備註明確說「使用者勾了儲存卡片但 SHOPLINE 未建 paymentInstrument，可能原因 X/Y/Z，下次需重新輸入」** → 透明
+
+#### 不變的部分
+- 本筆訂單付款已 SUCCEEDED 不變（純付款功能正常）
+- QuickPayment（既有卡）流程不受影響（不會誤報，因為 `_ys_shopline_bind_card_attempted` 只標 CardBindPayment）
+- 訂閱續扣不受影響（subscription 走 Recurring）
+
+#### 沙盒測試小提醒
+要驗證綁卡功能，請用 **3 倍數金額（NT$300/NT$600/NT$900）** 觸發 3DS flow → 走 CardBind 才會建 instrument。
 
 ### 3.5.9 - 2026-04-25
 

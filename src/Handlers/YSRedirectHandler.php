@@ -212,6 +212,38 @@ class YSRedirectHandler {
                     // 如果此訂單有關聯 subscription，將 instrument_id 寫入 subscription meta
                     // 放在 sync_payment_token 外面，因為不管 token 是新建還是已存在都要執行
                     self::update_subscription_instrument( $order, $payment_instrument_id );
+                } elseif ( 'yes' === $order->get_meta( '_ys_shopline_bind_card_attempted' ) ) {
+                    // v3.5.10: 使用者勾選了儲存卡片，但 SHOPLINE response 沒回 paymentInstrumentId。
+                    //
+                    // 已知情境：
+                    //   1. 沙盒 non-3D 流程（金額去末兩位為奇數）→ SHOPLINE 自動把
+                    //      paymentBehavior 從 CardBindPayment 降級為 Regular，不建 instrument
+                    //   2. 卡片不支援 binding（issuer 限制）
+                    //   3. 商家 SHOPLINE 帳號未開通 binding 功能
+                    //   4. 風控未走 3DS 而走 fast-path
+                    //
+                    // 對策：寫 order note + meta 讓管理員可從備註查到，避免「使用者誤以為已綁卡」。
+                    // 不影響本筆訂單付款（已 SUCCEEDED），但下次仍需重新輸入卡片。
+                    $shopline_save_flag = $payment_instrument['savePaymentInstrument'] ?? null;
+                    $flag_str = ( null === $shopline_save_flag )
+                        ? 'unset'
+                        : ( $shopline_save_flag ? 'true' : 'false' );
+
+                    $order->add_order_note( sprintf(
+                        /* translators: %s: SHOPLINE response 的 savePaymentInstrument 旗標值 */
+                        __(
+                            'Shopline 金流：使用者勾選了「儲存卡片」，但 SHOPLINE 未建立 paymentInstrument（response savePaymentInstrument=%s）。可能原因：(1) 沙盒 non-3D 流程不支援綁卡 (2) 卡片不支援綁定 (3) 商家帳號未開通綁卡 (4) 金額/風控未走 3DS。本訂單付款已完成，但下次仍需重新輸入卡片。',
+                            'ys-shopline-via-woocommerce'
+                        ),
+                        $flag_str
+                    ) );
+                    $order->update_meta_data( YSOrderMeta::PAYMENT_STATUS, 'SUCCEEDED_BIND_NOT_PERSISTED' );
+
+                    YSLogger::warning( 'CardBindPayment requested but SHOPLINE did not return paymentInstrumentId', array(
+                        'order_id'                 => $order->get_id(),
+                        'shopline_save_flag'       => $flag_str,
+                        'shopline_payment_behavior' => $response['payment']['paymentBehavior'] ?? $response['paymentBehavior'] ?? 'unknown',
+                    ) );
                 }
 
                 // 儲存完整的付款詳情

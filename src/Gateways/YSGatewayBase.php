@@ -902,6 +902,13 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
             'client'           => $this->build_client_info( $client_ip ),
         );
 
+        // v3.5.10: 標記「新卡 + 要求儲存」路徑（非 QuickPayment、非訂閱、登入用戶 + bindCard）
+        // 用途：redirect handler 判斷 SHOPLINE 是否真的有建 paymentInstrument，沒有就警告
+        if ( 'CardBindPayment' === $payment_behavior && empty( $payment_instrument_id ) && $user_id ) {
+            $order->update_meta_data( '_ys_shopline_bind_card_attempted', 'yes' );
+            $order->save();
+        }
+
         // QuickPayment 流程：使用已綁定的卡片
         if ( 'QuickPayment' === $payment_behavior && ! empty( $payment_instrument_id ) ) {
             // 取得 customerId
