@@ -91,6 +91,7 @@ jQuery(function ($) {
     var domVersion = 0;
     var runCounter = 0;
     var activeRuns = {};             // { gatewayId: { runId, domVersion, $container DOM } }
+    var sdkConfigs = {};             // { gatewayId: serverConfig }
 
     /**
      * Main Shopline Checkout Handler
@@ -428,6 +429,7 @@ jQuery(function ($) {
             var self = this;
             var gatewayConfig = GATEWAY_CONFIG[gatewayId];
             var $container = $('#' + gatewayConfig.containerId);
+            sdkConfigs[gatewayId] = serverConfig || {};
 
             // v3.5.0: doMount 已檢查重複呼叫；renderPayment 只需要最基本 validation
             if (!sdkLoaded && typeof ShoplinePayments === 'undefined') {
@@ -570,7 +572,9 @@ jQuery(function ($) {
                 // v3.5.8: SDK render 完後 best-effort 模擬點擊預設卡
                 // 原本 SDK render 出 saved cards 但不自動 select，使用者必須手動點 →
                 // 容易 submit 後才發現沒選卡或選錯卡。auto-select 讓最常用的情境（預設卡）一鍵完成。
-                self._tryAutoSelectDefaultCard(gatewayId);
+                if (gatewayId === 'ys_shopline_credit') {
+                    self._tryAutoSelectDefaultCard(gatewayId);
+                }
 
                 // v3.5.9: 一般 CC checkout 上 SDK 自動顯示「將依本次交易所使用之付款資訊，進行後續定期扣款」
                 // 文案，但這對非訂閱訂單是誤導（一般訂單不會自動扣後續款項）。只在非 subscription gateway hide。
@@ -757,13 +761,14 @@ jQuery(function ($) {
                 );
 
                 // Add selected installment if applicable
-                if (result.installment) {
+                var selectedInstallment = gatewayId === 'ys_shopline_credit_installment' ? self.getSelectedInstallment(result, gatewayId) : '';
+                if (selectedInstallment) {
                     $form.find('input[name="ys_shopline_installment"]').remove();
                     $form.append(
                         $('<input>').attr({
                             type: 'hidden',
                             name: 'ys_shopline_installment',
-                            value: result.installment
+                            value: selectedInstallment
                         })
                     );
                 }
@@ -1347,6 +1352,27 @@ jQuery(function ($) {
             return paymentInstances[gatewayId] || null;
         },
 
+        getSelectedInstallment: function (result, gatewayId) {
+            var value = result && (
+                result.installment ||
+                result.installmentCount ||
+                result.installments ||
+                (result.paymentMethodOptions && result.paymentMethodOptions.installments && result.paymentMethodOptions.installments.count)
+            );
+
+            if (value) {
+                return String(value);
+            }
+
+            var config = sdkConfigs[gatewayId] || {};
+            var counts = config.installmentCounts || [];
+            var nonZeroCounts = $.grep(counts, function (count) {
+                return String(count) !== '0';
+            });
+
+            return nonZeroCounts.length === 1 ? String(nonZeroCounts[0]) : '';
+        },
+
         /**
          * Check if gateway is Shopline gateway
          *
@@ -1523,6 +1549,11 @@ jQuery(function ($) {
                     ys_shopline_pay_session: paySessionValue,
                     ys_shopline_bind_card_enabled: ShoplineCheckout.isBindCardEnabled(gatewayId) ? '1' : '0'
                 };
+
+                var selectedInstallment = gatewayId === 'ys_shopline_credit_installment' ? ShoplineCheckout.getSelectedInstallment(result, gatewayId) : '';
+                if (selectedInstallment) {
+                    ajaxData.ys_shopline_installment = selectedInstallment;
+                }
 
                 // 加入裝置資訊
                 var clientInfo = {

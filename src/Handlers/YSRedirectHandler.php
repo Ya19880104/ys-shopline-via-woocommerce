@@ -144,6 +144,11 @@ class YSRedirectHandler {
 
         $status = isset( $response['status'] ) ? $response['status'] : '';
 
+        if ( self::is_transient_payment_status( $status ) ) {
+            $response = self::poll_processing_status( $api, $trade_order_id, $response );
+            $status   = isset( $response['status'] ) ? $response['status'] : $status;
+        }
+
         // 根據狀態更新訂單
         // 注意：SHOPLINE API 回傳 'SUCCEEDED' 而不是 'SUCCESS'
         if ( 'SUCCEEDED' === $status || 'SUCCESS' === $status || 'CAPTURED' === $status ) {
@@ -354,6 +359,55 @@ class YSRedirectHandler {
             $order->delete_meta_data( YSOrderMeta::NEXT_ACTION );
             $order->save();
         }
+    }
+
+    /**
+     * Check whether a payment status is still being finalized by SHOPLINE.
+     *
+     * @param string $status Payment status.
+     * @return bool
+     */
+    private static function is_transient_payment_status( $status ) {
+        return in_array( $status, array( 'CREATED', 'PROCESSING' ), true );
+    }
+
+    /**
+     * Re-query transient payment statuses before rendering the return page.
+     *
+     * @param object $api            SHOPLINE API client.
+     * @param string $trade_order_id Trade order ID.
+     * @param array  $response       Initial response.
+     * @return array
+     */
+    private static function poll_processing_status( $api, $trade_order_id, $response ) {
+        $latest = is_array( $response ) ? $response : array();
+
+        for ( $attempt = 1; $attempt <= 3; $attempt++ ) {
+            sleep( 2 );
+
+            $polled = $api->get_payment_trade( $trade_order_id );
+            if ( is_wp_error( $polled ) || ! is_array( $polled ) ) {
+                YSLogger::warning( 'Redirect handler: transient status poll failed', array(
+                    'attempt' => $attempt,
+                    'error'   => is_wp_error( $polled ) ? $polled->get_error_message() : 'invalid_response',
+                ) );
+                continue;
+            }
+
+            $latest = $polled;
+            $status = isset( $latest['status'] ) ? $latest['status'] : '';
+
+            YSLogger::debug( 'Redirect handler: transient status poll result', array(
+                'attempt' => $attempt,
+                'status'  => $status ?: 'unknown',
+            ) );
+
+            if ( ! self::is_transient_payment_status( $status ) ) {
+                break;
+            }
+        }
+
+        return $latest;
     }
 
     /**

@@ -4,7 +4,7 @@
 
 ## 版本資訊
 
-- **目前版本**：3.5.10
+- **目前版本**：3.5.11
 - **PHP 需求**：>= 8.0
 - **WordPress 需求**：>= 6.0
 - **WooCommerce 需求**：7.0 - 9.0
@@ -65,6 +65,15 @@ https://your-domain.com/wp-json/ys-shopline/v1/webhook
 ---
 
 ## 變更紀錄
+
+### 3.5.11 - 2026-04-29
+
+**修正信用卡分期被建成一次付清的資料流**
+
+- 重新付款頁的信用卡分期 SDK config 改用訂單金額判斷 `installmentCounts`，不再依賴空購物車。
+- 一般結帳與重新付款都會把 SDK 回傳的分期期數送到後端 `ys_shopline_installment`，後端建立交易時保留 `confirm.installment`。
+- 分期付款仍保留登入會員的儲存卡片能力；只取消分期 gateway 的預設卡自動點選，避免略過分期選擇。
+- Redirect return 遇到 SHOPLINE `CREATED` / `PROCESSING` 會短暫重查交易狀態，降低客戶看到等待付款但交易稍後完成的機率。
 
 ### 3.5.10 - 2026-04-25
 

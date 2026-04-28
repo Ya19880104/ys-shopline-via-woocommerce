@@ -49,6 +49,67 @@ class YSCreditInstallment extends YSGatewayBase {
 	}
 
 	/**
+	 * Get the total used to decide whether installmentCounts should be exposed.
+	 *
+	 * @return float
+	 */
+	protected function get_installment_context_total() {
+		$order = $this->get_installment_context_order();
+		if ( $order ) {
+			return (float) $order->get_total();
+		}
+
+		return WC()->cart ? (float) WC()->cart->get_total( 'edit' ) : 0;
+	}
+
+	/**
+	 * Resolve the current order for pay-for-order SDK config requests.
+	 *
+	 * @return \WC_Order|null
+	 */
+	private function get_installment_context_order() {
+		$order_id = 0;
+
+		// phpcs:ignore WordPress.Security.NonceVerification.Missing
+		if ( isset( $_POST['order_id'] ) ) {
+			// phpcs:ignore WordPress.Security.NonceVerification.Missing
+			$order_id = absint( wp_unslash( $_POST['order_id'] ) );
+		}
+
+		// phpcs:ignore WordPress.Security.NonceVerification.Recommended
+		if ( ! $order_id && isset( $_GET['pay_for_order'] ) && isset( $_GET['key'] ) ) {
+			global $wp;
+			$order_id = isset( $wp->query_vars['order-pay'] ) ? absint( $wp->query_vars['order-pay'] ) : 0;
+		}
+
+		if ( ! $order_id ) {
+			return null;
+		}
+
+		$order = wc_get_order( $order_id );
+		if ( ! $order ) {
+			return null;
+		}
+
+		$order_key = '';
+		// phpcs:ignore WordPress.Security.NonceVerification.Missing
+		if ( isset( $_POST['order_key'] ) ) {
+			// phpcs:ignore WordPress.Security.NonceVerification.Missing
+			$order_key = sanitize_text_field( wp_unslash( $_POST['order_key'] ) );
+		// phpcs:ignore WordPress.Security.NonceVerification.Recommended
+		} elseif ( isset( $_GET['key'] ) ) {
+			// phpcs:ignore WordPress.Security.NonceVerification.Recommended
+			$order_key = sanitize_text_field( wp_unslash( $_GET['key'] ) );
+		}
+
+		$current_user_id = get_current_user_id();
+		$is_owner        = $current_user_id && (int) $order->get_user_id() === (int) $current_user_id;
+		$is_key_valid    = $order_key && hash_equals( $order->get_order_key(), $order_key );
+
+		return ( $is_owner || $is_key_valid ) ? $order : null;
+	}
+
+	/**
 	 * Initialize gateway settings form fields.
 	 */
 	public function init_form_fields() {
@@ -103,7 +164,7 @@ class YSCreditInstallment extends YSGatewayBase {
 		}
 
 		$min_amount = (float) $this->get_option( 'min_installment_amount', 3000 );
-		$cart_total = WC()->cart ? (float) WC()->cart->get_total( 'edit' ) : 0;
+		$cart_total = $this->get_installment_context_total();
 
 		if ( $cart_total > 0 && $cart_total < $min_amount ) {
 			return false;
@@ -123,7 +184,7 @@ class YSCreditInstallment extends YSGatewayBase {
 		// Add installment configuration
 		$installments = $this->get_option( 'installments', array() );
 		$min_amount   = (float) $this->get_option( 'min_installment_amount', 3000 );
-		$cart_total   = WC()->cart ? WC()->cart->get_total( 'edit' ) : 0;
+		$cart_total   = $this->get_installment_context_total();
 
 		if ( ! empty( $installments ) && $cart_total >= $min_amount ) {
 			$config['installmentCounts'] = array_values( $installments );
