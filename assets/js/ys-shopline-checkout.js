@@ -22,7 +22,7 @@ jQuery(function ($) {
         'ys_shopline_credit_installment': {
             paymentMethod: 'CreditCard',
             containerId: 'ys_shopline_credit_installment_container',
-            supportsBindCard: true,
+            supportsBindCard: false,
             supportsInstallment: true
         },
         'ys_shopline_credit_subscription': {

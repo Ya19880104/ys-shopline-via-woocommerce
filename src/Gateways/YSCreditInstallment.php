@@ -192,8 +192,8 @@ class YSCreditInstallment extends YSGatewayBase {
 	public function get_sdk_config() {
 		$config = parent::get_sdk_config();
 
-		// 強制移除 customerToken（SDK 不顯示 saved cards UI）
-		unset( $config['customerToken'] );
+		// 強制移除綁卡相關設定（SDK 不顯示 saved cards / save-card UI）
+		unset( $config['customerToken'], $config['paymentInstrument'], $config['forceSaveCard'] );
 
 		// v3.5.11: installments 配置 — 用 codex 抽出的 get_installment_context_total() helper
 		// 該 helper 已涵蓋 AJAX order_id / URL pay_for_order / cart 三種來源

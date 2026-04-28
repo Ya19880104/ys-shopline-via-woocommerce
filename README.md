@@ -4,7 +4,7 @@
 
 ## 版本資訊
 
-- **目前版本**：3.5.11
+- **目前版本**：3.5.12
 - **PHP 需求**：>= 8.0
 - **WordPress 需求**：>= 6.0
 - **WooCommerce 需求**：7.0 - 9.0
@@ -25,7 +25,7 @@
 ## 主要功能
 
 - **HPOS 相容**：完全支援 WooCommerce High-Performance Order Storage
-- **Block Checkout**：已註冊但尚未完整支援（目前僅支援傳統結帳頁）
+- **Block Checkout**：已停用（目前僅支援傳統結帳頁）
 - **訂閱支援**：與 WooCommerce Subscriptions 整合
 - **儲存卡管理**：My Account 頁面管理已儲存的付款工具
 - **Webhook 整合**：自動接收 Shopline 付款狀態通知
@@ -65,6 +65,15 @@ https://your-domain.com/wp-json/ys-shopline/v1/webhook
 ---
 
 ## 變更紀錄
+
+### 3.5.12 - 2026-04-29
+
+**分期 saved-card 停用策略一致性修補**
+
+- 前端 `ys_shopline_credit_installment` 改為 `supportsBindCard:false`，避免後續 fallback 邏輯把分期誤判為可綁卡 gateway。
+- 分期 SDK config 明確移除 `customerToken` / `paymentInstrument` / `forceSaveCard`，確保分期只走新卡輸入，不顯示既有卡或儲存卡 UI。
+- 靜態 regression test 改為驗證 v3.5.11 的新產品策略：分期不混用 bindCard / saved card。
+- README 修正 Block Checkout 目前為停用狀態，避免交付文件與程式行為不一致。
 
 ### 3.5.11 - 2026-04-29
 
