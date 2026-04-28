@@ -68,12 +68,85 @@ https://your-domain.com/wp-json/ys-shopline/v1/webhook
 
 ### 3.5.11 - 2026-04-29
 
-**修正信用卡分期被建成一次付清的資料流**
+**分期不混用綁卡 + PROCESSING/AUTHORIZED 中間態 + ICON 本地化 + 分期期數送單筆修正**
 
-- 重新付款頁的信用卡分期 SDK config 改用訂單金額判斷 `installmentCounts`，不再依賴空購物車。
-- 一般結帳與重新付款都會把 SDK 回傳的分期期數送到後端 `ys_shopline_installment`，後端建立交易時保留 `confirm.installment`。
-- 分期付款仍保留登入會員的儲存卡片能力；只取消分期 gateway 的預設卡自動點選，避免略過分期選擇。
-- Redirect return 遇到 SHOPLINE `CREATED` / `PROCESSING` 會短暫重查交易狀態，降低客戶看到等待付款但交易稍後完成的機率。
+#### Codex 部分（先 push）
+- 信用卡分期被建成一次付清的資料流修正：SDK 回傳分期期數送到後端 `ys_shopline_installment`，後端建立交易時保留 `confirm.installment`（修「送單筆而非分期」bug）
+- 重新付款頁的 SDK config 用訂單金額判斷 `installmentCounts`（pay-for-order 頁 cart 為空問題）
+- Redirect return 遇 `CREATED`/`PROCESSING` 短暫 polling 3×2 秒重查交易狀態
+- `get_installment_context_total()` helper 抽取（從 cart / order 統一抓金額）
+
+#### 本次補充（Claude 部分）
+
+#### A. 分期 gateway 強制 disable bindCard / customerToken / saved card UI
+
+**問題**：v3.5.10 之前分期 gateway 同時啟用 bindCard，但 SHOPLINE 規格將「分期」歸類為**一般收款**，「綁卡/快捷/定期」是另一獨立場景，兩者混用造成：
+- #1290 / #1291 撞 1018 Business error / CONFIRM_FAILED（user 選 saved card → SDK 不暴露 instrumentId → 後端誤走 CardBindPayment → SHOPLINE 拒絕重綁同卡）
+- 分期下誤觸發 v3.5.10 BIND_CARD_NOT_PERSISTED 警告
+- 分期下 v3.5.8 default 卡 auto-select 邏輯誤跑
+
+**修法**：
+- `YSCreditInstallment::get_sdk_config`：`unset($config['customerToken'])`，不再注入 `paymentInstrument.bindCard`
+- `YSGatewayBase::prepare_payment_data`：對 `ys_shopline_credit_installment` 強制 `$use_bind_card = false`
+- 分期一律走 `Regular` paymentBehavior，跟業界標竿（Stripe/綠界/藍新）對齊
+
+**影響**：
+- 一般信用卡（`ys_shopline_credit`）saved card 流程**完全不變**
+- 訂閱 gateway（`ys_shopline_credit_subscription`）的 bindCard 完全保留
+- 只有分期 gateway 行為改變：UI 不顯示 saved cards，使用者一律「使用新卡」填卡
+
+#### B. PROCESSING/AUTHORIZED 中間態處理 + 感謝頁綠標
+
+**問題**：v3.3.3 起就存在的 UX bug — 高額信用卡 / 分期走 hitrust 3DS 後 SHOPLINE 進 `status=PROCESSING + subStatus=AUTHORIZED` 中間態（卡片已授權，等待 capture/settle 1-3 分鐘），`YSRedirectHandler` 只認 `SUCCEEDED` → 訂單卡 pending → 感謝頁顯示「付款尚未完成」。
+
+**修法**：
+- `YSRedirectHandler::check_and_update_order` 加 `subStatus` 讀取 + 中間態分支
+  ```php
+  || ( 'PROCESSING' === $status && in_array( $sub_status, ['AUTHORIZED', 'CAPTURING'], true ) )
+  ```
+  → 訂單設 `on-hold` + meta `PAYMENT_AUTHORIZED_PENDING=yes` + order note
+- `YSOrderDisplay::display_payment_status_notice` 加綠章「**已授權，等待金流回傳確認**」
+  - 友善訊息「您的卡片已成功授權，金額已預留。SHOPLINE 通常在 1-3 分鐘內完成最終確認，您將收到通知信。」
+- 後續 webhook trade.succeeded 觸發時 `payment_complete()` 自動清除中間態
+
+#### C. 信用卡 brand ICON 本地化
+
+**問題**：`YSCreditCard::get_icon` / `YSCreditInstallment::get_icon` 用 `WC()->plugin_url()/assets/images/icons/credit-cards/*.svg`，但 WC 6+ 已移除這些 icon，造成圖示破損。
+
+**修法**：
+- 改用插件自帶的 `assets/images/visa.svg / mastercard.svg / jcb.svg`（已存在）
+- 透過 `YS_SHOPLINE_PLUGIN_URL`（自帶 https）載入
+- 移除 `use WC_HTTPS;` 匿用 import
+
+#### D. Codex P2 webhook race 修正
+
+Codex 提出：v3.5.10 在 `YSWebhookHandler::handle_trade_succeeded` 路徑也呼叫 `maybe_note_bind_card_not_persisted` 會產生 race condition：
+- SHOPLINE 兩個 webhook 非同時到（trade.succeeded 先 / customer.instrument.binded 後）
+- 第一個來時就標 BIND_CARD_NOT_PERSISTED 警告
+- 第二個來時雖建 token，但 admin notes 已留錯誤警告
+
+**修法**：webhook 路徑**不寫** warning，改成只在 redirect handler（同步 GET response 已有完整資料）寫。webhook 流程由 trade.succeeded 自然觸發 sync_payment_token。
+
+#### E. 採納 Codex working tree 重構
+
+- 抽 `YSRedirectHandler::maybe_note_bind_card_not_persisted()` 為 public static method（冪等 + 型別防衛 + `is_bool/is_scalar` 處理 non-scalar `savePaymentInstrument`）
+- 加 meta keys：`BIND_CARD_ATTEMPTED` / `BIND_CARD_NOT_PERSISTED` / `PAYMENT_AUTHORIZED_PENDING`
+- 不再覆寫 `PAYMENT_STATUS=SUCCEEDED_BIND_NOT_PERSISTED`，改用獨立 meta 保留 SHOPLINE 原始狀態
+- 統一魔法字串 → constant
+
+#### F. 不影響的部分
+- 一般 CC + saved card 下單 ✓ 不變
+- 一般 CC + 新卡 + 勾儲存 ✓ 不變
+- 訂閱（CardBind / Recurring / change-payment）✓ 完全不變
+- 刪卡 / 新增卡 / unbind API ✓ 不變
+
+#### G. polling + on-hold + webhook 三層中間機制
+SHOPLINE PROCESSING 中間態處理鏈：
+1. **redirect handler 短期 polling**（codex，max 6 秒）— 快速 settle 直接 SUCCEEDED
+2. **on-hold + 綠章 fallback**（claude）— polling timeout 還在 PROCESSING/AUTHORIZED 走此路徑
+3. **webhook trade.succeeded** — payment_complete + 清除 PAYMENT_AUTHORIZED_PENDING meta
+
+涵蓋從 sandbox 立即 settle 到 hitrust 4 分鐘 settle 全光譜。
 
 ### 3.5.10 - 2026-04-25
 
@@ -96,14 +169,18 @@ https://your-domain.com/wp-json/ys-shopline/v1/webhook
 **Step 1 - process_payment 階段標記**（`YSGatewayBase.php`）：
 ```php
 if ( 'CardBindPayment' === $payment_behavior && empty( $payment_instrument_id ) && $user_id ) {
-    $order->update_meta_data( '_ys_shopline_bind_card_attempted', 'yes' );
+    $order->update_meta_data( YSOrderMeta::BIND_CARD_ATTEMPTED, 'yes' );
 }
 ```
 
 **Step 2 - redirect handler 收到 SHOPLINE response 後判斷**（`YSRedirectHandler.php`）：
-- 若 `paymentInstrumentId` 為空 **且** order meta `_ys_shopline_bind_card_attempted=yes`
-  → 寫 order note 警告 + meta `PAYMENT_STATUS=SUCCEEDED_BIND_NOT_PERSISTED`
+- 若 `paymentInstrumentId` 為空 **且** order meta `BIND_CARD_ATTEMPTED=yes`
+  → 寫 order note 警告 + meta `BIND_CARD_NOT_PERSISTED=yes`
   → log warning（含 SHOPLINE response 的 savePaymentInstrument flag 與降級後的 paymentBehavior）
+
+**Step 3 - webhook-first 時序補強**（`YSWebhookHandler.php`）：
+- 若 webhook 先把訂單標成已付款，也會走同一個 warning helper
+- `_ys_shopline_payment_status` 保留 SHOPLINE 原始付款狀態（例如 `SUCCEEDED`），不再用警告狀態覆蓋付款狀態
 
 #### 管理員體驗
 之前：訂單 processing，沒 token，沒任何訂單備註說明 → 完全黑箱
@@ -111,7 +188,7 @@ if ( 'CardBindPayment' === $payment_behavior && empty( $payment_instrument_id ) 
 
 #### 不變的部分
 - 本筆訂單付款已 SUCCEEDED 不變（純付款功能正常）
-- QuickPayment（既有卡）流程不受影響（不會誤報，因為 `_ys_shopline_bind_card_attempted` 只標 CardBindPayment）
+- QuickPayment（既有卡）流程不受影響（不會誤報，因為 `BIND_CARD_ATTEMPTED` 只標 CardBindPayment）
 - 訂閱續扣不受影響（subscription 走 Recurring）
 
 #### 沙盒測試小提醒

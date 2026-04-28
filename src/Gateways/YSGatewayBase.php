@@ -817,18 +817,24 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
         // - CardBindPayment: 綁卡付款（輸入卡號並儲存）- SDK 啟用 bindCard 時使用
         // - QuickPayment: 快捷付款（使用已綁定的卡片，需要 paymentCustomerId + paymentInstrumentId）
         //
+        // v3.5.11: 分期 gateway 強制 disable bindCard（對齊 SHOPLINE 規格 + 業界標竿）
+        // 分期屬於「一般收款」場景，不屬於「綁卡/快捷/定期」場景
+        if ( 'ys_shopline_credit_installment' === $this->id ) {
+            $use_bind_card = false;
+        }
+
         // 重要：當 SDK 啟用 bindCard 時，paySession 已包含用戶是否勾選儲存卡片的資訊
         // 後端使用 CardBindPayment + savePaymentInstrument=true，
         // API 會根據 paySession 中的用戶選擇來決定是否實際儲存卡片
-        if ( ! empty( $payment_instrument_id ) ) {
-            // 使用已綁定的卡片
+        if ( ! empty( $payment_instrument_id ) && $use_bind_card ) {
+            // 使用已綁定的卡片（僅在啟用 bindCard 的 gateway 上有效）
             $payment_behavior = 'QuickPayment';
         } elseif ( $use_bind_card ) {
             // SDK 啟用了綁卡功能，使用 CardBindPayment
             // paySession 已包含用戶是否勾選儲存的選擇
             $payment_behavior = 'CardBindPayment';
         } else {
-            // 一般付款（SDK 未啟用綁卡）
+            // 一般付款（SDK 未啟用綁卡，例如分期、訪客）
             $payment_behavior = 'Regular';
         }
 
@@ -902,10 +908,10 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
             'client'           => $this->build_client_info( $client_ip ),
         );
 
-        // v3.5.10: 標記「新卡 + 要求儲存」路徑（非 QuickPayment、非訂閱、登入用戶 + bindCard）
+        // v3.5.10: 標記「新卡 + 要求儲存」路徑（非 QuickPayment、登入用戶 + bindCard）
         // 用途：redirect handler 判斷 SHOPLINE 是否真的有建 paymentInstrument，沒有就警告
         if ( 'CardBindPayment' === $payment_behavior && empty( $payment_instrument_id ) && $user_id ) {
-            $order->update_meta_data( '_ys_shopline_bind_card_attempted', 'yes' );
+            $order->update_meta_data( YSOrderMeta::BIND_CARD_ATTEMPTED, 'yes' );
             $order->save();
         }
 

@@ -142,11 +142,15 @@ class YSRedirectHandler {
             'paymentMethod'       => $response['paymentMethod'] ?? ( $response['payment']['paymentMethod'] ?? 'unknown' ),
         ) );
 
-        $status = isset( $response['status'] ) ? $response['status'] : '';
+        $status     = isset( $response['status'] ) ? $response['status'] : '';
+        // v3.5.11: SHOPLINE 中間態須讀 subStatus（hitrust 3DS 後常見：PROCESSING + AUTHORIZED）
+        $sub_status = isset( $response['subStatus'] ) ? $response['subStatus'] : '';
 
         if ( self::is_transient_payment_status( $status ) ) {
-            $response = self::poll_processing_status( $api, $trade_order_id, $response );
-            $status   = isset( $response['status'] ) ? $response['status'] : $status;
+            $response   = self::poll_processing_status( $api, $trade_order_id, $response );
+            $status     = isset( $response['status'] ) ? $response['status'] : $status;
+            // v3.5.11: polling 後 sub_status 也要重新取（hitrust 3DS 中間態判斷需要）
+            $sub_status = isset( $response['subStatus'] ) ? $response['subStatus'] : $sub_status;
         }
 
         // 根據狀態更新訂單
@@ -217,38 +221,8 @@ class YSRedirectHandler {
                     // 如果此訂單有關聯 subscription，將 instrument_id 寫入 subscription meta
                     // 放在 sync_payment_token 外面，因為不管 token 是新建還是已存在都要執行
                     self::update_subscription_instrument( $order, $payment_instrument_id );
-                } elseif ( 'yes' === $order->get_meta( '_ys_shopline_bind_card_attempted' ) ) {
-                    // v3.5.10: 使用者勾選了儲存卡片，但 SHOPLINE response 沒回 paymentInstrumentId。
-                    //
-                    // 已知情境：
-                    //   1. 沙盒 non-3D 流程（金額去末兩位為奇數）→ SHOPLINE 自動把
-                    //      paymentBehavior 從 CardBindPayment 降級為 Regular，不建 instrument
-                    //   2. 卡片不支援 binding（issuer 限制）
-                    //   3. 商家 SHOPLINE 帳號未開通 binding 功能
-                    //   4. 風控未走 3DS 而走 fast-path
-                    //
-                    // 對策：寫 order note + meta 讓管理員可從備註查到，避免「使用者誤以為已綁卡」。
-                    // 不影響本筆訂單付款（已 SUCCEEDED），但下次仍需重新輸入卡片。
-                    $shopline_save_flag = $payment_instrument['savePaymentInstrument'] ?? null;
-                    $flag_str = ( null === $shopline_save_flag )
-                        ? 'unset'
-                        : ( $shopline_save_flag ? 'true' : 'false' );
-
-                    $order->add_order_note( sprintf(
-                        /* translators: %s: SHOPLINE response 的 savePaymentInstrument 旗標值 */
-                        __(
-                            'Shopline 金流：使用者勾選了「儲存卡片」，但 SHOPLINE 未建立 paymentInstrument（response savePaymentInstrument=%s）。可能原因：(1) 沙盒 non-3D 流程不支援綁卡 (2) 卡片不支援綁定 (3) 商家帳號未開通綁卡 (4) 金額/風控未走 3DS。本訂單付款已完成，但下次仍需重新輸入卡片。',
-                            'ys-shopline-via-woocommerce'
-                        ),
-                        $flag_str
-                    ) );
-                    $order->update_meta_data( YSOrderMeta::PAYMENT_STATUS, 'SUCCEEDED_BIND_NOT_PERSISTED' );
-
-                    YSLogger::warning( 'CardBindPayment requested but SHOPLINE did not return paymentInstrumentId', array(
-                        'order_id'                 => $order->get_id(),
-                        'shopline_save_flag'       => $flag_str,
-                        'shopline_payment_behavior' => $response['payment']['paymentBehavior'] ?? $response['paymentBehavior'] ?? 'unknown',
-                    ) );
+                } else {
+                    self::maybe_note_bind_card_not_persisted( $order, $payment_instrument, $response );
                 }
 
                 // 儲存完整的付款詳情
@@ -267,10 +241,27 @@ class YSRedirectHandler {
                     'status'   => $status,
                 ) );
             }
-        } elseif ( 'AUTHORIZED' === $status ) {
-            // 已授權但未請款（手動請款模式）
-            $order->update_status( 'on-hold', __( 'SHOPLINE 付款已授權，等待請款。', 'ys-shopline-via-woocommerce' ) );
+        } elseif ( 'AUTHORIZED' === $status
+            || ( 'PROCESSING' === $status && in_array( $sub_status, array( 'AUTHORIZED', 'CAPTURING' ), true ) ) ) {
+            // v3.5.11: 兩種已授權待 capture 情境
+            //   1. status=AUTHORIZED：手動請款模式
+            //   2. status=PROCESSING + subStatus=AUTHORIZED：hitrust 3DS 後 SHOPLINE 進中間態
+            //      （高額信用卡 / 分期一定會經過此中間態）
+            //
+            // 不能讓使用者看到「付款尚未完成」，要顯示「已授權等待金流回傳確認」綠標
+            // 訂單狀態設 on-hold，meta PAYMENT_AUTHORIZED_PENDING=yes 給 OrderDisplay 用
+            if ( ! $order->is_paid() && 'on-hold' !== $order->get_status() ) {
+                $order->update_status( 'on-hold', __( 'SHOPLINE 付款已授權，等待金流回傳確認。', 'ys-shopline-via-woocommerce' ) );
+                $order->add_order_note( sprintf(
+                    /* translators: 1: status, 2: subStatus, 3: trade order id */
+                    __( 'Shopline 金流：交易已授權（%1$s/%2$s），等待 SHOPLINE webhook 完成 capture（trade=%3$s）。', 'ys-shopline-via-woocommerce' ),
+                    $status,
+                    $sub_status ?: '-',
+                    $trade_order_id
+                ) );
+            }
             $order->update_meta_data( YSOrderMeta::PAYMENT_STATUS, 'AUTHORIZED' );
+            $order->update_meta_data( YSOrderMeta::PAYMENT_AUTHORIZED_PENDING, 'yes' );
             $order->save();
         } elseif ( 'FAILED' === $status ) {
             // 付款失敗：保留原始訊息供管理員除錯，顯示友善訊息給客戶
@@ -374,6 +365,10 @@ class YSRedirectHandler {
     /**
      * Re-query transient payment statuses before rendering the return page.
      *
+     * v3.5.11 短期 polling（codex 加）：3 次×2 秒 = max 6 秒。
+     * polling 後仍 PROCESSING → 由 check_and_update_order 走 PROCESSING+AUTHORIZED 分支
+     * 設 on-hold + 綠章「已授權待 capture」並等 webhook 完成最終 capture（fallback 機制）。
+     *
      * @param object $api            SHOPLINE API client.
      * @param string $trade_order_id Trade order ID.
      * @param array  $response       Initial response.
@@ -408,6 +403,67 @@ class YSRedirectHandler {
         }
 
         return $latest;
+    }
+
+    /**
+     * Add an admin-facing warning when SHOPLINE does not persist a requested new card.
+     *
+     * v3.5.11 codex 重構：抽 method + is_bool/is_scalar 防衛 + 冪等保護。
+     * v3.5.10 內聯邏輯改用此 method。
+     *
+     * @param \WC_Order $order              Order object.
+     * @param array     $payment_instrument SHOPLINE paymentInstrument response.
+     * @param array     $response           Full SHOPLINE response.
+     * @return bool True when the missing-instrument warning applies.
+     */
+    public static function maybe_note_bind_card_not_persisted( $order, $payment_instrument, array $response ) {
+        if ( 'yes' !== $order->get_meta( YSOrderMeta::BIND_CARD_ATTEMPTED ) ) {
+            return false;
+        }
+
+        if ( ! is_array( $payment_instrument ) ) {
+            $payment_instrument = array();
+        }
+
+        $payment_instrument_id = $payment_instrument['paymentInstrumentId']
+            ?? $payment_instrument['instrumentId']
+            ?? '';
+
+        if ( '' !== (string) $payment_instrument_id ) {
+            return false;
+        }
+
+        $shopline_save_flag = $payment_instrument['savePaymentInstrument'] ?? null;
+        if ( null === $shopline_save_flag ) {
+            $flag_str = 'unset';
+        } elseif ( is_bool( $shopline_save_flag ) ) {
+            $flag_str = $shopline_save_flag ? 'true' : 'false';
+        } elseif ( is_scalar( $shopline_save_flag ) ) {
+            $flag_str = (string) $shopline_save_flag;
+        } else {
+            $flag_str = 'non-scalar';
+        }
+
+        if ( 'yes' !== $order->get_meta( YSOrderMeta::BIND_CARD_NOT_PERSISTED ) ) {
+            $order->add_order_note( sprintf(
+                /* translators: %s: SHOPLINE response 的 savePaymentInstrument 旗標值 */
+                __(
+                    'Shopline 金流：使用者勾選了「儲存卡片」，但 SHOPLINE 未建立 paymentInstrument（response savePaymentInstrument=%s）。可能原因：(1) 沙盒 non-3D 流程不支援綁卡 (2) 卡片不支援綁定 (3) 商家帳號未開通綁卡 (4) 金額/風控未走 3DS。本訂單付款已完成，但下次仍需重新輸入卡片。',
+                    'ys-shopline-via-woocommerce'
+                ),
+                $flag_str
+            ) );
+        }
+
+        $order->update_meta_data( YSOrderMeta::BIND_CARD_NOT_PERSISTED, 'yes' );
+
+        YSLogger::warning( 'CardBindPayment requested but SHOPLINE did not return paymentInstrumentId', array(
+            'order_id'                  => $order->get_id(),
+            'shopline_save_flag'        => $flag_str,
+            'shopline_payment_behavior' => $response['payment']['paymentBehavior'] ?? $response['paymentBehavior'] ?? 'unknown',
+        ) );
+
+        return true;
     }
 
     /**

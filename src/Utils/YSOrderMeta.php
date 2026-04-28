@@ -43,6 +43,15 @@ final class YSOrderMeta {
     /** @var string 付款工具 ID（subscription meta） */
     public const PAYMENT_INSTRUMENT_ID = '_ys_shopline_payment_instrument_id';
 
+    /** @var string 本次付款是否曾要求 SHOPLINE 儲存新卡 */
+    public const BIND_CARD_ATTEMPTED = '_ys_shopline_bind_card_attempted';
+
+    /** @var string SHOPLINE 付款成功但未回傳 paymentInstrumentId */
+    public const BIND_CARD_NOT_PERSISTED = '_ys_shopline_bind_card_not_persisted';
+
+    /** @var string SHOPLINE 已授權但尚未 capture (PROCESSING/AUTHORIZED 中間態) v3.5.11 */
+    public const PAYMENT_AUTHORIZED_PENDING = '_ys_shopline_payment_authorized_pending';
+
     /** @var string 付款嘗試次數 */
     public const PAYMENT_ATTEMPT = '_ys_shopline_payment_attempt';
 

@@ -290,6 +290,14 @@ final class YSWebhookHandler {
 
         // 完成付款流程
         $order->payment_complete( $trade_order_id );
+
+        // v3.5.11: 清除 PROCESSING/AUTHORIZED 中間態 meta
+        // 訂閱續扣 / hitrust 3DS 中間態 → webhook 來確認後解除「等待 capture」狀態
+        if ( 'yes' === $order->get_meta( YSOrderMeta::PAYMENT_AUTHORIZED_PENDING ) ) {
+            $order->delete_meta_data( YSOrderMeta::PAYMENT_AUTHORIZED_PENDING );
+            $order->add_order_note( __( 'Shopline 金流：webhook capture 完成，已授權中間態解除。', 'ys-shopline-via-woocommerce' ) );
+        }
+
         $order->add_order_note(
             sprintf(
                 /* translators: %s: Trade order ID */
@@ -303,6 +311,19 @@ final class YSWebhookHandler {
         if ( is_string( $payment_method ) && '' !== $payment_method ) {
             $order->update_meta_data( YSOrderMeta::PAYMENT_METHOD, $payment_method );
         }
+
+        // v3.5.11: 不在此處呼叫 maybe_note_bind_card_not_persisted。
+        //
+        // 原因（codex review P2 race condition）：
+        //   SHOPLINE 綁卡涉及兩個 webhook：
+        //     1. trade.succeeded / payment.success (付款 webhook)
+        //     2. customer.instrument.binded / paymentInstrument.created (綁卡 webhook)
+        //   兩者非同時到。如果 #1 先到、#2 還沒到，這裡判斷 paymentInstrumentId 為空 →
+        //   錯誤標記 BIND_CARD_NOT_PERSISTED；等 #2 來時 token 雖然會建好，但 admin
+        //   notes 已經留錯誤警告。
+        //
+        // 改採：只在 redirect handler 同步流程（已有完整 GET response）寫 warning。
+        // webhook 路徑不寫，由 trade.succeeded 觸發 sync_payment_token 自然處理 token 建立。
 
         $status = $this->normalize_payment_status( (string) ( $data['status'] ?? 'SUCCEEDED' ) );
         $order->update_meta_data( YSOrderMeta::TRADE_ORDER_ID, $trade_order_id );

@@ -9,7 +9,7 @@ namespace YangSheep\ShoplinePayment\Gateways;
 
 defined( 'ABSPATH' ) || exit;
 
-use WC_HTTPS;
+// v3.5.11: WC_HTTPS removed — get_icon() now uses local SVG via YS_SHOPLINE_PLUGIN_URL (already https)
 use YangSheep\ShoplinePayment\Utils\YSOrderMeta;
 
 /**
@@ -176,12 +176,27 @@ class YSCreditInstallment extends YSGatewayBase {
 	/**
 	 * Get SDK configuration.
 	 *
+	 * v3.5.11: 分期 gateway 強制不啟用 bindCard / customerToken / saved card UI。
+	 *
+	 * 對齊 SHOPLINE 規格：分期屬於「一般收款」場景，不屬於「綁卡/快捷/定期」場景。
+	 * 業界標竿一致（Stripe / 綠界 / 藍新分期都不顯示 saved card）。
+	 *
+	 * 解決問題：
+	 *   - #1290/#1291 1018 Business error（user 選 saved card → SDK 不暴露 instrumentId
+	 *     → 後端誤走 CardBindPayment → SHOPLINE 拒絕重綁同卡）
+	 *   - 分期下 v3.5.10 假觸發 BIND_CARD_NOT_PERSISTED 警告
+	 *   - 分期下 v3.5.8 default 卡 auto-select 邏輯誤跑
+	 *
 	 * @return array
 	 */
 	public function get_sdk_config() {
 		$config = parent::get_sdk_config();
 
-		// Add installment configuration
+		// 強制移除 customerToken（SDK 不顯示 saved cards UI）
+		unset( $config['customerToken'] );
+
+		// v3.5.11: installments 配置 — 用 codex 抽出的 get_installment_context_total() helper
+		// 該 helper 已涵蓋 AJAX order_id / URL pay_for_order / cart 三種來源
 		$installments = $this->get_option( 'installments', array() );
 		$min_amount   = (float) $this->get_option( 'min_installment_amount', 3000 );
 		$cart_total   = $this->get_installment_context_total();
@@ -190,21 +205,8 @@ class YSCreditInstallment extends YSGatewayBase {
 			$config['installmentCounts'] = array_values( $installments );
 		}
 
-		// Add bind card configuration for logged-in users
-		$has_customer_token = isset( $config['customerToken'] ) && ! empty( $config['customerToken'] );
-
-		if ( $has_customer_token ) {
-			$config['paymentInstrument'] = array(
-				'bindCard' => array(
-					'enable'   => true,
-					'protocol' => array(
-						'switchVisible'       => true,
-						'defaultSwitchStatus' => false,
-						'mustAccept'          => false,
-					),
-				),
-			);
-		}
+		// v3.5.11: 不啟用 bindCard（分期 token charge 與 issuer 分期確認流程不相容）
+		// 移除 codex 保留的 $has_customer_token bindCard 啟用區塊（其實 unset customerToken 後該區也不會跑）
 
 		return $config;
 	}
@@ -229,14 +231,19 @@ class YSCreditInstallment extends YSGatewayBase {
 	/**
 	 * Get icon HTML.
 	 *
+	 * v3.5.11: 改用本地化 SVG（assets/images/）。
+	 * 原本使用 WC()->plugin_url()/assets/images/icons/credit-cards/* 在 WC 6+ 已移除，
+	 * 改成插件自帶 SVG 確保 icon 不失效，也不依賴 WC 資源路徑。
+	 *
 	 * @return string
 	 */
 	public function get_icon() {
-		$icons = array();
-
-		$icons[] = '<img src="' . WC_HTTPS::force_https_url( WC()->plugin_url() . '/assets/images/icons/credit-cards/visa.svg' ) . '" alt="Visa" width="32" />';
-		$icons[] = '<img src="' . WC_HTTPS::force_https_url( WC()->plugin_url() . '/assets/images/icons/credit-cards/mastercard.svg' ) . '" alt="Mastercard" width="32" />';
-		$icons[] = '<img src="' . WC_HTTPS::force_https_url( WC()->plugin_url() . '/assets/images/icons/credit-cards/jcb.svg' ) . '" alt="JCB" width="32" />';
+		$base = YS_SHOPLINE_PLUGIN_URL . 'assets/images/';
+		$icons = array(
+			'<img src="' . esc_url( $base . 'visa.svg' ) . '" alt="Visa" width="32" />',
+			'<img src="' . esc_url( $base . 'mastercard.svg' ) . '" alt="Mastercard" width="32" />',
+			'<img src="' . esc_url( $base . 'jcb.svg' ) . '" alt="JCB" width="32" />',
+		);
 
 		return apply_filters( 'woocommerce_gateway_icon', implode( ' ', $icons ), $this->id );
 	}

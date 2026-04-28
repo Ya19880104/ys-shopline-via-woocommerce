@@ -100,11 +100,55 @@ class YSOrderDisplay {
 			return;
 		}
 
+		// v3.5.11: 信用卡 / 分期 hitrust 3DS 中間態 — 已授權待 capture
+		// 顯示綠色標章「已授權等待金流回傳確認」，避免使用者誤以為「付款尚未完成」
+		if ( 'on-hold' === $status && 'yes' === $order->get_meta( YSOrderMeta::PAYMENT_AUTHORIZED_PENDING ) ) {
+			$this->render_authorized_pending_notice( $order );
+			return;
+		}
+
 		// 付款失敗或等待付款
 		if ( in_array( $status, array( 'failed', 'pending', 'on-hold' ), true ) ) {
 			$this->render_pending_or_failed_notice( $order );
 			return;
 		}
+	}
+
+	/**
+	 * v3.5.11: 渲染「已授權等待金流回傳確認」綠色標章。
+	 *
+	 * 適用情境：信用卡 / 分期走 hitrust 3DS 後 SHOPLINE 進 PROCESSING/AUTHORIZED
+	 * 中間態（卡片已授權，金額已預留），等待 SHOPLINE webhook 觸發 capture。
+	 *
+	 * @param \WC_Order $order 訂單物件
+	 */
+	private function render_authorized_pending_notice( $order ) {
+		$trade_order_id = $order->get_meta( YSOrderMeta::TRADE_ORDER_ID );
+		$payment_method = $order->get_meta( YSOrderMeta::PAYMENT_METHOD );
+		$method_display = $this->get_payment_method_display( $payment_method );
+		?>
+		<div class="ys-shopline-notice ys-shopline-notice-success">
+			<div class="ys-shopline-notice-icon">✓</div>
+			<div class="ys-shopline-notice-content">
+				<h3><?php esc_html_e( '已授權，等待金流回傳確認', 'ys-shopline-via-woocommerce' ); ?></h3>
+				<p>
+					<?php esc_html_e( '您的卡片已成功授權，金額已預留。SHOPLINE 通常在 1-3 分鐘內完成最終確認，您將收到通知信。', 'ys-shopline-via-woocommerce' ); ?>
+				</p>
+				<ul class="ys-shopline-payment-info">
+					<li>
+						<strong><?php esc_html_e( '付款方式：', 'ys-shopline-via-woocommerce' ); ?></strong>
+						<?php echo esc_html( $method_display ); ?>
+					</li>
+					<?php if ( $trade_order_id ) : ?>
+					<li>
+						<strong><?php esc_html_e( '交易編號：', 'ys-shopline-via-woocommerce' ); ?></strong>
+						<?php echo esc_html( $trade_order_id ); ?>
+					</li>
+					<?php endif; ?>
+				</ul>
+			</div>
+		</div>
+		<?php
 	}
 
 	/**

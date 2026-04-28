@@ -9,7 +9,7 @@ namespace YangSheep\ShoplinePayment\Gateways;
 
 defined( 'ABSPATH' ) || exit;
 
-use WC_HTTPS;
+// v3.5.11: WC_HTTPS removed — get_icon() now uses local SVG via YS_SHOPLINE_PLUGIN_URL (already https)
 use YangSheep\ShoplinePayment\Utils\YSOrderMeta;
 
 /**
@@ -177,11 +177,13 @@ class YSCreditCard extends YSGatewayBase {
      * @return string
      */
     public function get_icon() {
-        $icons = array();
-
-        $icons[] = '<img src="' . WC_HTTPS::force_https_url( WC()->plugin_url() . '/assets/images/icons/credit-cards/visa.svg' ) . '" alt="Visa" width="32" />';
-        $icons[] = '<img src="' . WC_HTTPS::force_https_url( WC()->plugin_url() . '/assets/images/icons/credit-cards/mastercard.svg' ) . '" alt="Mastercard" width="32" />';
-        $icons[] = '<img src="' . WC_HTTPS::force_https_url( WC()->plugin_url() . '/assets/images/icons/credit-cards/jcb.svg' ) . '" alt="JCB" width="32" />';
+        // v3.5.11: 改用本地化 SVG（assets/images/）— 詳見 YSCreditInstallment::get_icon 註釋
+        $base = YS_SHOPLINE_PLUGIN_URL . 'assets/images/';
+        $icons = array(
+            '<img src="' . esc_url( $base . 'visa.svg' ) . '" alt="Visa" width="32" />',
+            '<img src="' . esc_url( $base . 'mastercard.svg' ) . '" alt="Mastercard" width="32" />',
+            '<img src="' . esc_url( $base . 'jcb.svg' ) . '" alt="JCB" width="32" />',
+        );
 
         return apply_filters( 'woocommerce_gateway_icon', implode( ' ', $icons ), $this->id );
     }
