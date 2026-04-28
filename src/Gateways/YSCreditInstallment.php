@@ -256,7 +256,11 @@ class YSCreditInstallment extends YSGatewayBase {
 		$installment = isset( $_POST['ys_shopline_installment'] ) ? absint( $_POST['ys_shopline_installment'] ) : 0;
 
 		if ( $installment > 0 ) {
-			$data['confirm']['installment'] = $installment;
+			$data['confirm']['paymentMethodOptions'] = array(
+				'installments' => array(
+					'count' => (string) $installment,
+				),
+			);
 			$order->update_meta_data( YSOrderMeta::INSTALLMENT, $installment );
 			$order->save();
 		}

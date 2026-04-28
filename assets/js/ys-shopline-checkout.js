@@ -1364,6 +1364,21 @@ jQuery(function ($) {
                 return String(value);
             }
 
+            var configMeta = GATEWAY_CONFIG[gatewayId] || {};
+            var $container = configMeta.containerId ? $('#' + configMeta.containerId) : $();
+            var selectedText = '';
+
+            if ($container.length) {
+                selectedText = $container.find('[class*="selectOptionActive"]').first().text() ||
+                    $container.find('[class*="selectWrap"]').first().text() ||
+                    '';
+            }
+
+            var selectedMatch = String(selectedText).match(/x\s*(\d+)\s*期/);
+            if (selectedMatch && selectedMatch[1]) {
+                return String(selectedMatch[1]);
+            }
+
             var config = sdkConfigs[gatewayId] || {};
             var counts = config.installmentCounts || [];
             var nonZeroCounts = $.grep(counts, function (count) {
