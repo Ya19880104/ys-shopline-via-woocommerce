@@ -176,24 +176,31 @@ class YSCreditInstallment extends YSGatewayBase {
 	/**
 	 * Get SDK configuration.
 	 *
-	 * v3.5.11: 分期 gateway 強制不啟用 bindCard / customerToken / saved card UI。
-	 *
-	 * 對齊 SHOPLINE 規格：分期屬於「一般收款」場景，不屬於「綁卡/快捷/定期」場景。
-	 * 業界標竿一致（Stripe / 綠界 / 藍新分期都不顯示 saved card）。
-	 *
-	 * 解決問題：
-	 *   - #1290/#1291 1018 Business error（user 選 saved card → SDK 不暴露 instrumentId
-	 *     → 後端誤走 CardBindPayment → SHOPLINE 拒絕重綁同卡）
-	 *   - 分期下 v3.5.10 假觸發 BIND_CARD_NOT_PERSISTED 警告
-	 *   - 分期下 v3.5.8 default 卡 auto-select 邏輯誤跑
+	 * Credit-card installments use SHOPLINE CreditCard SDK with installmentCounts.
+	 * Logged-in customers keep saved-card UI for QuickPayment; new-card save still
+	 * uses the bindCard protocol when the customer selects that option.
 	 *
 	 * @return array
 	 */
 	public function get_sdk_config() {
 		$config = parent::get_sdk_config();
 
-		// 強制移除綁卡相關設定（SDK 不顯示 saved cards / save-card UI）
-		unset( $config['customerToken'], $config['paymentInstrument'], $config['forceSaveCard'] );
+		// Credit-card installment uses the CreditCard SDK plus installmentCounts.
+		// Keep customerToken/paymentInstrument so SHOPLINE can render saved-card QuickPayment
+		// and the optional new-card save flow in the same SDK UI.
+		if ( ! empty( $config['customerToken'] ) ) {
+			$config['paymentInstrument'] = array(
+				'bindCard' => array(
+					'enable'   => true,
+					'protocol' => array(
+						'switchVisible'       => true,
+						'defaultSwitchStatus' => true,
+						'mustAccept'          => false,
+					),
+				),
+			);
+			unset( $config['forceSaveCard'] );
+		}
 
 		// v3.5.11: installments 配置 — 用 codex 抽出的 get_installment_context_total() helper
 		// 該 helper 已涵蓋 AJAX order_id / URL pay_for_order / cart 三種來源
@@ -204,9 +211,6 @@ class YSCreditInstallment extends YSGatewayBase {
 		if ( ! empty( $installments ) && $cart_total >= $min_amount ) {
 			$config['installmentCounts'] = array_values( $installments );
 		}
-
-		// v3.5.11: 不啟用 bindCard（分期 token charge 與 issuer 分期確認流程不相容）
-		// 移除 codex 保留的 $has_customer_token bindCard 啟用區塊（其實 unset customerToken 後該區也不會跑）
 
 		return $config;
 	}

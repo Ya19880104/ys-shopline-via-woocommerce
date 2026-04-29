@@ -376,8 +376,13 @@ final class YSWebhookHandler {
             return;
         }
 
+        if ( ! $order->is_paid() && 'on-hold' !== $order->get_status() ) {
+            $order->update_status( 'on-hold', __( 'SHOPLINE 付款已授權，等待金流回傳確認。', 'ys-shopline-via-woocommerce' ) );
+        }
+
         $order->add_order_note( __( 'Shopline payment authorized, awaiting capture.', 'ys-shopline-via-woocommerce' ) );
         $order->update_meta_data( YSOrderMeta::PAYMENT_STATUS, 'AUTHORIZED' );
+        $order->update_meta_data( YSOrderMeta::PAYMENT_AUTHORIZED_PENDING, 'yes' );
         $order->update_meta_data( YSOrderMeta::PAYMENT_DETAIL, $data );
         $order->save();
     }
@@ -400,6 +405,10 @@ final class YSWebhookHandler {
 
         if ( ! $order->is_paid() ) {
             $order->payment_complete( $trade_order_id );
+        }
+
+        if ( 'yes' === $order->get_meta( YSOrderMeta::PAYMENT_AUTHORIZED_PENDING ) ) {
+            $order->delete_meta_data( YSOrderMeta::PAYMENT_AUTHORIZED_PENDING );
         }
 
         $order->add_order_note( __( 'Shopline payment captured.', 'ys-shopline-via-woocommerce' ) );
@@ -499,8 +508,17 @@ final class YSWebhookHandler {
             return;
         }
 
-        $order->update_status( 'on-hold', __( 'Shopline payment processing.', 'ys-shopline-via-woocommerce' ) );
-        $order->update_meta_data( YSOrderMeta::PAYMENT_STATUS, 'PROCESSING' );
+        $sub_status = strtoupper( (string) ( $data['subStatus'] ?? '' ) );
+
+        if ( in_array( $sub_status, array( 'AUTHORIZED', 'CAPTURING' ), true ) ) {
+            $order->update_status( 'on-hold', __( 'SHOPLINE 付款已授權，等待金流回傳確認。', 'ys-shopline-via-woocommerce' ) );
+            $order->update_meta_data( YSOrderMeta::PAYMENT_STATUS, 'AUTHORIZED' );
+            $order->update_meta_data( YSOrderMeta::PAYMENT_AUTHORIZED_PENDING, 'yes' );
+        } else {
+            $order->update_status( 'on-hold', __( 'Shopline payment processing.', 'ys-shopline-via-woocommerce' ) );
+            $order->update_meta_data( YSOrderMeta::PAYMENT_STATUS, 'PROCESSING' );
+        }
+
         $order->update_meta_data( YSOrderMeta::PAYMENT_DETAIL, $data );
 
         // 嘗試儲存 ATM 虛擬帳號資訊

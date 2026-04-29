@@ -68,50 +68,26 @@ https://your-domain.com/wp-json/ys-shopline/v1/webhook
 
 ### 3.5.13 - 2026-04-29
 
-**修正登入用戶 saved card 撞 1018 的根因（CardBindPayment 誤觸發）**
+**修正 saved card + 信用卡分期資料流**
 
-#### 根因（前面版本誤判為「SHOPLINE 拒絕重綁同卡」）
+#### 根因
 
-實際上 1018 是**我們插件 request 邏輯錯誤**：
-
-1. SHOPLINE SDK `createPayment().result.paymentInstrumentId` **永遠是空**（已知 SDK 限制）
-2. 前端 hidden input `ys_shopline_payment_instrument_id` 因此永遠是空
-3. 後端 `prepare_payment_data` 看不到 instrument_id → 落入 `elseif ( $use_bind_card )` → 送 `CardBindPayment + savePaymentInstrument:true`
-4. 但使用者實際在 SDK UI 點的是**既有卡** → paySession 內部帶既有 instrumentId
-5. SHOPLINE 看到「paySession 帶既有卡 + request 要綁卡」矛盾 → **降級 Regular** + **拒絕付款** → `code 1018 Business error`
-
-→ 既有卡 + 一次付清也會撞 1018，**不限分期**。前面版本 v3.5.11/12 把分期 disable saved card 是對的，但**一般信用卡 gateway 仍踩這個雷**。
+信用卡分期應使用 SHOPLINE `CreditCard` SDK 搭配 `installmentCounts`，不是 `ChaileaseBNPL`。`ChaileaseBNPL` 是中租零卡 / BNPL 路徑，切換後只會顯示期數選擇，不會渲染信用卡或已儲存卡 UI。
 
 #### 修法
 
-`YSGatewayBase::prepare_payment_data` 加偵測：
+- 分期 gateway 保持 `paymentMethod: CreditCard`，並傳入 `installmentCounts`。
+- 分期重新啟用 `customerToken + paymentInstrument.bindCard`，讓 SDK 可顯示已儲存卡與新卡儲存選項。
+- 前端送出 `ys_shopline_payment_instrument_mode`：`saved` / `new` / `new_save` / `regular`。
+- 後端依模式決定 API：
+  - `saved`：`QuickPayment + paymentCustomerId + paymentMethodOptions.installments.count`，不送 `savePaymentInstrument`。
+  - `new_save`：`CardBindPayment + savePaymentInstrument:true + paymentMethodOptions.installments.count`。
+  - `new`：`Regular + paymentMethodOptions.installments.count`。
+- 已驗證 sandbox saved-card 分期成功：`referenceOrderId=1311_1`，`CreditCard + QuickPayment + installments.count=3`，SHOPLINE 回 `SUCCEEDED`。
 
-```php
-// v3.5.13: 登入 + 有 saved tokens + SDK 沒給 instrumentId → 降級為 Regular
-if ( $use_bind_card && empty( $payment_instrument_id ) && $user_id && ! $is_subscription ) {
-    $tokens = WC_Payment_Tokens::get_customer_tokens( $user_id, 'ys_shopline_credit' );
-    if ( ! empty( $tokens ) ) {
-        $use_bind_card = false;  // 強制走 Regular
-    }
-}
-```
+#### 注意
 
-→ 後端送 `Regular` 不送 `CardBindPayment` → SHOPLINE 內部根據 paySession 自行決定（token charge / 新卡 charge）→ 不撞 1018。
-
-#### Trade-off
-
-使用者「新卡 + 勾儲存」情境若已有 saved token，會被降級成 Regular（不綁卡）。要新增卡需到「我的帳戶 → 付款方式 → 新增付款方式」。**比 1018 失敗交易好**。
-
-#### 不影響
-
-| 情境 | v3.5.13 行為 |
-|---|---|
-| 訂閱（`is_subscription=true`） | 仍 CardBindPayment ✓ |
-| 訪客（無 user_id） | 仍 Regular ✓ |
-| 首次綁卡使用者（無 saved tokens） | 仍 CardBindPayment（首次儲存可成功）✓ |
-| 分期 gateway | 仍強制 Regular（v3.5.11）✓ |
-| Add-payment-method 頁 | 仍 CardBindPayment（bindOnlyMode）✓ |
-| Change-payment-method | 仍 CardBindPayment（bindOnlyMode）✓ |
+舊測試中 `1018 Business error` 經 SHOPLINE 回覆確認為 sandbox 端設定/行為問題；插件端避免再把既有卡誤送成 `CardBindPayment + savePaymentInstrument:true`。
 
 ### 3.5.12 - 2026-04-29
 

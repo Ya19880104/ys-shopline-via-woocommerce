@@ -22,7 +22,8 @@ jQuery(function ($) {
         'ys_shopline_credit_installment': {
             paymentMethod: 'CreditCard',
             containerId: 'ys_shopline_credit_installment_container',
-            supportsBindCard: false,
+            // Installment uses CreditCard SDK with installmentCounts; saved-card UI is required for QuickPayment.
+            supportsBindCard: true,
             supportsInstallment: true
         },
         'ys_shopline_credit_subscription': {
@@ -775,18 +776,39 @@ jQuery(function ($) {
 
                 // Add selected payment instrument if applicable
                 // 驗證 SDK 是否真的帶 paymentInstrumentId（用戶選已綁卡時）
-                if (result.paymentInstrumentId) {
-                    console.log('[YS Shopline] SDK returned paymentInstrumentId (saved card), last6=' + String(result.paymentInstrumentId).slice(-6));
+                var instrumentSelection = self.getPaymentInstrumentSelection(result, gatewayId);
+                if (instrumentSelection.instrumentId) {
+                    console.log('[YS Shopline] selected paymentInstrumentId, last6=' + String(instrumentSelection.instrumentId).slice(-6));
                     $form.find('input[name="ys_shopline_payment_instrument_id"]').remove();
                     $form.append(
                         $('<input>').attr({
                             type: 'hidden',
                             name: 'ys_shopline_payment_instrument_id',
-                            value: result.paymentInstrumentId
+                            value: instrumentSelection.instrumentId
                         })
                     );
                 } else {
-                    console.log('[YS Shopline] SDK did not return paymentInstrumentId (new card or SDK does not expose selected token)');
+                    console.log('[YS Shopline] payment instrument mode:', instrumentSelection.mode, 'last4:', instrumentSelection.last4 || '');
+                }
+
+                $form.find('input[name="ys_shopline_payment_instrument_mode"]').remove();
+                $form.append(
+                    $('<input>').attr({
+                        type: 'hidden',
+                        name: 'ys_shopline_payment_instrument_mode',
+                        value: instrumentSelection.mode
+                    })
+                );
+
+                $form.find('input[name="ys_shopline_saved_card_last4"]').remove();
+                if (instrumentSelection.last4) {
+                    $form.append(
+                        $('<input>').attr({
+                            type: 'hidden',
+                            name: 'ys_shopline_saved_card_last4',
+                            value: instrumentSelection.last4
+                        })
+                    );
                 }
 
                 // Add bind card enabled flag
@@ -800,7 +822,7 @@ jQuery(function ($) {
                 // - SDK 和 API 會根據 paySession 中的用戶選擇來決定是否實際儲存卡片
                 //
                 // 所以我們只需要告訴後端「SDK 有啟用綁卡功能」
-                var bindCardEnabled = self.isBindCardEnabled(gatewayId);
+                var bindCardEnabled = instrumentSelection.mode === 'new_save';
 
                 console.log('[YS Shopline] bindCardEnabled:', bindCardEnabled);
 
@@ -1342,6 +1364,168 @@ jQuery(function ($) {
             return false;
         },
 
+        getPaymentInstrumentSelection: function (result, gatewayId) {
+            var selection = {
+                mode: 'regular',
+                instrumentId: '',
+                last4: ''
+            };
+
+            if (result && result.paymentInstrumentId) {
+                selection.mode = 'saved';
+                selection.instrumentId = String(result.paymentInstrumentId);
+                return selection;
+            }
+
+            if (!this.isBindCardEnabled(gatewayId)) {
+                return selection;
+            }
+
+            var config = GATEWAY_CONFIG[gatewayId] || {};
+            var $container = config.containerId ? $('#' + config.containerId) : $();
+            var activeText = this.getActivePaymentOptionText($container);
+            var activeLast4 = this.extractSavedCardLast4(activeText);
+
+            if (activeLast4 && !this.textLooksLikeNewCard(activeText)) {
+                selection.mode = 'saved';
+                selection.last4 = activeLast4;
+                return selection;
+            }
+
+            if (!this.isNewCardFormVisible($container)) {
+                var allLast4 = this.extractAllSavedCardLast4($container.text() || '');
+                if (allLast4.length === 1) {
+                    selection.mode = 'saved';
+                    selection.last4 = allLast4[0];
+                    return selection;
+                }
+                if (allLast4.length > 1) {
+                    selection.mode = 'saved';
+                    return selection;
+                }
+            }
+
+            selection.mode = this.isSaveCardRequested($container, gatewayId) ? 'new_save' : 'new';
+            return selection;
+        },
+
+        getActivePaymentOptionText: function ($container) {
+            if (!$container || !$container.length) {
+                return '';
+            }
+
+            var texts = [];
+            var isPaymentOptionText = function (text) {
+                text = String(text || '').replace(/\s+/g, ' ').trim();
+                return text && text.length <= 220 && (text.indexOf('****') !== -1 || text.indexOf('使用新卡') !== -1 || /new card/i.test(text));
+            };
+
+            $container.find('[class*="shoplinepayments_item_"], [class*="_item_"]').each(function () {
+                var $item = $(this);
+                var text = String($item.text() || '').replace(/\s+/g, ' ').trim();
+                if (!isPaymentOptionText(text)) {
+                    return;
+                }
+
+                var selected = false;
+                $item.find('svg, [class*="footer"]').each(function () {
+                    var rect = this.getBoundingClientRect();
+                    if (rect.width > 8 && rect.height > 8) {
+                        selected = true;
+                        return false;
+                    }
+                });
+
+                if (selected) {
+                    texts.push(text);
+                }
+            });
+
+            if (texts.length) {
+                return texts.join(' ');
+            }
+
+            var selectors = [
+                '[class*="selectOptionActive"]',
+                '[aria-selected="true"]',
+                'input[type="radio"]:checked'
+            ];
+
+            $.each(selectors, function (_, selector) {
+                $container.find(selector).each(function () {
+                    var text = '';
+                    if (this.tagName && this.tagName.toLowerCase() === 'input') {
+                        text = $(this).closest('label, li, div').text();
+                    } else {
+                        text = $(this).text();
+                    }
+                    text = String(text || '').replace(/\s+/g, ' ').trim();
+                    if (isPaymentOptionText(text)) {
+                        texts.push(text);
+                    }
+                });
+            });
+
+            return texts.join(' ');
+        },
+
+        extractSavedCardLast4: function (text) {
+            var match = String(text || '').match(/\*{2,}[\s*]*(\d{4})/);
+            return match && match[1] ? match[1] : '';
+        },
+
+        extractAllSavedCardLast4: function (text) {
+            var values = [];
+            var regex = /\*{2,}[\s*]*(\d{4})/g;
+            var match;
+
+            while ((match = regex.exec(String(text || ''))) !== null) {
+                if (values.indexOf(match[1]) === -1) {
+                    values.push(match[1]);
+                }
+            }
+
+            return values;
+        },
+
+        textLooksLikeNewCard: function (text) {
+            text = String(text || '');
+            return text.indexOf('使用新卡') !== -1 || /new card/i.test(text);
+        },
+
+        isNewCardFormVisible: function ($container) {
+            if (!$container || !$container.length) {
+                return false;
+            }
+
+            var visibleIframes = $container.find('iframe').filter(function () {
+                var rect = this.getBoundingClientRect();
+                return rect.width > 20 && rect.height > 10;
+            }).length;
+
+            return visibleIframes >= 2;
+        },
+
+        isSaveCardRequested: function ($container, gatewayId) {
+            var gatewayConfig = GATEWAY_CONFIG[gatewayId] || {};
+
+            if (gatewayConfig.forceSaveCard) {
+                return true;
+            }
+
+            if (!$container || !$container.length) {
+                return false;
+            }
+
+            var $checkboxes = $container.find('input[type="checkbox"]');
+            if ($checkboxes.length) {
+                return $checkboxes.filter(':checked').length > 0;
+            }
+
+            var text = ($container.text() || '').replace(/\s+/g, ' ');
+            return /記錄本次付款資訊|儲存|綁定|save card|bind card/i.test(text);
+        },
+
         /**
          * Get payment instance for gateway
          *
@@ -1554,6 +1738,7 @@ jQuery(function ($) {
                     ? JSON.stringify(result.paySession)
                     : result.paySession;
 
+                var instrumentSelection = ShoplineCheckout.getPaymentInstrumentSelection(result, gatewayId);
                 var urlParams = new URLSearchParams(window.location.search);
                 var ajaxData = {
                     action: 'ys_shopline_pay_for_order',
@@ -1562,8 +1747,17 @@ jQuery(function ($) {
                     order_key: urlParams.get('key') || '',
                     payment_method: gatewayId,
                     ys_shopline_pay_session: paySessionValue,
-                    ys_shopline_bind_card_enabled: ShoplineCheckout.isBindCardEnabled(gatewayId) ? '1' : '0'
+                    ys_shopline_bind_card_enabled: instrumentSelection.mode === 'new_save' ? '1' : '0',
+                    ys_shopline_payment_instrument_mode: instrumentSelection.mode
                 };
+
+                if (instrumentSelection.instrumentId) {
+                    ajaxData.ys_shopline_payment_instrument_id = instrumentSelection.instrumentId;
+                }
+
+                if (instrumentSelection.last4) {
+                    ajaxData.ys_shopline_saved_card_last4 = instrumentSelection.last4;
+                }
 
                 var selectedInstallment = gatewayId === 'ys_shopline_credit_installment' ? ShoplineCheckout.getSelectedInstallment(result, gatewayId) : '';
                 if (selectedInstallment) {

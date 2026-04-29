@@ -130,9 +130,9 @@ class YSOrderDisplay {
 		<div class="ys-shopline-notice ys-shopline-notice-success">
 			<div class="ys-shopline-notice-icon">✓</div>
 			<div class="ys-shopline-notice-content">
-				<h3><?php esc_html_e( '已授權，等待金流回傳確認', 'ys-shopline-via-woocommerce' ); ?></h3>
+				<h3><?php esc_html_e( '分期付款授權成功，等待銀行確認', 'ys-shopline-via-woocommerce' ); ?></h3>
 				<p>
-					<?php esc_html_e( '您的卡片已成功授權，金額已預留。SHOPLINE 通常在 1-3 分鐘內完成最終確認，您將收到通知信。', 'ys-shopline-via-woocommerce' ); ?>
+					<?php esc_html_e( '通常約需1~5分鐘，付款完成後系統將會自動變更訂單並通知您。', 'ys-shopline-via-woocommerce' ); ?>
 				</p>
 				<ul class="ys-shopline-payment-info">
 					<li>

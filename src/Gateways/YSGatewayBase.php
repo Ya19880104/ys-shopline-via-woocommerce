@@ -761,6 +761,31 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
         // SDK 內建選卡 UI 時，由前端塞入 ys_shopline_payment_instrument_id
         // phpcs:ignore WordPress.Security.NonceVerification.Missing
         $payment_instrument_id = isset( $_POST['ys_shopline_payment_instrument_id'] ) ? sanitize_text_field( wp_unslash( $_POST['ys_shopline_payment_instrument_id'] ) ) : '';
+        // phpcs:ignore WordPress.Security.NonceVerification.Missing
+        $payment_instrument_mode = isset( $_POST['ys_shopline_payment_instrument_mode'] ) ? sanitize_key( wp_unslash( $_POST['ys_shopline_payment_instrument_mode'] ) ) : '';
+        if ( ! in_array( $payment_instrument_mode, array( 'regular', 'new', 'new_save', 'saved' ), true ) ) {
+            $payment_instrument_mode = '';
+        }
+
+        // phpcs:ignore WordPress.Security.NonceVerification.Missing
+        $saved_card_last4 = isset( $_POST['ys_shopline_saved_card_last4'] ) ? preg_replace( '/[^0-9]/', '', (string) wp_unslash( $_POST['ys_shopline_saved_card_last4'] ) ) : '';
+        if ( strlen( $saved_card_last4 ) !== 4 ) {
+            $saved_card_last4 = '';
+        }
+
+        $user_id     = $order->get_user_id();
+        $customer_id = $user_id ? $this->get_shopline_customer_id( $user_id ) : false;
+
+        if ( '' === $payment_instrument_id && 'saved' === $payment_instrument_mode && $user_id ) {
+            $payment_instrument_id = $this->resolve_payment_instrument_id_by_last4( $user_id, $saved_card_last4 );
+            if ( '' === $payment_instrument_id ) {
+                YSLogger::warning( 'Saved card selected but WC token could not be resolved, falling back without savePaymentInstrument', array(
+                    'order_id' => $order->get_id(),
+                    'user_id'  => $user_id,
+                    'last4'    => $saved_card_last4,
+                ) );
+            }
+        }
 
         // IDOR 防護：驗證此 instrument_id 屬於當前訂單的使用者
         // 避免攻擊者攔截 POST 把 instrument_id 改為他人的（雖然 SHOPLINE 會驗 paymentCustomerId↔instrument 綁定，但不依賴遠端防線）
@@ -812,33 +837,43 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
         // 只有已登入用戶且有 customerId 時才啟用（與 SDK 端邏輯一致）
         $use_bind_card = $is_subscription || ( $user_id && $customer_id );
 
+        // Frontend sends this only when the customer explicitly chose "new card + save".
+        // This prevents saved-card installment payments from being mis-sent as CardBindPayment.
+        $client_bind_card_enabled = false;
+        // phpcs:ignore WordPress.Security.NonceVerification.Missing
+        if ( isset( $_POST['ys_shopline_bind_card_enabled'] ) ) {
+            // phpcs:ignore WordPress.Security.NonceVerification.Missing
+            $client_bind_card_enabled = '1' === sanitize_text_field( wp_unslash( $_POST['ys_shopline_bind_card_enabled'] ) );
+        }
+
         // 決定付款行為（paymentBehavior）：
         // - Regular: 一般信用卡付款（輸入卡號，不綁卡）
         // - CardBindPayment: 綁卡付款（輸入卡號並儲存）- SDK 啟用 bindCard 時使用
-        // - QuickPayment: 快捷付款（使用已綁定的卡片，需要 paymentCustomerId + paymentInstrumentId）
+        // - QuickPayment: 快捷付款（使用已綁定的卡片，需要 paymentCustomerId；SDK paySession 可攜帶選卡結果）
         //
-        // v3.5.11: 分期 gateway 強制 disable bindCard（對齊 SHOPLINE 規格 + 業界標竿）
-        // 分期屬於「一般收款」場景，不屬於「綁卡/快捷/定期」場景
+        // 分期 gateway 使用 CreditCard SDK + installmentCounts：
+        // - saved：既有卡分期，走 QuickPayment，不送 savePaymentInstrument。
+        // - new_save：新卡分期並儲存，走 CardBindPayment。
+        // - new：新卡分期不儲存，走 Regular。
         if ( 'ys_shopline_credit_installment' === $this->id ) {
-            $use_bind_card = false;
+            if ( 'saved' === $payment_instrument_mode ) {
+                $use_bind_card = $user_id && $customer_id;
+            } elseif ( 'new_save' === $payment_instrument_mode ) {
+                $use_bind_card = $client_bind_card_enabled && $user_id && $customer_id;
+            } else {
+                $use_bind_card = false;
+            }
         }
 
-        // v3.5.13: 「登入 + 有 saved tokens + SDK 沒給 instrumentId」情境降級為 Regular
+        // Legacy fallback: if an older frontend sends no explicit instrument mode and the SDK
+        // does not expose paymentInstrumentId, avoid blindly sending CardBindPayment for a
+        // customer who already has saved tokens.
         //
-        // 根因：SHOPLINE SDK `createPayment().result.paymentInstrumentId` 永遠是空，前端 hidden
-        //       input 永遠拿不到使用者選的 instrument。這時若 user 在 SDK UI 點選了既有卡，
-        //       paySession 內部已帶 instrumentId，我們卻盲送 CardBindPayment + savePaymentInstrument:true
-        //       → SHOPLINE 看到「paySession 帶既有卡 + request 要綁卡」矛盾 → 1018 Business error。
-        //
-        // 解法：偵測 user 有 saved tokens 時，降級為 Regular paymentBehavior。SHOPLINE 內部會根據
-        //       paySession 自行決定走 token charge（既有卡）還是新卡 charge，不會撞 1018。
-        //
-        // Trade-off：使用者「新卡 + 勾儲存」情境會被降級成 Regular 不綁卡。但他可以後續到
-        //            「我的帳戶 → 付款方式 → 新增付款方式」加卡。比 1018 失敗交易好。
-        //
-        // 不影響：訂閱（is_subscription=true 仍走 CardBindPayment）/ 訪客（無 saved tokens）/
-        //         首次綁卡使用者（無 saved tokens 仍走 CardBindPayment 首次儲存）
-        if ( $use_bind_card && empty( $payment_instrument_id ) && $user_id && ! $is_subscription
+        // Current frontend sends ys_shopline_payment_instrument_mode, so new_save can still
+        // be processed as CardBindPayment without this fallback.
+        if ( 'ys_shopline_credit_installment' !== $this->id
+            && '' === $payment_instrument_mode
+            && $use_bind_card && empty( $payment_instrument_id ) && $user_id && ! $is_subscription
             && class_exists( 'WC_Payment_Tokens' ) ) {
             $existing_tokens = WC_Payment_Tokens::get_customer_tokens( $user_id, 'ys_shopline_credit' );
             if ( ! empty( $existing_tokens ) ) {
@@ -854,15 +889,17 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
         // 重要：當 SDK 啟用 bindCard 時，paySession 已包含用戶是否勾選儲存卡片的資訊
         // 後端使用 CardBindPayment + savePaymentInstrument=true，
         // API 會根據 paySession 中的用戶選擇來決定是否實際儲存卡片
-        if ( ! empty( $payment_instrument_id ) && $use_bind_card ) {
+        if ( 'saved' === $payment_instrument_mode && $user_id && $customer_id ) {
+            $payment_behavior = 'QuickPayment';
+        } elseif ( ! empty( $payment_instrument_id ) && $use_bind_card ) {
             // 使用已綁定的卡片（僅在啟用 bindCard 的 gateway 上有效）
             $payment_behavior = 'QuickPayment';
-        } elseif ( $use_bind_card ) {
+        } elseif ( $use_bind_card && 'saved' !== $payment_instrument_mode && 'new' !== $payment_instrument_mode ) {
             // SDK 啟用了綁卡功能，使用 CardBindPayment
             // paySession 已包含用戶是否勾選儲存的選擇
             $payment_behavior = 'CardBindPayment';
         } else {
-            // 一般付款（SDK 未啟用綁卡，例如分期、訪客、有 saved tokens 的登入用戶）
+            // 一般付款（SDK 未啟用綁卡，或使用者選新卡但未要求儲存）
             $payment_behavior = 'Regular';
         }
 
@@ -944,15 +981,17 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
         }
 
         // QuickPayment 流程：使用已綁定的卡片
-        if ( 'QuickPayment' === $payment_behavior && ! empty( $payment_instrument_id ) ) {
+        if ( 'QuickPayment' === $payment_behavior ) {
             // 取得 customerId
             if ( $order->get_user_id() ) {
                 $customer_id = $this->get_shopline_customer_id( $order->get_user_id() );
                 if ( $customer_id ) {
                     $data['confirm']['paymentCustomerId'] = $customer_id;
-                    $data['confirm']['paymentInstrument'] = array(
-                        'paymentInstrumentId' => $payment_instrument_id,
-                    );
+                    if ( ! empty( $payment_instrument_id ) && 'saved' !== $payment_instrument_mode ) {
+                        $data['confirm']['paymentInstrument'] = array(
+                            'paymentInstrumentId' => $payment_instrument_id,
+                        );
+                    }
                 } else {
                     // 沒有 customerId，無法使用 QuickPayment，降級為 Regular
                     YSLogger::warning( 'QuickPayment requested but no customerId found, falling back to Regular' );
@@ -962,7 +1001,7 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
         }
         // CardBindPayment 流程：SDK 啟用綁卡功能
         // paySession 已包含用戶是否勾選儲存的選擇，API 會根據此決定是否實際儲存
-        elseif ( $use_bind_card ) {
+        elseif ( 'CardBindPayment' === $payment_behavior && $use_bind_card ) {
             $data['confirm']['paymentInstrument'] = array(
                 'savePaymentInstrument' => true,
             );
@@ -978,6 +1017,14 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
         // Regular 流程：不需要額外設定
 
         // 記錄付款資料（用於除錯）
+        // When the SDK has customer-bound card UI but the request remains Regular, keep the
+        // customer context so SHOPLINE can resolve the selected paySession correctly.
+        if ( 'Regular' === $payment_behavior && $user_id && $customer_id
+            && class_exists( 'WC_Payment_Tokens' )
+            && ! empty( WC_Payment_Tokens::get_customer_tokens( $user_id, 'ys_shopline_credit' ) ) ) {
+            $data['confirm']['paymentCustomerId'] = $customer_id;
+        }
+
         YSLogger::debug( 'Payment data prepared', array(
             'order_id'         => $order->get_id(),
             'amount'           => $data['amount']['value'],
@@ -985,6 +1032,10 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
             'payment_behavior' => $payment_behavior,
             'payment_method'   => $this->get_payment_method(),
             'use_bind_card'    => $use_bind_card ? 'yes' : 'no',
+            'client_bind_card_enabled' => $client_bind_card_enabled ? 'yes' : 'no',
+            'payment_instrument_mode'  => $payment_instrument_mode ?: 'none',
+            'saved_card_last4'         => $saved_card_last4 ?: 'none',
+            'resolved_instrument_id'   => $payment_instrument_id ? substr( $payment_instrument_id, -6 ) : 'none',
             'user_id'          => $user_id,
             'customer_id'      => $customer_id ?: 'none',
             'is_subscription'  => $is_subscription ? 'yes' : 'no',
@@ -1009,6 +1060,44 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
         ) );
 
         return apply_filters( 'ys_shopline_payment_data', $data, $order, $this );
+    }
+
+    /**
+     * Resolve a saved SHOPLINE payment instrument by the current user's WC token last4.
+     *
+     * @param int    $user_id User ID.
+     * @param string $last4   Card last four digits.
+     * @return string Payment instrument ID or empty string.
+     */
+    protected function resolve_payment_instrument_id_by_last4( $user_id, $last4 ) {
+        if ( ! $user_id || strlen( (string) $last4 ) !== 4 || ! class_exists( 'WC_Payment_Tokens' ) ) {
+            return '';
+        }
+
+        $matches = array();
+        $tokens  = WC_Payment_Tokens::get_customer_tokens( $user_id, YSOrderMeta::CREDIT_GATEWAY_ID );
+
+        foreach ( $tokens as $token ) {
+            if ( ! is_object( $token ) || ! method_exists( $token, 'get_token' ) ) {
+                continue;
+            }
+
+            $token_last4 = method_exists( $token, 'get_last4' ) ? (string) $token->get_last4() : '';
+            if ( $token_last4 === (string) $last4 ) {
+                $matches[] = $token->get_token();
+            }
+        }
+
+        if ( 1 !== count( $matches ) ) {
+            YSLogger::warning( 'Saved card last4 did not resolve to exactly one token', array(
+                'user_id'       => $user_id,
+                'last4'         => $last4,
+                'matches_count' => count( $matches ),
+            ) );
+            return '';
+        }
+
+        return (string) $matches[0];
     }
 
     /**
