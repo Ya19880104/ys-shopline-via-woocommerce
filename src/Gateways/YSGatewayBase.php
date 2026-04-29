@@ -823,6 +823,34 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
             $use_bind_card = false;
         }
 
+        // v3.5.13: 「登入 + 有 saved tokens + SDK 沒給 instrumentId」情境降級為 Regular
+        //
+        // 根因：SHOPLINE SDK `createPayment().result.paymentInstrumentId` 永遠是空，前端 hidden
+        //       input 永遠拿不到使用者選的 instrument。這時若 user 在 SDK UI 點選了既有卡，
+        //       paySession 內部已帶 instrumentId，我們卻盲送 CardBindPayment + savePaymentInstrument:true
+        //       → SHOPLINE 看到「paySession 帶既有卡 + request 要綁卡」矛盾 → 1018 Business error。
+        //
+        // 解法：偵測 user 有 saved tokens 時，降級為 Regular paymentBehavior。SHOPLINE 內部會根據
+        //       paySession 自行決定走 token charge（既有卡）還是新卡 charge，不會撞 1018。
+        //
+        // Trade-off：使用者「新卡 + 勾儲存」情境會被降級成 Regular 不綁卡。但他可以後續到
+        //            「我的帳戶 → 付款方式 → 新增付款方式」加卡。比 1018 失敗交易好。
+        //
+        // 不影響：訂閱（is_subscription=true 仍走 CardBindPayment）/ 訪客（無 saved tokens）/
+        //         首次綁卡使用者（無 saved tokens 仍走 CardBindPayment 首次儲存）
+        if ( $use_bind_card && empty( $payment_instrument_id ) && $user_id && ! $is_subscription
+            && class_exists( 'WC_Payment_Tokens' ) ) {
+            $existing_tokens = WC_Payment_Tokens::get_customer_tokens( $user_id, 'ys_shopline_credit' );
+            if ( ! empty( $existing_tokens ) ) {
+                YSLogger::debug( 'CardBindPayment downgraded to Regular (user has saved tokens, avoid 1018)', array(
+                    'order_id'      => $order->get_id(),
+                    'user_id'       => $user_id,
+                    'tokens_count'  => count( $existing_tokens ),
+                ) );
+                $use_bind_card = false;
+            }
+        }
+
         // 重要：當 SDK 啟用 bindCard 時，paySession 已包含用戶是否勾選儲存卡片的資訊
         // 後端使用 CardBindPayment + savePaymentInstrument=true，
         // API 會根據 paySession 中的用戶選擇來決定是否實際儲存卡片
@@ -834,7 +862,7 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
             // paySession 已包含用戶是否勾選儲存的選擇
             $payment_behavior = 'CardBindPayment';
         } else {
-            // 一般付款（SDK 未啟用綁卡，例如分期、訪客）
+            // 一般付款（SDK 未啟用綁卡，例如分期、訪客、有 saved tokens 的登入用戶）
             $payment_behavior = 'Regular';
         }
 
