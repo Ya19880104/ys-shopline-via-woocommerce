@@ -629,6 +629,10 @@ class YSAdminSettings {
 					<td>
 						<?php $this->render_toggle( 'ys_shopline_enabled', 'yes' ); ?>
 						<span class="ys-toggle-desc"><?php _e( '啟用 SHOPLINE Payment 金流服務', 'ys-shopline-via-woocommerce' ); ?></span>
+						<p class="description" style="color:#b32d2e;">
+							<span class="dashicons dashicons-warning" style="color:#b32d2e;"></span>
+							<?php _e( '⚠️ 關閉後，所有 SHOPLINE 付款方式不會註冊到 WooCommerce。既有訂單退款、訂閱續扣將失敗（無法取得 gateway 實例）。請在沒有未完結 SHOPLINE 訂單與 active 訂閱時才關閉。', 'ys-shopline-via-woocommerce' ); ?>
+						</p>
 					</td>
 				</tr>
 				<tr>
@@ -983,13 +987,13 @@ class YSAdminSettings {
 		<div class="ys-section-card">
 			<h3 class="ys-section-title"><span class="dashicons dashicons-cart"></span> <?php _e( '支付方式設定', 'ys-shopline-via-woocommerce' ); ?></h3>
 			<p class="ys-section-desc">
-				<?php _e( '選擇要啟用的支付方式。啟用後會自動註冊到 WooCommerce 付款閘道。', 'ys-shopline-via-woocommerce' ); ?>
+				<?php _e( '選擇要註冊到 WooCommerce 的支付方式。此處只控制是否註冊付款閘道，不控制結帳頁啟閉。', 'ys-shopline-via-woocommerce' ); ?>
 				<br>
 				<span class="dashicons dashicons-info" style="color:#0073aa;"></span>
 				<?php
 				printf(
 					/* translators: %s: WooCommerce payments settings URL */
-					__( '各支付方式的詳細設定請至 <a href="%s">WooCommerce > 設定 > 付款</a> 中調整。', 'ys-shopline-via-woocommerce' ),
+					__( '實際啟用、停用、排序與各支付方式詳細設定請至 <a href="%s">WooCommerce > 設定 > 付款</a> 中調整。', 'ys-shopline-via-woocommerce' ),
 					esc_url( admin_url( 'admin.php?page=wc-settings&tab=checkout' ) )
 				);
 				?>

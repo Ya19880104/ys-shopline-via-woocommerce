@@ -61,9 +61,8 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
         $this->title       = $this->get_option( 'title' );
         $this->description = $this->get_option( 'description' );
 
-        // enabled 狀態由外掛自訂設定頁管理（ys_shopline_{gateway}_enabled），
-        // 非 WC 原生 payment gateway settings，因此手動同步 $this->enabled
-        $this->enabled = 'yes' === get_option( $this->id . '_enabled', 'yes' ) ? 'yes' : 'no';
+        // 外掛自訂開關只控制是否註冊 gateway；註冊後由 WooCommerce 原生付款設定控制啟閉。
+        $this->enabled = $this->get_option( 'enabled', 'no' );
 
         // Global settings
         $this->testmode = 'yes' === get_option( 'ys_shopline_testmode', 'yes' );

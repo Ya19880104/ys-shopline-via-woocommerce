@@ -3,7 +3,7 @@
  * Plugin Name: YS Shopline via WooCommerce
  * Plugin URI: https://yangsheep.com.tw
  * Description: Support Shopline Payments for WooCommerce, including HPOS and Subscriptions. Supports Credit Card, ATM, JKOPay, Apple Pay, LINE Pay, and Chailease BNPL.
- * Version:           3.5.13
+ * Version:           3.5.14
  * Author: YangSheep
  * Author URI: https://yangsheep.com.tw
  * Text Domain: ys-shopline-via-woocommerce
@@ -17,7 +17,9 @@
 defined( 'ABSPATH' ) || exit;
 
 // Define plugin constants
-define( 'YS_SHOPLINE_VERSION', '3.5.13' );
+define( 'YS_SHOPLINE_VERSION', '3.5.14' );
+// v3.5.14: 資料庫綱要版本（用於 plugins_loaded 一次性 migration），與 plugin 版本解耦。
+define( 'YS_SHOPLINE_DB_VERSION', '3.5.14' );
 define( 'YS_SHOPLINE_PLUGIN_FILE', __FILE__ );
 define( 'YS_SHOPLINE_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 define( 'YS_SHOPLINE_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
@@ -117,6 +119,11 @@ final class YSShoplinePayment {
         // Declare compatibility
         add_action( 'before_woocommerce_init', array( $this, 'declare_compatibility' ) );
 
+        // v3.5.14: 一次性 migration（早於 init/register_gateways，priority 5）
+        // 將舊版 ys_shopline_{gateway}_enabled option 同步到 WooCommerce 原生 gateway settings 的 enabled，
+        // 避免「外掛開關只控制註冊；WC 原生控制啟閉」的雙層分工讓既有站升級後 gateway 全失效。
+        add_action( 'plugins_loaded', array( $this, 'maybe_run_migrations' ), 5 );
+
         // Initialize plugin after WooCommerce is loaded
         add_action( 'plugins_loaded', array( $this, 'init' ), 11 );
 
@@ -175,6 +182,95 @@ final class YSShoplinePayment {
             // 原先宣告 compatible 但 gateway 的 canMakePayment() 回 false，API contract 不一致。
             // 目前只支援傳統結帳頁（非 Blocks），明確不宣告反而比假宣告準確。
             // 若未來完整支援 Blocks 再重新宣告。
+        }
+    }
+
+    /**
+     * v3.5.14: 一次性 migration — 將舊版 ys_shopline_{gateway}_enabled option
+     * 同步到 WooCommerce 原生 gateway settings 的 enabled。
+     *
+     * 背景：v3.5.13 之前 YSGatewayBase 用 `get_option('ys_shopline_xxx_enabled')`
+     *      覆寫 $this->enabled，WC 原生 woocommerce_{id}_settings.enabled 從未被使用。
+     *      v3.5.14 將 enabled 雙層分工（外掛開關只控制註冊，WC 原生控制啟閉）後，
+     *      既有站若不 migrate，所有 gateway 在 WC 原生 settings 沒設過 enabled
+     *      → fallback 'no' → 結帳全失效、訂閱續扣斷掉。
+     *
+     * 設計：
+     *   - 用 ys_shopline_db_version option 做版本門檻（避免重複跑）
+     *   - 只在 enabled key 不存在時寫入（不覆寫使用者主動關閉的 'no'）
+     *   - 全新安裝：舊 option 不存在 → fallback 用各 gateway 的合理預設
+     *   - 升級安裝：讀舊 option 同步過去
+     *
+     * 不依賴 register_activation_hook：升級不需要 deactivate/reactivate。
+     *
+     * @return void
+     */
+    public function maybe_run_migrations() {
+        $current_db_version = get_option( 'ys_shopline_db_version', '0' );
+
+        // 已是最新版（含未來版本）→ 不跑
+        if ( version_compare( $current_db_version, YS_SHOPLINE_DB_VERSION, '>=' ) ) {
+            return;
+        }
+
+        // v3.5.14: 同步 ys_shopline_xxx_enabled → woocommerce_{gateway_id}_settings.enabled
+        if ( version_compare( $current_db_version, '3.5.14', '<' ) ) {
+            $this->migrate_v3_5_14_gateway_enabled();
+        }
+
+        update_option( 'ys_shopline_db_version', YS_SHOPLINE_DB_VERSION );
+    }
+
+    /**
+     * v3.5.14 migration：同步外掛 enabled option 到 WC 原生 gateway settings。
+     *
+     * Map：舊 option key → WC settings option key + default（與舊版 register_gateways 預設對齊）
+     *
+     * @return void
+     */
+    private function migrate_v3_5_14_gateway_enabled() {
+        $gateway_map = array(
+            // gateway_id => array( old_option_key, default_when_missing )
+            'ys_shopline_credit'              => array( 'ys_shopline_credit_enabled', 'yes' ),
+            'ys_shopline_credit_installment'  => array( 'ys_shopline_credit_installment_enabled', 'no' ),
+            'ys_shopline_credit_subscription' => array( 'ys_shopline_credit_subscription_enabled', 'yes' ),
+            'ys_shopline_atm'                 => array( 'ys_shopline_atm_enabled', 'yes' ),
+            'ys_shopline_jkopay'              => array( 'ys_shopline_jkopay_enabled', 'yes' ),
+            'ys_shopline_applepay'            => array( 'ys_shopline_applepay_enabled', 'yes' ),
+            'ys_shopline_linepay'             => array( 'ys_shopline_linepay_enabled', 'yes' ),
+            'ys_shopline_bnpl'                => array( 'ys_shopline_bnpl_enabled', 'yes' ),
+        );
+
+        $migrated = array();
+        foreach ( $gateway_map as $gateway_id => $config ) {
+            list( $old_option_key, $default_value ) = $config;
+
+            $wc_settings_key = 'woocommerce_' . $gateway_id . '_settings';
+            $wc_settings     = get_option( $wc_settings_key, array() );
+            if ( ! is_array( $wc_settings ) ) {
+                $wc_settings = array();
+            }
+
+            // 只在 WC 原生 settings 沒設過 enabled 時寫入（避免覆寫使用者主動關閉的 'no'）
+            if ( isset( $wc_settings['enabled'] ) ) {
+                continue;
+            }
+
+            $old_value = get_option( $old_option_key, null );
+            $sync_value = ( null !== $old_value ) ? $old_value : $default_value;
+            // sanitize 成 WC checkbox 預期的 'yes' / 'no'
+            $sync_value = ( 'yes' === $sync_value ) ? 'yes' : 'no';
+
+            $wc_settings['enabled'] = $sync_value;
+            update_option( $wc_settings_key, $wc_settings );
+
+            $migrated[] = sprintf( '%s=%s (from %s)', $gateway_id, $sync_value, $old_option_key );
+        }
+
+        if ( ! empty( $migrated ) && class_exists( '\YangSheep\ShoplinePayment\Utils\YSLogger' ) ) {
+            \YangSheep\ShoplinePayment\Utils\YSLogger::info( 'v3.5.14 migration: synced gateway enabled to WC native settings', array(
+                'migrated' => $migrated,
+            ) );
         }
     }
 
@@ -619,6 +715,10 @@ final class YSShoplinePayment {
 
         $gateway = $gateways[ $gateway_id ];
 
+        if ( ! $this->is_gateway_enabled_for_context( $gateway ) ) {
+            wp_send_json_error( array( 'message' => __( '付款閘道未啟用。', 'ys-shopline-via-woocommerce' ) ) );
+        }
+
         if ( ! method_exists( $gateway, 'get_sdk_config' ) ) {
             wp_send_json_error( array( 'message' => __( 'Gateway does not support SDK config.', 'ys-shopline-via-woocommerce' ) ) );
         }
@@ -641,6 +741,10 @@ final class YSShoplinePayment {
         $gateway  = isset( $gateways['ys_shopline_credit'] ) ? $gateways['ys_shopline_credit'] : null;
 
         if ( ! $gateway || ! method_exists( $gateway, 'ajax_add_payment_method' ) ) {
+            wp_send_json_error( array( 'message' => __( '付款閘道未啟用。', 'ys-shopline-via-woocommerce' ) ) );
+        }
+
+        if ( ! $this->is_gateway_enabled_for_context( $gateway ) ) {
             wp_send_json_error( array( 'message' => __( '付款閘道未啟用。', 'ys-shopline-via-woocommerce' ) ) );
         }
 
@@ -698,6 +802,14 @@ final class YSShoplinePayment {
 
         $gateway = $gateways[ $payment_method ];
 
+        if ( ! $this->is_gateway_enabled_for_context( $gateway ) ) {
+            wp_send_json( array(
+                'result'   => 'failure',
+                'messages' => __( '付款閘道未啟用。', 'ys-shopline-via-woocommerce' ),
+            ) );
+            return;
+        }
+
         // 更新訂單的付款方式（可能已變更）
         $order->set_payment_method( $gateway );
         $order->save();
@@ -709,12 +821,37 @@ final class YSShoplinePayment {
     }
 
     /**
+     * Check whether a WooCommerce gateway is enabled and available in current context.
+     *
+     * Plugin-level switches decide registration only; WooCommerce's native
+     * gateway setting remains authoritative for checkout/add-card execution.
+     *
+     * @param mixed $gateway Gateway instance.
+     * @return bool
+     */
+    private function is_gateway_enabled_for_context( $gateway ) {
+        if ( ! $gateway || ! is_a( $gateway, 'WC_Payment_Gateway' ) ) {
+            return false;
+        }
+
+        if ( 'yes' !== $gateway->enabled ) {
+            return false;
+        }
+
+        return ! method_exists( $gateway, 'is_available' ) || $gateway->is_available();
+    }
+
+    /**
      * Register payment gateways.
      *
      * @param array $gateways Registered gateways.
      * @return array
      */
     public function register_gateways( $gateways ) {
+        if ( 'yes' !== get_option( 'ys_shopline_enabled', 'yes' ) ) {
+            return $gateways;
+        }
+
         // Credit Card (single payment)
         if ( 'yes' === get_option( 'ys_shopline_credit_enabled', 'yes' ) ) {
             $gateways[] = YSCreditCard::class;

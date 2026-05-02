@@ -4,7 +4,7 @@
 
 ## 版本資訊
 
-- **目前版本**：3.5.13
+- **目前版本**：3.5.14
 - **PHP 需求**：>= 8.0
 - **WordPress 需求**：>= 6.0
 - **WooCommerce 需求**：7.0 - 9.0
@@ -65,6 +65,32 @@ https://your-domain.com/wp-json/ys-shopline/v1/webhook
 ---
 
 ## 變更紀錄
+
+### 3.5.14 - 2026-05-02
+
+**修正 SHOPLINE gateway 註冊開關與 WooCommerce 啟閉狀態責任邊界**
+
+- 外掛設定頁的各付款方式開關改為只控制是否註冊到 WooCommerce payment gateways。
+- 註冊後實際是否在結帳、加卡、重新付款流程可用，改由 WooCommerce 原生付款方式 `enabled` / `is_available()` 判定。
+- `ys_shopline_enabled` 總開關關閉時不再註冊任何 SHOPLINE gateway。
+- 直接 AJAX 入口補上 WooCommerce enabled / availability 檢查，避免關閉的付款方式仍可被前端流程呼叫。
+
+#### 升級指南（自動 migration）
+
+升級到 3.5.14 時，外掛會自動執行一次性 migration（`plugins_loaded` priority 5）：
+
+1. 將舊版 `ys_shopline_{gateway}_enabled` option 同步到 WooCommerce 原生 `woocommerce_{gateway_id}_settings` 的 `enabled` key。
+2. 完成後寫入 `ys_shopline_db_version = 3.5.14`，後續不再重跑。
+3. 已被使用者主動設定的 `enabled` 值不會被覆蓋（只在 settings 沒設過 `enabled` 時寫入）。
+
+升級後可至「**WooCommerce > 設定 > 付款**」確認各 SHOPLINE 付款方式的啟用狀態與排序。日常啟閉與排序由此頁面管理，外掛設定頁僅控制是否「註冊」進來。
+
+#### 總開關注意事項
+
+`ys_shopline_enabled` 全局關閉時：
+- 所有 SHOPLINE gateway **不會註冊**到 WooCommerce。
+- ⚠️ 既有訂單退款、訂閱續扣（Recurring）會失敗，因為依賴 `WC()->payment_gateways->payment_gateways()` 取得 gateway 實例。
+- 請在沒有未完結 SHOPLINE 訂單與 active 訂閱時才關閉，或先用 WooCommerce > Payments 個別停用即可。
 
 ### 3.5.13 - 2026-04-29
 
