@@ -265,6 +265,46 @@ final class YSWebhookHandler {
     // ==========================================
 
     /**
+     * Claim the payment completion lock and return a fresh order object.
+     *
+     * @param \WC_Order $order   Order object.
+     * @param string    $context Webhook context for logs.
+     * @return \WC_Order|null Fresh order if this request owns completion.
+     */
+    private function claim_payment_complete_lock( \WC_Order $order, string $context ): ?\WC_Order {
+        $process_id = wp_generate_uuid4();
+        $order->update_meta_data( YSOrderMeta::PAYMENT_COMPLETE_LOCK, $process_id );
+        $order->save_meta_data();
+
+        $fresh = wc_get_order( $order->get_id() );
+        if ( ! $fresh ) {
+            YSLogger::warning( 'Webhook: Payment complete lock could not reload order', array(
+                'order_id' => $order->get_id(),
+                'context'  => $context,
+            ) );
+            return null;
+        }
+
+        if ( (string) $fresh->get_meta( YSOrderMeta::PAYMENT_COMPLETE_LOCK ) !== $process_id ) {
+            YSLogger::info( 'Webhook: Payment complete lock lost', array(
+                'order_id' => $order->get_id(),
+                'context'  => $context,
+            ) );
+            return null;
+        }
+
+        if ( $fresh->is_paid() ) {
+            YSLogger::info( 'Webhook: Payment complete already completed', array(
+                'order_id' => $fresh->get_id(),
+                'context'  => $context,
+            ) );
+            return null;
+        }
+
+        return $fresh;
+    }
+
+    /**
      * 處理付款成功
      */
     private function handle_trade_succeeded( array $data ): void {
@@ -289,6 +329,12 @@ final class YSWebhookHandler {
         }
 
         // 完成付款流程
+        $fresh = $this->claim_payment_complete_lock( $order, 'trade.succeeded' );
+        if ( ! $fresh ) {
+            return;
+        }
+
+        $order = $fresh;
         $order->payment_complete( $trade_order_id );
 
         // v3.5.11: 清除 PROCESSING/AUTHORIZED 中間態 meta
@@ -404,6 +450,12 @@ final class YSWebhookHandler {
         }
 
         if ( ! $order->is_paid() ) {
+            $fresh = $this->claim_payment_complete_lock( $order, 'trade.captured' );
+            if ( ! $fresh ) {
+                return;
+            }
+
+            $order = $fresh;
             $order->payment_complete( $trade_order_id );
         }
 

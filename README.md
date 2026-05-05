@@ -4,7 +4,7 @@
 
 ## 版本資訊
 
-- **目前版本**：3.5.14
+- **目前版本**：3.5.15
 - **PHP 需求**：>= 8.0
 - **WordPress 需求**：>= 6.0
 - **WooCommerce 需求**：7.0 - 9.0
@@ -65,6 +65,17 @@ https://your-domain.com/wp-json/ys-shopline/v1/webhook
 ---
 
 ## 變更紀錄
+
+### 3.5.15 - 2026-05-05
+
+**修正 redirect return 雙重觸發導致重複完成訂單 / 重複備註**
+
+- `YSRedirectHandler` 在 `SUCCEEDED/SUCCESS/CAPTURED` 分支加入 payment completion claim lock。
+- `YSWebhookHandler` 的 `trade.succeeded` / `trade.captured` 也使用同一把 lock，避免 webhook 與 redirect return 同時完成同一筆訂單。
+- 完成付款前會寫入 `_ys_shopline_payment_complete_lock`，立即重新讀取訂單確認 lock owner，並再次檢查 `is_paid()`。
+- 只有取得 lock 且 fresh order 尚未付款的 request 會執行 `payment_complete()` 與新增「SHOPLINE 付款已確認」備註。
+- 針對 SHOPLINE 信用卡 / 分期在 3DS 後可能延遲回傳或使用者重整 return URL 的情境，避免同一筆訂單被兩個 PHP request 同時完成。
+- 新增 `tests/redirect-double-fire-static.php` 靜態 regression test。
 
 ### 3.5.14 - 2026-05-02
 

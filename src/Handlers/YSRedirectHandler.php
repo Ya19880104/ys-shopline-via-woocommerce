@@ -158,13 +158,40 @@ class YSRedirectHandler {
         if ( 'SUCCEEDED' === $status || 'SUCCESS' === $status || 'CAPTURED' === $status ) {
             // 付款成功
             if ( ! $order->is_paid() ) {
-                $order->payment_complete( $trade_order_id );
+                // Claim-and-verify prevents simultaneous return requests from both completing the order.
+                $process_id = wp_generate_uuid4();
+                $order->update_meta_data( YSOrderMeta::PAYMENT_COMPLETE_LOCK, $process_id );
+                $order->save_meta_data();
+
+                $fresh = wc_get_order( $order->get_id() );
+                if ( ! $fresh ) {
+                    YSLogger::warning( 'Redirect handler: Payment complete lock could not reload order', array(
+                        'order_id' => $order->get_id(),
+                    ) );
+                    return;
+                }
+
+                if ( (string) $fresh->get_meta( YSOrderMeta::PAYMENT_COMPLETE_LOCK ) !== $process_id ) {
+                    YSLogger::info( 'Redirect handler: Payment complete lock lost', array(
+                        'order_id' => $order->get_id(),
+                    ) );
+                    return;
+                }
+
+                if ( $fresh->is_paid() ) {
+                    YSLogger::info( 'Redirect handler: Payment complete already completed', array(
+                        'order_id' => $fresh->get_id(),
+                    ) );
+                    return;
+                }
+
+                $fresh->payment_complete( $trade_order_id );
                 // 套用商家自訂的付款成功訂單狀態
                 $custom_paid_status = get_option( 'ys_shopline_order_status_paid', '' );
-                if ( $custom_paid_status && $custom_paid_status !== $order->get_status() ) {
-                    $order->update_status( $custom_paid_status, __( '依商家設定更新訂單狀態。', 'ys-shopline-via-woocommerce' ) );
+                if ( $custom_paid_status && $custom_paid_status !== $fresh->get_status() ) {
+                    $fresh->update_status( $custom_paid_status, __( '依商家設定更新訂單狀態。', 'ys-shopline-via-woocommerce' ) );
                 }
-                $order->add_order_note(
+                $fresh->add_order_note(
                     sprintf(
                         /* translators: %s: Trade order ID */
                         __( 'SHOPLINE 付款已確認（透過跳轉查詢）。交易編號：%s', 'ys-shopline-via-woocommerce' ),
@@ -202,17 +229,17 @@ class YSRedirectHandler {
                 ) );
 
                 if ( $payment_method ) {
-                    $order->update_meta_data( YSOrderMeta::PAYMENT_METHOD, $payment_method );
+                    $fresh->update_meta_data( YSOrderMeta::PAYMENT_METHOD, $payment_method );
                 }
                 if ( ! empty( $credit_card ) ) {
-                    $order->update_meta_data( YSOrderMeta::CARD_LAST4, $credit_card['last4'] ?? $credit_card['last'] ?? '' );
-                    $order->update_meta_data( YSOrderMeta::CARD_BRAND, $credit_card['brand'] ?? '' );
+                    $fresh->update_meta_data( YSOrderMeta::CARD_LAST4, $credit_card['last4'] ?? $credit_card['last'] ?? '' );
+                    $fresh->update_meta_data( YSOrderMeta::CARD_BRAND, $credit_card['brand'] ?? '' );
                 }
 
                 // 同步付款工具到 WooCommerce Payment Tokens
                 if ( ! empty( $payment_instrument_id ) ) {
                     self::sync_payment_token(
-                        $order,
+                        $fresh,
                         $payment_instrument_id,
                         $credit_card,
                         $payment_customer_id
@@ -220,24 +247,25 @@ class YSRedirectHandler {
 
                     // 如果此訂單有關聯 subscription，將 instrument_id 寫入 subscription meta
                     // 放在 sync_payment_token 外面，因為不管 token 是新建還是已存在都要執行
-                    self::update_subscription_instrument( $order, $payment_instrument_id );
+                    self::update_subscription_instrument( $fresh, $payment_instrument_id );
                 } else {
-                    self::maybe_note_bind_card_not_persisted( $order, $payment_instrument, $response );
+                    self::maybe_note_bind_card_not_persisted( $fresh, $payment_instrument, $response );
                 }
 
                 // 儲存完整的付款詳情
-                $order->update_meta_data( YSOrderMeta::PAYMENT_DETAIL, array(
+                $fresh->update_meta_data( YSOrderMeta::PAYMENT_DETAIL, array(
                     'paymentMethod'       => $payment_method,
                     'paymentInstrument'   => $payment_instrument,
                     'creditCard'          => $credit_card,
                     'paymentCustomerId'   => $payment_customer_id,
                 ) );
 
-                $order->update_meta_data( YSOrderMeta::PAYMENT_STATUS, $status );
-                $order->save();
+                $fresh->update_meta_data( YSOrderMeta::PAYMENT_STATUS, $status );
+                $fresh->save();
+                $order = $fresh;
 
                 YSLogger::info( 'Redirect handler: Order completed', array(
-                    'order_id' => $order->get_id(),
+                    'order_id' => $fresh->get_id(),
                     'status'   => $status,
                 ) );
             }
@@ -448,7 +476,7 @@ class YSRedirectHandler {
             $order->add_order_note( sprintf(
                 /* translators: %s: SHOPLINE response 的 savePaymentInstrument 旗標值 */
                 __(
-                    'Shopline 金流：使用者勾選了「儲存卡片」，但 SHOPLINE 未建立 paymentInstrument（response savePaymentInstrument=%s）。可能原因：(1) 沙盒 non-3D 流程不支援綁卡 (2) 卡片不支援綁定 (3) 商家帳號未開通綁卡 (4) 金額/風控未走 3DS。本訂單付款已完成，但下次仍需重新輸入卡片。',
+                    'Shopline 金流：使用者勾選了「儲存卡片」，但 SHOPLINE did not create a saved card / 未建立 paymentInstrument（response savePaymentInstrument=%s）。本訂單付款已完成，但此次卡片未被儲存，下次仍需重新輸入卡片。這不是 WooCommerce token 儲存錯誤；請使用本訂單 tradeOrderId 請 SHOPLINE 查詢為何未建立 paymentInstrument（常見方向：卡片或銀行不支援綁定、商家帳號綁卡權限、SHOPLINE 端風控或交易規則）。',
                     'ys-shopline-via-woocommerce'
                 ),
                 $flag_str

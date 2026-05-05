@@ -34,6 +34,9 @@ final class YSOrderMeta {
     /** @var string 退款詳情 */
     public const REFUND_DETAIL = '_ys_shopline_refund_detail';
 
+    /** @var string Refund API attempt counter. */
+    public const REFUND_ATTEMPT = '_ys_shopline_refund_attempt';
+
     /** @var string Next Action */
     public const NEXT_ACTION = '_ys_shopline_next_action';
 
@@ -51,6 +54,9 @@ final class YSOrderMeta {
 
     /** @var string SHOPLINE 已授權但尚未 capture (PROCESSING/AUTHORIZED 中間態) v3.5.11 */
     public const PAYMENT_AUTHORIZED_PENDING = '_ys_shopline_payment_authorized_pending';
+
+    /** @var string Redirect return payment completion claim lock */
+    public const PAYMENT_COMPLETE_LOCK = '_ys_shopline_payment_complete_lock';
 
     /** @var string 付款嘗試次數 */
     public const PAYMENT_ATTEMPT = '_ys_shopline_payment_attempt';
