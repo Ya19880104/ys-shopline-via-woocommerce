@@ -4,7 +4,7 @@
 
 ## 版本資訊
 
-- **目前版本**：3.5.15
+- **目前版本**：3.5.16
 - **PHP 需求**：>= 8.0
 - **WordPress 需求**：>= 6.0
 - **WooCommerce 需求**：7.0 - 9.0
@@ -65,6 +65,16 @@ https://your-domain.com/wp-json/ys-shopline/v1/webhook
 ---
 
 ## 變更紀錄
+
+### 3.5.16 - 2026-05-07
+
+**修正 ATM 保留/等待付款訂單的前端顯示與變更付款方式流程**
+
+- ATM 已取得虛擬帳號時，`pending` / `on-hold` 感謝頁與訂單頁都顯示「等待轉帳」與 ATM 繳費資訊。
+- 離線付款且已有繳費資訊時，按鈕改為「變更付款方式」；未取得離線付款資訊時保留「立即付款」。
+- 允許 ATM `on-hold` 訂單進入 WooCommerce order-pay，讓保留狀態也能變更付款方式。
+- 變更付款方式送出前會清除舊 ATM 虛擬帳號、舊 trade id 與付款狀態 meta，避免新付款流程仍被舊離線付款資訊干擾。
+- 新增 `tests/offline-payment-display-static.php` 靜態 regression test。
 
 ### 3.5.15 - 2026-05-05
 
