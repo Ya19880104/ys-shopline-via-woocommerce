@@ -51,6 +51,7 @@ register_deactivation_hook( __FILE__, function () {
 } );
 
 use YangSheep\ShoplinePayment\Utils\YSLogger;
+use YangSheep\ShoplinePayment\Utils\YSOrderMeta;
 use YangSheep\ShoplinePayment\Api\YSApi;
 use YangSheep\ShoplinePayment\Admin\YSAdminSettings;
 use YangSheep\ShoplinePayment\Gateways\YSSubscription;
@@ -130,6 +131,9 @@ final class YSShoplinePayment {
         // Register payment gateways
         add_filter( 'woocommerce_payment_gateways', array( $this, 'register_gateways' ) );
 
+        // 允許 ATM 離線付款訂單進入 order-pay 變更付款方式。
+        add_filter( 'woocommerce_valid_order_statuses_for_payment', array( $this, 'allow_offline_order_payment_change' ), 10, 2 );
+
         // Initialize admin settings page
         YSAdminSettings::get_instance();
 
@@ -164,6 +168,41 @@ final class YSShoplinePayment {
         }
 
         return $template;
+    }
+
+    /**
+     * Allow offline Shopline orders to enter order-pay for changing payment.
+     *
+     * WooCommerce excludes on-hold orders from payment by default. ATM orders
+     * can intentionally stay on-hold while waiting for transfer, but customers
+     * still need a working "change payment method" link.
+     *
+     * @param array          $statuses Valid payment statuses.
+     * @param \WC_Order|null $order    Order object when provided by WooCommerce.
+     * @return array
+     */
+    public function allow_offline_order_payment_change( $statuses, $order = null ) {
+        if ( ! is_array( $statuses ) || ! is_a( $order, 'WC_Order' ) ) {
+            return $statuses;
+        }
+
+        if ( 'on-hold' !== $order->get_status() ) {
+            return $statuses;
+        }
+
+        if ( 'yes' === $order->get_meta( YSOrderMeta::PAYMENT_AUTHORIZED_PENDING ) ) {
+            return $statuses;
+        }
+
+        if ( 'ys_shopline_atm' !== $order->get_payment_method() ) {
+            return $statuses;
+        }
+
+        if ( ! in_array( 'on-hold', $statuses, true ) ) {
+            $statuses[] = 'on-hold';
+        }
+
+        return $statuses;
     }
 
     /**
@@ -810,6 +849,8 @@ final class YSShoplinePayment {
             return;
         }
 
+        $this->prepare_offline_order_for_repayment( $order, $payment_method );
+
         // 更新訂單的付款方式（可能已變更）
         $order->set_payment_method( $gateway );
         $order->save();
@@ -818,6 +859,57 @@ final class YSShoplinePayment {
         $result = $gateway->process_payment( $order_id );
 
         wp_send_json( $result );
+    }
+
+    /**
+     * Clear stale offline-payment data before creating a replacement payment.
+     *
+     * ATM virtual-account orders may be on-hold/pending with an existing trade.
+     * When the customer uses order-pay to change payment, the old offline
+     * instructions must stop driving the front-end display and the gateway must
+     * be allowed to create a fresh trade.
+     *
+     * @param \WC_Order $order          Order object.
+     * @param string    $payment_method Newly selected payment method.
+     * @return void
+     */
+    private function prepare_offline_order_for_repayment( $order, $payment_method ) {
+        if ( ! $order || 'ys_shopline_atm' !== $order->get_payment_method() ) {
+            return;
+        }
+
+        if ( ! in_array( $order->get_status(), array( 'pending', 'on-hold' ), true ) ) {
+            return;
+        }
+
+        if ( 'yes' === $order->get_meta( YSOrderMeta::PAYMENT_AUTHORIZED_PENDING ) ) {
+            return;
+        }
+
+        $had_offline_details = (bool) $order->get_meta( YSOrderMeta::VA_ACCOUNT );
+
+        $order->delete_meta_data( YSOrderMeta::VA_ACCOUNT );
+        $order->delete_meta_data( YSOrderMeta::VA_BANK_CODE );
+        $order->delete_meta_data( YSOrderMeta::VA_EXPIRE );
+        $order->delete_meta_data( YSOrderMeta::TRADE_ORDER_ID );
+        $order->delete_meta_data( YSOrderMeta::SESSION_ID );
+        $order->delete_meta_data( YSOrderMeta::PAYMENT_STATUS );
+        $order->delete_meta_data( YSOrderMeta::PAYMENT_DETAIL );
+        $order->delete_meta_data( YSOrderMeta::NEXT_ACTION );
+
+        if ( 'pending' !== $order->get_status() ) {
+            $order->update_status( 'pending', __( 'Customer is changing payment method from offline payment.', 'ys-shopline-via-woocommerce' ) );
+        }
+
+        if ( $had_offline_details ) {
+            $order->add_order_note( sprintf(
+                /* translators: %s: payment method id */
+                __( 'Shopline 金流：顧客變更付款方式，已清除原離線付款資訊（new gateway=%s）。', 'ys-shopline-via-woocommerce' ),
+                $payment_method
+            ) );
+        }
+
+        $order->save();
     }
 
     /**

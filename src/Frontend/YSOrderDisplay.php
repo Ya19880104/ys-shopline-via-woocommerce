@@ -82,21 +82,21 @@ class YSOrderDisplay {
 
 		$status = $order->get_status();
 
-		$is_atm = ( 'ys_shopline_atm' === $order->get_payment_method() );
+		$has_offline_payment_details = $this->has_offline_payment_details( $order );
 
 		// 付款成功
 		if ( $order->is_paid() ) {
 			$this->render_success_notice( $order );
-			if ( $is_atm ) {
-				$this->render_atm_transfer_info( $order );
+			if ( $has_offline_payment_details ) {
+				$this->render_offline_payment_info( $order );
 			}
 			return;
 		}
 
-		// ATM 等待轉帳（on-hold）：顯示轉帳資訊，不顯示重新付款按鈕
-		if ( $is_atm && 'on-hold' === $status ) {
-			$this->render_atm_pending_notice( $order );
-			$this->render_atm_transfer_info( $order );
+		// 離線付款已取得繳費資訊：pending/on-hold 都顯示繳費資訊，只提供變更付款方式。
+		if ( $has_offline_payment_details && in_array( $status, array( 'pending', 'on-hold' ), true ) ) {
+			$this->render_offline_payment_pending_notice( $order );
+			$this->render_offline_payment_info( $order );
 			return;
 		}
 
@@ -112,6 +112,23 @@ class YSOrderDisplay {
 			$this->render_pending_or_failed_notice( $order );
 			return;
 		}
+	}
+
+	/**
+	 * 判斷訂單是否已有離線付款資訊。
+	 *
+	 * 目前外掛只有 ATM 虛擬帳號屬於需要顯示繳費資訊的離線付款。
+	 * 未來若新增 IBON / 超商代碼，可在這裡接入對應 meta 判斷。
+	 *
+	 * @param \WC_Order $order 訂單物件
+	 * @return bool
+	 */
+	private function has_offline_payment_details( $order ) {
+		if ( 'ys_shopline_atm' === $order->get_payment_method() ) {
+			return (bool) $order->get_meta( YSOrderMeta::VA_ACCOUNT );
+		}
+
+		return false;
 	}
 
 	/**
@@ -313,11 +330,11 @@ class YSOrderDisplay {
 	}
 
 	/**
-	 * 渲染 ATM 等待轉帳通知
+	 * 渲染離線付款等待通知
 	 *
 	 * @param \WC_Order $order 訂單物件
 	 */
-	private function render_atm_pending_notice( $order ) {
+	private function render_offline_payment_pending_notice( $order ) {
 		$pay_url = $order->get_checkout_payment_url();
 
 		?>
@@ -336,6 +353,17 @@ class YSOrderDisplay {
 			</div>
 		</div>
 		<?php
+	}
+
+	/**
+	 * 渲染離線付款資訊。
+	 *
+	 * @param \WC_Order $order 訂單物件
+	 */
+	private function render_offline_payment_info( $order ) {
+		if ( 'ys_shopline_atm' === $order->get_payment_method() ) {
+			$this->render_atm_transfer_info( $order );
+		}
 	}
 
 	/**
