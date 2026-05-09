@@ -4,7 +4,7 @@
 
 ## 版本資訊
 
-- **目前版本**：3.5.17
+- **目前版本**：3.5.18
 - **PHP 需求**：>= 8.0
 - **WordPress 需求**：>= 6.0
 - **WooCommerce 需求**：7.0 - 9.0
@@ -66,7 +66,16 @@ https://your-domain.com/wp-json/ys-shopline/v1/webhook
 
 ## 變更紀錄
 
-### 3.5.17 - 2026-05-09
+### 3.5.18 - 2026-05-09
+
+**重新打包 3.5.17（程式碼相同，修正打包格式）**
+
+- 3.5.17 zip 因使用 PowerShell `Compress-Archive` 打包，路徑分隔符為反斜線，Linux 解壓後檔名變成 literal `\` 而非資料夾，且檔名包含版本號導致 WordPress 建立巢狀資料夾。
+- 本版 zip 改用 Python `zipfile` 打包（正斜線路徑），檔名 `ys-shopline-via-woocommerce.zip` 不帶版本號，符合 WordPress plugin 安裝慣例。
+- 程式碼與 3.5.17 完全相同，無新功能、無 bug fix。
+- 已撤回 3.5.17 release，請改用本版。
+
+### 3.5.17 - 2026-05-09 [已撤回]
 
 **付款方式 ICON 本機化與後台開關**
 
