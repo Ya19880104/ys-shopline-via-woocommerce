@@ -418,6 +418,7 @@ class YSAdminSettings {
 			// 一般設定
 			'ys_shopline_enabled',
 			'ys_shopline_testmode',
+			'ys_shopline_payment_icons_enabled',
 
 			// 商店地址
 			'ys_shopline_store_address',
@@ -565,6 +566,7 @@ class YSAdminSettings {
 		$checkboxes = array(
 			'ys_shopline_enabled',
 			'ys_shopline_testmode',
+			'ys_shopline_payment_icons_enabled',
 			'ys_shopline_credit_enabled',
 			'ys_shopline_credit_installment_enabled',
 			'ys_shopline_credit_subscription_enabled',
@@ -640,6 +642,13 @@ class YSAdminSettings {
 					<td>
 						<?php $this->render_toggle( 'ys_shopline_testmode', 'yes' ); ?>
 						<span class="ys-toggle-desc"><?php _e( '使用 SHOPLINE Sandbox 測試環境', 'ys-shopline-via-woocommerce' ); ?></span>
+					</td>
+				</tr>
+				<tr>
+					<th scope="row"><?php _e( '啟用付款方式 ICON', 'ys-shopline-via-woocommerce' ); ?></th>
+					<td>
+						<?php $this->render_toggle( 'ys_shopline_payment_icons_enabled', 'yes' ); ?>
+						<span class="ys-toggle-desc"><?php _e( '在結帳付款方式名稱旁顯示本機付款圖示。', 'ys-shopline-via-woocommerce' ); ?></span>
 					</td>
 				</tr>
 			</table>

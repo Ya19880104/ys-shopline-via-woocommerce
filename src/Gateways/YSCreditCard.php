@@ -177,6 +177,10 @@ class YSCreditCard extends YSGatewayBase {
      * @return string
      */
     public function get_icon() {
+        if ( ! $this->is_payment_icons_enabled() ) {
+            return apply_filters( 'woocommerce_gateway_icon', '', $this->id );
+        }
+
         // v3.5.11: 改用本地化 SVG（assets/images/）— 詳見 YSCreditInstallment::get_icon 註釋
         $base = YS_SHOPLINE_PLUGIN_URL . 'assets/images/';
         $icons = array(

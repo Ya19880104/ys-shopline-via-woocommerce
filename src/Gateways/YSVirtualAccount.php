@@ -47,6 +47,21 @@ class YSVirtualAccount extends YSGatewayBase {
 	}
 
 	/**
+	 * Get icon HTML.
+	 *
+	 * @return string
+	 */
+	public function get_icon() {
+		if ( ! $this->is_payment_icons_enabled() ) {
+			return apply_filters( 'woocommerce_gateway_icon', '', $this->id );
+		}
+
+		$icon = '<img src="' . esc_url( YS_SHOPLINE_PLUGIN_URL . 'assets/images/atm.webp' ) . '" alt="ATM" style="max-height: 28px; margin-right: 5px;" />';
+
+		return apply_filters( 'woocommerce_gateway_icon', $icon, $this->id );
+	}
+
+	/**
 	 * 取得 ATM 繳費期限（分鐘）。
 	 *
 	 * 從全域 option 讀取（SHOPLINE 金流 > 支付方式頁面設定）。

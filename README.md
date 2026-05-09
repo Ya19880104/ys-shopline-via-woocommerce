@@ -4,7 +4,7 @@
 
 ## 版本資訊
 
-- **目前版本**：3.5.16
+- **目前版本**：3.5.17
 - **PHP 需求**：>= 8.0
 - **WordPress 需求**：>= 6.0
 - **WooCommerce 需求**：7.0 - 9.0
@@ -65,6 +65,16 @@ https://your-domain.com/wp-json/ys-shopline/v1/webhook
 ---
 
 ## 變更紀錄
+
+### 3.5.17 - 2026-05-09
+
+**付款方式 ICON 本機化與後台開關**
+
+- 新增「啟用付款方式 ICON」後台設定，預設開啟，可關閉所有付款方式圖示。
+- ATM、街口支付、LINE Pay、zingala 圖示改為外掛內建 WebP，避免結帳頁依賴外部圖片 URL。
+- 信用卡、分期、訂閱保留 Visa / Mastercard / JCB 本機圖示，並一併受 ICON 開關控制。
+- Apple Pay 補回外掛內建 SVG 圖示，並一併受 ICON 開關控制。
+- 新增 `tests/gateway-icons-static.php` regression test，鎖定本機資產與開關行為。
 
 ### 3.5.16 - 2026-05-07
 

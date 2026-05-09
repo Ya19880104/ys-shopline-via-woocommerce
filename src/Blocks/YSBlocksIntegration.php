@@ -148,6 +148,10 @@ final class YSBlocksIntegration extends AbstractPaymentMethodType {
      * @return array
      */
     private function get_payment_icons(): array {
+        if ( 'yes' !== get_option( 'ys_shopline_payment_icons_enabled', 'yes' ) ) {
+            return array();
+        }
+
         $icons_map = array(
             'ys_shopline_credit' => array(
                 array( 'id' => 'visa', 'alt' => 'Visa', 'src' => YS_SHOPLINE_PLUGIN_URL . 'assets/images/visa.svg' ),
@@ -164,8 +168,20 @@ final class YSBlocksIntegration extends AbstractPaymentMethodType {
                 array( 'id' => 'mastercard', 'alt' => 'Mastercard', 'src' => YS_SHOPLINE_PLUGIN_URL . 'assets/images/mastercard.svg' ),
                 array( 'id' => 'jcb', 'alt' => 'JCB', 'src' => YS_SHOPLINE_PLUGIN_URL . 'assets/images/jcb.svg' ),
             ),
+            'ys_shopline_atm' => array(
+                array( 'id' => 'atm', 'alt' => 'ATM', 'src' => YS_SHOPLINE_PLUGIN_URL . 'assets/images/atm.webp' ),
+            ),
+            'ys_shopline_jkopay' => array(
+                array( 'id' => 'jkopay', 'alt' => '街口支付', 'src' => YS_SHOPLINE_PLUGIN_URL . 'assets/images/jkopay.webp' ),
+            ),
             'ys_shopline_applepay' => array(
                 array( 'id' => 'applepay', 'alt' => 'Apple Pay', 'src' => YS_SHOPLINE_PLUGIN_URL . 'assets/images/apple-pay-mark.svg' ),
+            ),
+            'ys_shopline_linepay' => array(
+                array( 'id' => 'linepay', 'alt' => 'LINE Pay', 'src' => YS_SHOPLINE_PLUGIN_URL . 'assets/images/linepay.webp' ),
+            ),
+            'ys_shopline_bnpl' => array(
+                array( 'id' => 'zingala', 'alt' => 'zingala', 'src' => YS_SHOPLINE_PLUGIN_URL . 'assets/images/zingala.webp' ),
             ),
         );
 

@@ -101,6 +101,15 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
     abstract public function get_payment_method();
 
     /**
+     * Check whether checkout payment method icons should be rendered.
+     *
+     * @return bool
+     */
+    protected function is_payment_icons_enabled() {
+        return 'yes' === get_option( 'ys_shopline_payment_icons_enabled', 'yes' );
+    }
+
+    /**
      * Initialize gateway settings form fields.
      */
     public function init_form_fields() {

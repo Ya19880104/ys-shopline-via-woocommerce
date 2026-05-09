@@ -91,12 +91,11 @@ class YSJKOPay extends YSGatewayBase {
      * @return string
      */
     public function get_icon() {
-        $icon_url = $this->icon;
-
-        if ( empty( $icon_url ) ) {
-            // Use CDN fallback for JKOPay icon
-            $icon_url = 'https://www.jkopay.com/static/images/logo.svg';
+        if ( ! $this->is_payment_icons_enabled() ) {
+            return apply_filters( 'woocommerce_gateway_icon', '', $this->id );
         }
+
+        $icon_url = YS_SHOPLINE_PLUGIN_URL . 'assets/images/jkopay.webp';
 
         $icon = '<img src="' . esc_url( $icon_url ) . '" alt="街口支付" style="max-height: 28px; margin-right: 5px;" />';
 

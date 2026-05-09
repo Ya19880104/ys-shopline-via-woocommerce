@@ -93,14 +93,11 @@ class YSLinePay extends YSGatewayBase {
      * @return string
      */
     public function get_icon() {
-        $icon_url = $this->icon;
-
-        if ( ! $icon_url ) {
-            // Default LINE Pay icon
-            $icon_url = 'https://cdn.shoplinepayments.com/assets/images/line-pay-logo.png';
+        if ( ! $this->is_payment_icons_enabled() ) {
+            return apply_filters( 'woocommerce_gateway_icon', '', $this->id );
         }
 
-        $icon = '<img src="' . WC_HTTPS::force_https_url( $icon_url ) . '" alt="LINE Pay" style="max-height: 28px; margin-right: 5px;" />';
+        $icon = '<img src="' . esc_url( YS_SHOPLINE_PLUGIN_URL . 'assets/images/linepay.webp' ) . '" alt="LINE Pay" style="max-height: 28px; margin-right: 5px;" />';
 
         return apply_filters( 'woocommerce_gateway_icon', $icon, $this->id );
     }

@@ -242,6 +242,10 @@ class YSCreditInstallment extends YSGatewayBase {
 	 * @return string
 	 */
 	public function get_icon() {
+		if ( ! $this->is_payment_icons_enabled() ) {
+			return apply_filters( 'woocommerce_gateway_icon', '', $this->id );
+		}
+
 		$base = YS_SHOPLINE_PLUGIN_URL . 'assets/images/';
 		$icons = array(
 			'<img src="' . esc_url( $base . 'visa.svg' ) . '" alt="Visa" width="32" />',

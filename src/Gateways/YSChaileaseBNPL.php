@@ -195,11 +195,11 @@ class YSChaileaseBNPL extends YSGatewayBase {
      * @return string
      */
     public function get_icon() {
-        $icon_url = $this->icon;
-
-        if ( ! $icon_url ) {
-            $icon_url = 'https://cdn.shoplinepayments.com/assets/images/zingla-logo.png';
+        if ( ! $this->is_payment_icons_enabled() ) {
+            return apply_filters( 'woocommerce_gateway_icon', '', $this->id );
         }
+
+        $icon_url = YS_SHOPLINE_PLUGIN_URL . 'assets/images/zingala.webp';
 
         $icon = '<img src="' . WC_HTTPS::force_https_url( $icon_url ) . '" alt="中租 zingla" style="max-height: 28px; margin-right: 5px;" />';
 

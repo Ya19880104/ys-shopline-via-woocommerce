@@ -111,15 +111,13 @@ class YSApplePay extends YSGatewayBase {
      * @return string
      */
     public function get_icon() {
-        $icon_url = $this->icon;
-
-        if ( ! $icon_url ) {
-            // Apple Pay mark — 使用外掛本地 SVG
-            $icon_url = YS_SHOPLINE_PLUGIN_URL . 'assets/images/apple-pay-mark.svg';
+        if ( ! $this->is_payment_icons_enabled() ) {
+            return apply_filters( 'woocommerce_gateway_icon', '', $this->id );
         }
 
-        $icon = '<img src="' . WC_HTTPS::force_https_url( $icon_url ) . '" alt="Apple Pay" style="max-height: 32px; margin-right: 5px;" />';
+        $icon = '<img src="' . esc_url( YS_SHOPLINE_PLUGIN_URL . 'assets/images/apple-pay-mark.svg' ) . '" alt="Apple Pay" style="max-height: 28px; margin-right: 5px;" />';
 
         return apply_filters( 'woocommerce_gateway_icon', $icon, $this->id );
+
     }
 }

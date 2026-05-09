@@ -68,6 +68,26 @@ class YSCreditSubscription extends YSGatewayBase {
     }
 
     /**
+     * Get icon HTML.
+     *
+     * @return string
+     */
+    public function get_icon() {
+        if ( ! $this->is_payment_icons_enabled() ) {
+            return apply_filters( 'woocommerce_gateway_icon', '', $this->id );
+        }
+
+        $base = YS_SHOPLINE_PLUGIN_URL . 'assets/images/';
+        $icons = array(
+            '<img src="' . esc_url( $base . 'visa.svg' ) . '" alt="Visa" width="32" />',
+            '<img src="' . esc_url( $base . 'mastercard.svg' ) . '" alt="Mastercard" width="32" />',
+            '<img src="' . esc_url( $base . 'jcb.svg' ) . '" alt="JCB" width="32" />',
+        );
+
+        return apply_filters( 'woocommerce_gateway_icon', implode( ' ', $icons ), $this->id );
+    }
+
+    /**
      * Check if gateway is available.
      *
      * 新增付款方式頁面：訂閱閘道不適用（綁卡由 ys_shopline_credit 統一處理）
