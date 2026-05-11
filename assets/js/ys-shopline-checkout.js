@@ -656,6 +656,7 @@ jQuery(function ($) {
         placeOrder: function (gatewayId) {
             var self = this;
             var $form = $('form.checkout');
+            var gatewayConfig = GATEWAY_CONFIG[gatewayId] || {};
 
             // 防呆：防止重複提交（瀏覽器慢、連點等情況）
             if (self._isSubmitting) {
@@ -762,13 +763,14 @@ jQuery(function ($) {
                 );
 
                 // Add selected installment if applicable
-                var selectedInstallment = gatewayId === 'ys_shopline_credit_installment' ? self.getSelectedInstallment(result, gatewayId) : '';
+                var selectedInstallment = gatewayConfig.supportsInstallment ? self.getSelectedInstallment(result, gatewayId) : '';
                 if (selectedInstallment) {
-                    $form.find('input[name="ys_shopline_installment"]').remove();
+                    var installmentFieldName = gatewayId === 'ys_shopline_bnpl' ? 'ys_shopline_bnpl_installment' : 'ys_shopline_installment';
+                    $form.find('input[name="ys_shopline_installment"], input[name="ys_shopline_bnpl_installment"]').remove();
                     $form.append(
                         $('<input>').attr({
                             type: 'hidden',
-                            name: 'ys_shopline_installment',
+                            name: installmentFieldName,
                             value: selectedInstallment
                         })
                     );
@@ -1759,9 +1761,13 @@ jQuery(function ($) {
                     ajaxData.ys_shopline_saved_card_last4 = instrumentSelection.last4;
                 }
 
-                var selectedInstallment = gatewayId === 'ys_shopline_credit_installment' ? ShoplineCheckout.getSelectedInstallment(result, gatewayId) : '';
+                var selectedInstallment = (GATEWAY_CONFIG[gatewayId] || {}).supportsInstallment ? ShoplineCheckout.getSelectedInstallment(result, gatewayId) : '';
                 if (selectedInstallment) {
-                    ajaxData.ys_shopline_installment = selectedInstallment;
+                    if (gatewayId === 'ys_shopline_bnpl') {
+                        ajaxData.ys_shopline_bnpl_installment = selectedInstallment;
+                    } else {
+                        ajaxData.ys_shopline_installment = selectedInstallment;
+                    }
                 }
 
                 // 加入裝置資訊

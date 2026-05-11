@@ -4,7 +4,7 @@
 
 ## 版本資訊
 
-- **目前版本**：3.5.18
+- **目前版本**：3.5.19
 - **PHP 需求**：>= 8.0
 - **WordPress 需求**：>= 6.0
 - **WooCommerce 需求**：7.0 - 9.0
@@ -65,6 +65,16 @@ https://your-domain.com/wp-json/ys-shopline/v1/webhook
 ---
 
 ## 變更紀錄
+
+### 3.5.19 - 2026-05-11
+
+**Fix Chailease BNPL installment count**
+
+- Pass configured BNPL `installmentCounts` into the SHOPLINE SDK.
+- Send the selected BNPL count from checkout and pay-for-order as `ys_shopline_bnpl_installment`.
+- Create BNPL trades with `confirm.paymentMethodOptions.installments.count`, not legacy `confirm.installment`.
+- If only one BNPL count is configured, use it as a backend fallback when the frontend does not post a count.
+- Add `tests/bnpl-installment-static.php` to lock the 36-period BNPL flow.
 
 ### 3.5.18 - 2026-05-09
 

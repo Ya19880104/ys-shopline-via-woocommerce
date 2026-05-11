@@ -59,6 +59,68 @@ class YSChaileaseBNPL extends YSGatewayBase {
     }
 
     /**
+     * Get configured BNPL installment counts.
+     *
+     * @return array
+     */
+    protected function get_configured_installments() {
+        $installments = $this->get_option( 'installments', array() );
+        if ( ! is_array( $installments ) ) {
+            $installments = array( $installments );
+        }
+
+        $counts = array();
+        foreach ( $installments as $installment ) {
+            $count = absint( $installment );
+            if ( $count > 0 ) {
+                $counts[] = (string) $count;
+            }
+        }
+
+        $counts = array_values( array_unique( $counts ) );
+        usort( $counts, 'strnatcmp' );
+
+        return $counts;
+    }
+
+    /**
+     * Resolve selected BNPL installment from the request.
+     *
+     * @return int
+     */
+    protected function get_selected_installment_from_request() {
+        $allowed_installments = $this->get_configured_installments();
+
+        // phpcs:ignore WordPress.Security.NonceVerification.Missing
+        $requested = isset( $_POST['ys_shopline_bnpl_installment'] ) ? absint( wp_unslash( $_POST['ys_shopline_bnpl_installment'] ) ) : 0;
+        if ( $requested > 0 && in_array( (string) $requested, $allowed_installments, true ) ) {
+            return $requested;
+        }
+
+        if ( 1 === count( $allowed_installments ) ) {
+            return absint( $allowed_installments[0] );
+        }
+
+        return 0;
+    }
+
+    /**
+     * Get SDK configuration.
+     *
+     * @return array
+     */
+    public function get_sdk_config() {
+        $config       = parent::get_sdk_config();
+        $installments = $this->get_configured_installments();
+
+        if ( ! empty( $installments ) ) {
+            $config['installmentCounts'] = $installments;
+        }
+
+        return $config;
+    }
+
+    /**
      * Initialize gateway settings form fields.
      */
     public function init_form_fields() {
@@ -175,13 +237,23 @@ class YSChaileaseBNPL extends YSGatewayBase {
         unset( $data['confirm']['paymentInstrument'] );
 
         // Add installment data if selected
-        $installment = isset( $_POST['ys_shopline_bnpl_installment'] ) ? absint( $_POST['ys_shopline_bnpl_installment'] ) : 0;
+        $installment = $this->get_selected_installment_from_request();
 
         if ( $installment > 0 ) {
-            $data['confirm']['installment'] = $installment;
+            $data['confirm']['paymentMethodOptions'] = array(
+                'installments' => array(
+                    'count' => (string) $installment,
+                ),
+            );
             $order->update_meta_data( YSOrderMeta::BNPL_INSTALLMENT, $installment );
             $order->save();
         }
+
+        \YangSheep\ShoplinePayment\Utils\YSLogger::debug( 'BNPL installment resolved', array(
+            'order_id'               => $order->get_id(),
+            'selected_installment'   => $installment ?: 'none',
+            'configured_installment' => implode( ',', $this->get_configured_installments() ),
+        ) );
 
         // 設定付款期限（分鐘）— 從全域 option 讀取
         $data['expireTime'] = $this->get_expire_time();
