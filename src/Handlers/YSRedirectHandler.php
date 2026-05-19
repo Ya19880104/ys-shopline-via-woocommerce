@@ -253,12 +253,12 @@ class YSRedirectHandler {
                 }
 
                 // 儲存完整的付款詳情
-                $fresh->update_meta_data( YSOrderMeta::PAYMENT_DETAIL, array(
+                $fresh->update_meta_data( YSOrderMeta::PAYMENT_DETAIL, YSOrderMeta::sanitize_payment_detail( array(
                     'paymentMethod'       => $payment_method,
                     'paymentInstrument'   => $payment_instrument,
                     'creditCard'          => $credit_card,
                     'paymentCustomerId'   => $payment_customer_id,
-                ) );
+                ) ) );
 
                 $fresh->update_meta_data( YSOrderMeta::PAYMENT_STATUS, $status );
                 $fresh->save();

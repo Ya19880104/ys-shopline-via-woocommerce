@@ -106,6 +106,50 @@ final class YSOrderMeta {
     /** @var string 信用卡 Token 統一 gateway ID */
     public const CREDIT_GATEWAY_ID = 'ys_shopline_credit';
 
+    /** @var array<int, string> Card BIN/IIN keys removed before storing payment detail snapshots. */
+    private const CARD_BIN_KEYS = [
+        'bin',
+        'cardbin',
+        'card_bin',
+        'issuerbin',
+        'issuer_bin',
+        'iin',
+        'cardiin',
+        'card_iin',
+    ];
+
+    /**
+     * Remove card BIN/IIN values from payment detail snapshots before storage/display.
+     *
+     * @param array<string|int, mixed> $payment_data Payment detail data.
+     * @return array<string|int, mixed>
+     */
+    public static function sanitize_payment_detail( array $payment_data ): array {
+        $sanitized = [];
+
+        foreach ( $payment_data as $key => $value ) {
+            if ( is_string( $key ) && self::is_card_bin_key( $key ) ) {
+                continue;
+            }
+
+            $sanitized[ $key ] = is_array( $value )
+                ? self::sanitize_payment_detail( $value )
+                : $value;
+        }
+
+        return $sanitized;
+    }
+
+    /**
+     * Determine whether a response key contains a card BIN/IIN value.
+     *
+     * @param string $key Response key.
+     * @return bool
+     */
+    private static function is_card_bin_key( string $key ): bool {
+        return in_array( strtolower( $key ), self::CARD_BIN_KEYS, true );
+    }
+
     /**
      * 根據交易訂單 ID 取得 WC 訂單
      *
@@ -130,6 +174,8 @@ final class YSOrderMeta {
      * @return void
      */
     public static function save_payment_detail( \WC_Order $order, array $payment_data ): void {
+        $payment_data = self::sanitize_payment_detail( $payment_data );
+
         if ( isset( $payment_data['tradeOrderId'] ) ) {
             $order->update_meta_data( self::TRADE_ORDER_ID, $payment_data['tradeOrderId'] );
         }
@@ -154,6 +200,6 @@ final class YSOrderMeta {
      */
     public static function get_payment_detail( \WC_Order $order ): array {
         $detail = $order->get_meta( self::PAYMENT_DETAIL );
-        return is_array( $detail ) ? $detail : [];
+        return is_array( $detail ) ? self::sanitize_payment_detail( $detail ) : [];
     }
 }

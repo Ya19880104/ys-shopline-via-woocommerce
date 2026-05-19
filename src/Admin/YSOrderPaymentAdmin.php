@@ -422,8 +422,7 @@ final class YSOrderPaymentAdmin {
 	 * @return array<string, mixed>
 	 */
 	private function get_payment_detail( $order ): array {
-		$detail = $order->get_meta( YSOrderMeta::PAYMENT_DETAIL );
-		return is_array( $detail ) ? $detail : array();
+		return YSOrderMeta::get_payment_detail( $order );
 	}
 
 	/**

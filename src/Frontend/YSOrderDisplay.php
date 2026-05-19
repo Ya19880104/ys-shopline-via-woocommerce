@@ -176,7 +176,7 @@ class YSOrderDisplay {
 	private function render_success_notice( $order ) {
 		$trade_order_id = $order->get_meta( YSOrderMeta::TRADE_ORDER_ID );
 		$payment_method = $order->get_meta( YSOrderMeta::PAYMENT_METHOD );
-		$payment_detail = $order->get_meta( YSOrderMeta::PAYMENT_DETAIL );
+		$payment_detail = YSOrderMeta::get_payment_detail( $order );
 
 		// 付款方式顯示名稱
 		$method_display = $this->get_payment_method_display( $payment_method );

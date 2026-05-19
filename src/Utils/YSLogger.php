@@ -44,6 +44,8 @@ final class YSLogger {
     private const REDACT_FULL = [
         'customerToken', 'payToken', 'apiKey', 'clientKey', 'signKey', 'api_key', 'sign_key',
         'cardNumber', 'card_number', 'cvv', 'cvc', 'pan',
+        'bin', 'cardBin', 'card_bin', 'issuerBin', 'issuer_bin',
+        'iin', 'cardIin', 'card_iin',
         'password', 'secret',
     ];
 

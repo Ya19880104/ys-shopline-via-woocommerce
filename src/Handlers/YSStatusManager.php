@@ -334,7 +334,7 @@ final class YSStatusManager {
         }
         $order->update_meta_data( YSOrderMeta::TRADE_ORDER_ID, $payment_dto->trade_order_id );
         $order->update_meta_data( YSOrderMeta::PAYMENT_STATUS, $status );
-        $order->update_meta_data( YSOrderMeta::PAYMENT_DETAIL, $payment_dto->to_array() );
+        $order->update_meta_data( YSOrderMeta::PAYMENT_DETAIL, YSOrderMeta::sanitize_payment_detail( $payment_dto->to_array() ) );
 
         $wc_status = self::STATUS_MAP[ $status ] ?? null;
 

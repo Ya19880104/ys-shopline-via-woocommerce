@@ -77,7 +77,7 @@ final class YSPaymentDTO {
      * @return self|null
      */
     public static function from_order( \WC_Order $order ): ?self {
-        $payment_detail = $order->get_meta( YSOrderMeta::PAYMENT_DETAIL );
+        $payment_detail = YSOrderMeta::get_payment_detail( $order );
 
         if ( empty( $payment_detail ) || ! is_array( $payment_detail ) ) {
             return null;

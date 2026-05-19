@@ -150,6 +150,8 @@ final class YSShoplineRequester {
             'apiKey', 'signKey', 'clientKey',
             'customerToken', 'payToken', 'paySession',
             'cvv', 'cvc', 'cardNumber', 'pan',
+            'bin', 'cardBin', 'card_bin', 'issuerBin', 'issuer_bin',
+            'iin', 'cardIin', 'card_iin',
         ];
 
         $sensitive_last6 = [

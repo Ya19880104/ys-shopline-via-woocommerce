@@ -374,7 +374,7 @@ final class YSWebhookHandler {
         $status = $this->normalize_payment_status( (string) ( $data['status'] ?? 'SUCCEEDED' ) );
         $order->update_meta_data( YSOrderMeta::TRADE_ORDER_ID, $trade_order_id );
         $order->update_meta_data( YSOrderMeta::PAYMENT_STATUS, $status );
-        $order->update_meta_data( YSOrderMeta::PAYMENT_DETAIL, $data );
+        $order->update_meta_data( YSOrderMeta::PAYMENT_DETAIL, YSOrderMeta::sanitize_payment_detail( $data ) );
         $order->save();
     }
 
@@ -402,7 +402,7 @@ final class YSWebhookHandler {
         $order->update_meta_data( YSOrderMeta::PAYMENT_STATUS, 'FAILED' );
         $order->update_meta_data( YSOrderMeta::ERROR_CODE, $error_code );
         $order->update_meta_data( YSOrderMeta::ERROR_MESSAGE, $friendly_msg );
-        $order->update_meta_data( YSOrderMeta::PAYMENT_DETAIL, $data );
+        $order->update_meta_data( YSOrderMeta::PAYMENT_DETAIL, YSOrderMeta::sanitize_payment_detail( $data ) );
         $order->save();
     }
 
@@ -429,7 +429,7 @@ final class YSWebhookHandler {
         $order->add_order_note( __( 'Shopline payment authorized, awaiting capture.', 'ys-shopline-via-woocommerce' ) );
         $order->update_meta_data( YSOrderMeta::PAYMENT_STATUS, 'AUTHORIZED' );
         $order->update_meta_data( YSOrderMeta::PAYMENT_AUTHORIZED_PENDING, 'yes' );
-        $order->update_meta_data( YSOrderMeta::PAYMENT_DETAIL, $data );
+        $order->update_meta_data( YSOrderMeta::PAYMENT_DETAIL, YSOrderMeta::sanitize_payment_detail( $data ) );
         $order->save();
     }
 
@@ -465,7 +465,7 @@ final class YSWebhookHandler {
 
         $order->add_order_note( __( 'Shopline payment captured.', 'ys-shopline-via-woocommerce' ) );
         $order->update_meta_data( YSOrderMeta::PAYMENT_STATUS, 'CAPTURED' );
-        $order->update_meta_data( YSOrderMeta::PAYMENT_DETAIL, $data );
+        $order->update_meta_data( YSOrderMeta::PAYMENT_DETAIL, YSOrderMeta::sanitize_payment_detail( $data ) );
         $order->save();
     }
 
@@ -487,7 +487,7 @@ final class YSWebhookHandler {
 
         $order->update_status( 'cancelled', __( 'Shopline payment cancelled by customer.', 'ys-shopline-via-woocommerce' ) );
         $order->update_meta_data( YSOrderMeta::PAYMENT_STATUS, 'CANCELLED' );
-        $order->update_meta_data( YSOrderMeta::PAYMENT_DETAIL, $data );
+        $order->update_meta_data( YSOrderMeta::PAYMENT_DETAIL, YSOrderMeta::sanitize_payment_detail( $data ) );
         $order->save();
     }
 
@@ -509,7 +509,7 @@ final class YSWebhookHandler {
 
         $order->update_status( 'failed', __( 'Shopline payment expired.', 'ys-shopline-via-woocommerce' ) );
         $order->update_meta_data( YSOrderMeta::PAYMENT_STATUS, 'EXPIRED' );
-        $order->update_meta_data( YSOrderMeta::PAYMENT_DETAIL, $data );
+        $order->update_meta_data( YSOrderMeta::PAYMENT_DETAIL, YSOrderMeta::sanitize_payment_detail( $data ) );
         $order->save();
     }
 
@@ -571,7 +571,7 @@ final class YSWebhookHandler {
             $order->update_meta_data( YSOrderMeta::PAYMENT_STATUS, 'PROCESSING' );
         }
 
-        $order->update_meta_data( YSOrderMeta::PAYMENT_DETAIL, $data );
+        $order->update_meta_data( YSOrderMeta::PAYMENT_DETAIL, YSOrderMeta::sanitize_payment_detail( $data ) );
 
         // 嘗試儲存 ATM 虛擬帳號資訊
         $this->maybe_store_virtual_account_info( $order, $data );

@@ -4,7 +4,7 @@
 
 ## 版本資訊
 
-- **目前版本**：3.5.22
+- **目前版本**：3.5.23
 - **PHP 需求**：>= 8.0
 - **WordPress 需求**：>= 6.0
 - **WooCommerce 需求**：7.0 - 9.0
@@ -65,6 +65,15 @@ https://your-domain.com/wp-json/ys-shopline/v1/webhook
 ---
 
 ## 變更紀錄
+
+### 3.5.23 - 2026-05-19
+
+**Minimize card BIN storage and logs**
+
+- Redact card BIN/IIN fields such as `bin`, `cardBin`, and `issuerBin` in SHOPLINE API debug logs and general logger context.
+- Remove card BIN/IIN fields from stored `_ys_shopline_payment_detail` snapshots before saving order meta.
+- Sanitize legacy payment detail snapshots on read so admin/frontend displays never consume BIN fields.
+- Keep card display limited to last4 and keep recurring payments using `paymentInstrumentId`.
 
 ### 3.5.22 - 2026-05-19
 
