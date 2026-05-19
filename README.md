@@ -4,7 +4,7 @@
 
 ## 版本資訊
 
-- **目前版本**：3.5.21
+- **目前版本**：3.5.22
 - **PHP 需求**：>= 8.0
 - **WordPress 需求**：>= 6.0
 - **WooCommerce 需求**：7.0 - 9.0
@@ -65,6 +65,16 @@ https://your-domain.com/wp-json/ys-shopline/v1/webhook
 ---
 
 ## 變更紀錄
+
+### 3.5.22 - 2026-05-19
+
+**Minimize admin order payment panels**
+
+- Move the SHOPLINE order payment summary into a low-priority order meta box so it appears below the order items section.
+- Reduce the order payment summary to payment method, payment status, and payment identifier only.
+- Keep customer saved-card lists only on `wp-admin > Users > Edit User`.
+- Render subscription-bound card details only on subscription edit screens, below order data and above order items.
+- Keep the admin order render path local-only; it does not call the SHOPLINE API or force card sync.
 
 ### 3.5.21 - 2026-05-19
 

@@ -1,6 +1,6 @@
 <?php
 /**
- * Admin order/subscription SHOPLINE payment panel.
+ * Admin order/subscription SHOPLINE payment panels.
  *
  * @package YangSheep\ShoplinePayment\Admin
  */
@@ -15,7 +15,7 @@ use YangSheep\ShoplinePayment\Utils\YSOrderMeta;
 use WC_Payment_Tokens;
 
 /**
- * Shows local SHOPLINE payment/card data on WooCommerce order edit screens.
+ * Shows local SHOPLINE payment and subscription binding data on WooCommerce admin order screens.
  */
 final class YSOrderPaymentAdmin {
 
@@ -28,10 +28,11 @@ final class YSOrderPaymentAdmin {
 		$instance = new self();
 
 		add_action( 'add_meta_boxes', array( $instance, 'register_meta_boxes' ), 20, 2 );
+		add_action( 'woocommerce_admin_order_data_after_order_details', array( $instance, 'render_subscription_binding_after_order_details' ), 20 );
 	}
 
 	/**
-	 * Register the meta box for legacy and HPOS order screens.
+	 * Register the payment summary meta box for legacy and HPOS order screens.
 	 *
 	 * @param string              $post_type Current post type/screen context.
 	 * @param \WP_Post|mixed|null $post      Current post object.
@@ -58,39 +59,88 @@ final class YSOrderPaymentAdmin {
 		foreach ( array_unique( array_filter( $screens ) ) as $screen ) {
 			add_meta_box(
 				'ys-shopline-order-payment-admin',
-				__( 'SHOPLINE 付款與儲存卡資訊', 'ys-shopline-via-woocommerce' ),
+				__( 'SHOPLINE 訂單付款資訊', 'ys-shopline-via-woocommerce' ),
 				array( $this, 'render_meta_box' ),
 				$screen,
 				'normal',
-				'high'
+				'low'
 			);
 		}
 	}
 
 	/**
-	 * Render the meta box.
+	 * Render the minimal order payment summary meta box.
 	 *
 	 * @param \WP_Post|\WC_Abstract_Order|mixed $post_or_order Current screen object.
 	 * @return void
 	 */
 	public function render_meta_box( $post_or_order ): void {
 		$order = $this->resolve_order( $post_or_order );
-		if ( ! $order || ! $this->current_user_can_edit_order( $order ) ) {
+		if ( ! $order || ! $this->current_user_can_edit_order( $order ) || ! $this->should_show_for_order( $order ) ) {
+			return;
+		}
+
+		$this->render_styles();
+		?>
+		<div class="ys-shopline-order-admin-panel ys-shopline-order-admin-payment-summary">
+			<?php $this->render_order_payment_overview( $order ); ?>
+		</div>
+		<?php
+	}
+
+	/**
+	 * Render order payment details with only method, status, and ID.
+	 *
+	 * @param \WC_Order|\WC_Subscription $order Order object.
+	 * @return void
+	 */
+	private function render_order_payment_overview( $order ): void {
+		$rows = $this->get_order_payment_rows( $order );
+		?>
+		<h4><?php esc_html_e( '訂單付款資訊', 'ys-shopline-via-woocommerce' ); ?></h4>
+		<?php if ( empty( $rows ) ) : ?>
+			<p class="ys-shopline-order-admin-empty"><?php esc_html_e( '此訂單目前沒有 SHOPLINE 付款資料。', 'ys-shopline-via-woocommerce' ); ?></p>
+			<?php return; ?>
+		<?php endif; ?>
+		<table class="widefat striped ys-shopline-order-admin-table ys-shopline-order-admin-kv">
+			<tbody>
+				<?php foreach ( $rows as $label => $value ) : ?>
+					<tr>
+						<th><?php echo esc_html( (string) $label ); ?></th>
+						<td>
+							<?php if ( '付款編號' === (string) $label ) : ?>
+								<code><?php echo esc_html( (string) $value ); ?></code>
+							<?php else : ?>
+								<?php echo esc_html( (string) $value ); ?>
+							<?php endif; ?>
+						</td>
+					</tr>
+				<?php endforeach; ?>
+			</tbody>
+		</table>
+		<?php
+	}
+
+	/**
+	 * Render subscription card binding below the order data section.
+	 *
+	 * @param \WC_Order|\WC_Subscription|mixed $order Current order object.
+	 * @return void
+	 */
+	public function render_subscription_binding_after_order_details( $order ): void {
+		$order = $this->resolve_order( $order );
+		if ( ! $order || ! $this->current_user_can_edit_order( $order ) || ! $this->should_show_subscription_binding( $order ) ) {
 			return;
 		}
 
 		$user_id       = (int) $order->get_user_id();
 		$cards         = $user_id ? $this->get_local_cards( $user_id ) : array();
 		$cards_by_inst = $this->index_cards_by_instrument( $cards );
-		$subscriptions = $this->get_related_subscriptions( $order );
 
 		$this->render_styles();
 		?>
-		<div class="ys-shopline-order-admin-panel">
-			<?php $this->render_customer_summary( $order, $user_id ); ?>
-			<?php $this->render_customer_cards( $cards ); ?>
-			<?php $this->render_subscription_binding( $subscriptions, $cards_by_inst ); ?>
-			<?php $this->render_order_payment_overview( $order ); ?>
+		<div class="ys-shopline-order-admin-panel ys-shopline-order-admin-subscription-binding">
+			<?php $this->render_subscription_binding( array( $order ), $cards_by_inst ); ?>
 		</div>
 		<?php
 	}
@@ -127,22 +177,40 @@ final class YSOrderPaymentAdmin {
 	}
 
 	/**
-	 * Only show on SHOPLINE order/subscription contexts.
+	 * Only show the summary on SHOPLINE order/subscription contexts.
 	 *
 	 * @param \WC_Order|\WC_Subscription $order Order object.
 	 * @return bool
 	 */
 	private function should_show_for_order( $order ): bool {
+		if ( $this->is_subscription( $order ) ) {
+			return (bool) $order->get_meta( YSOrderMeta::PAYMENT_DETAIL )
+				|| (bool) $order->get_meta( YSOrderMeta::TRADE_ORDER_ID );
+		}
+
 		$payment_method = (string) $order->get_payment_method();
 		if ( 0 === strpos( $payment_method, 'ys_shopline_' ) ) {
 			return true;
 		}
 
-		if ( $this->is_subscription( $order ) && $order->get_meta( YSOrderMeta::PAYMENT_INSTRUMENT_ID ) ) {
-			return true;
+		return (bool) $order->get_meta( YSOrderMeta::PAYMENT_DETAIL )
+			|| (bool) $order->get_meta( YSOrderMeta::TRADE_ORDER_ID );
+	}
+
+	/**
+	 * Only render subscription binding on the subscription order itself.
+	 *
+	 * @param \WC_Order|\WC_Subscription $order Order object.
+	 * @return bool
+	 */
+	private function should_show_subscription_binding( $order ): bool {
+		if ( ! $this->is_subscription( $order ) ) {
+			return false;
 		}
 
-		return (bool) $order->get_meta( YSOrderMeta::PAYMENT_DETAIL );
+		$payment_method = (string) $order->get_payment_method();
+		return 0 === strpos( $payment_method, 'ys_shopline_' )
+			|| (bool) $order->get_meta( YSOrderMeta::PAYMENT_INSTRUMENT_ID );
 	}
 
 	/**
@@ -159,78 +227,6 @@ final class YSOrderPaymentAdmin {
 			|| current_user_can( 'edit_shop_order', $order_id )
 			|| current_user_can( 'edit_shop_orders' )
 			|| current_user_can( 'manage_woocommerce' );
-	}
-
-	/**
-	 * Render customer summary line.
-	 *
-	 * @param \WC_Order|\WC_Subscription $order   Order object.
-	 * @param int                        $user_id User ID.
-	 * @return void
-	 */
-	private function render_customer_summary( $order, int $user_id ): void {
-		$user       = $user_id ? get_userdata( $user_id ) : false;
-		$email      = $user ? $user->user_email : $order->get_billing_email();
-		$name       = $user ? $user->display_name : trim( $order->get_formatted_billing_full_name() );
-		$customer   = $name ?: $email;
-		$customer_id = $user_id ? (string) get_user_meta( $user_id, YSOrderMeta::CUSTOMER_ID, true ) : '';
-		?>
-		<p class="ys-shopline-order-admin-summary">
-			<strong><?php esc_html_e( '客戶', 'ys-shopline-via-woocommerce' ); ?>:</strong>
-			<?php echo esc_html( $customer ?: __( '訪客', 'ys-shopline-via-woocommerce' ) ); ?>
-			<?php if ( $user_id ) : ?>
-				<?php echo esc_html( sprintf( '#%d', $user_id ) ); ?>
-			<?php endif; ?>
-			<?php if ( $email ) : ?>
-				<span class="description"><?php echo esc_html( $email ); ?></span>
-			<?php endif; ?>
-			<?php if ( $customer_id ) : ?>
-				<br><strong><?php esc_html_e( 'SHOPLINE Customer ID', 'ys-shopline-via-woocommerce' ); ?>:</strong>
-				<code><?php echo esc_html( $customer_id ); ?></code>
-			<?php endif; ?>
-		</p>
-		<?php
-	}
-
-	/**
-	 * Render local saved cards.
-	 *
-	 * @param array<int, array<string, mixed>> $cards Cards.
-	 * @return void
-	 */
-	private function render_customer_cards( array $cards ): void {
-		?>
-		<h4><?php esc_html_e( '客戶已儲存的信用卡', 'ys-shopline-via-woocommerce' ); ?></h4>
-		<?php if ( empty( $cards ) ) : ?>
-			<p class="ys-shopline-order-admin-empty"><?php esc_html_e( '此客戶目前沒有本機 WooCommerce 儲存卡資料。', 'ys-shopline-via-woocommerce' ); ?></p>
-			<?php return; ?>
-		<?php endif; ?>
-		<table class="widefat striped ys-shopline-order-admin-table">
-			<thead>
-				<tr>
-					<th><?php esc_html_e( '卡片', 'ys-shopline-via-woocommerce' ); ?></th>
-					<th><?php esc_html_e( '到期', 'ys-shopline-via-woocommerce' ); ?></th>
-					<th><?php esc_html_e( '狀態', 'ys-shopline-via-woocommerce' ); ?></th>
-					<th><?php esc_html_e( '預設', 'ys-shopline-via-woocommerce' ); ?></th>
-					<th><?php esc_html_e( 'SHOPLINE Instrument', 'ys-shopline-via-woocommerce' ); ?></th>
-				</tr>
-			</thead>
-			<tbody>
-				<?php foreach ( $cards as $card ) : ?>
-					<tr>
-						<td>
-							<strong><?php echo esc_html( strtoupper( (string) $card['brand'] ) ); ?></strong>
-							<?php echo esc_html( ' **** ' . (string) $card['last4'] ); ?>
-						</td>
-						<td><?php echo $card['expiry'] ? esc_html( (string) $card['expiry'] ) : '&mdash;'; ?></td>
-						<td><?php $this->render_status_badge( (string) $card['status_label'], (string) $card['status_class'] ); ?></td>
-						<td><?php echo ! empty( $card['is_default'] ) ? esc_html__( '是', 'ys-shopline-via-woocommerce' ) : '&mdash;'; ?></td>
-						<td><code><?php echo esc_html( $this->mask_instrument_id( (string) $card['instrument_id'] ) ); ?></code></td>
-					</tr>
-				<?php endforeach; ?>
-			</tbody>
-		</table>
-		<?php
 	}
 
 	/**
@@ -274,71 +270,11 @@ final class YSOrderPaymentAdmin {
 								#<?php echo esc_html( (string) $subscription->get_id() ); ?>
 							<?php endif; ?>
 						</td>
-						<td><?php echo esc_html( wc_get_order_status_name( (string) $subscription->get_status() ) ); ?></td>
+						<td><?php echo esc_html( function_exists( 'wc_get_order_status_name' ) ? wc_get_order_status_name( (string) $subscription->get_status() ) : (string) $subscription->get_status() ); ?></td>
 						<td><?php echo esc_html( $subscription->get_payment_method_title() ?: $subscription->get_payment_method() ); ?></td>
 						<td><?php $this->render_bound_card_cell( $instrument_id, $linked_card ); ?></td>
 						<td><?php $this->render_status_badge( $binding['label'], $binding['class'] ); ?></td>
 						<td><?php echo esc_html( $this->format_subscription_next_payment( $subscription ) ); ?></td>
-					</tr>
-				<?php endforeach; ?>
-			</tbody>
-		</table>
-		<?php
-	}
-
-	/**
-	 * Render order payment overview.
-	 *
-	 * @param \WC_Order|\WC_Subscription $order Order object.
-	 * @return void
-	 */
-	private function render_order_payment_overview( $order ): void {
-		$detail         = $this->get_payment_detail( $order );
-		$card           = $this->get_order_card_info( $order, $detail );
-		$instrument_id  = $this->get_payment_instrument_id( $order, $detail );
-		$payment_method = (string) $order->get_meta( YSOrderMeta::PAYMENT_METHOD );
-		$rows           = array(
-			__( 'WooCommerce 付款方式', 'ys-shopline-via-woocommerce' ) => trim( $order->get_payment_method_title() . ' (' . $order->get_payment_method() . ')' ),
-			__( 'SHOPLINE 付款方式', 'ys-shopline-via-woocommerce' ) => $this->format_shopline_method( $payment_method ),
-			__( 'SHOPLINE 付款狀態', 'ys-shopline-via-woocommerce' ) => (string) $order->get_meta( YSOrderMeta::PAYMENT_STATUS ),
-			__( 'SHOPLINE Trade Order ID', 'ys-shopline-via-woocommerce' ) => (string) $order->get_meta( YSOrderMeta::TRADE_ORDER_ID ),
-			__( 'Reference Order ID', 'ys-shopline-via-woocommerce' ) => (string) $order->get_meta( YSOrderMeta::REFERENCE_ORDER_ID ),
-			__( '信用卡', 'ys-shopline-via-woocommerce' ) => $card,
-			__( 'Payment Instrument', 'ys-shopline-via-woocommerce' ) => $instrument_id ? $this->mask_instrument_id( $instrument_id ) : '',
-			__( '信用卡分期期數', 'ys-shopline-via-woocommerce' ) => (string) $order->get_meta( YSOrderMeta::INSTALLMENT ),
-			__( '銀角零卡期數', 'ys-shopline-via-woocommerce' ) => (string) $order->get_meta( YSOrderMeta::BNPL_INSTALLMENT ),
-			__( 'ATM 銀行代碼', 'ys-shopline-via-woocommerce' ) => (string) $order->get_meta( YSOrderMeta::VA_BANK_CODE ),
-			__( 'ATM 轉帳帳號', 'ys-shopline-via-woocommerce' ) => (string) $order->get_meta( YSOrderMeta::VA_ACCOUNT ),
-			__( 'ATM 繳費期限', 'ys-shopline-via-woocommerce' ) => (string) $order->get_meta( YSOrderMeta::VA_EXPIRE ),
-			__( 'Next Action', 'ys-shopline-via-woocommerce' ) => (string) $order->get_meta( YSOrderMeta::NEXT_ACTION ),
-			__( '錯誤代碼', 'ys-shopline-via-woocommerce' ) => (string) $order->get_meta( YSOrderMeta::ERROR_CODE ),
-			__( '錯誤訊息', 'ys-shopline-via-woocommerce' ) => (string) $order->get_meta( YSOrderMeta::ERROR_MESSAGE ),
-		);
-
-		$rows = array_filter(
-			$rows,
-			static function ( $value ): bool {
-				return '' !== trim( wp_strip_all_tags( (string) $value ) );
-			}
-		);
-		?>
-		<h4><?php esc_html_e( '訂單付款資訊', 'ys-shopline-via-woocommerce' ); ?></h4>
-		<?php if ( empty( $rows ) ) : ?>
-			<p class="ys-shopline-order-admin-empty"><?php esc_html_e( '此訂單目前沒有 SHOPLINE 付款資料。', 'ys-shopline-via-woocommerce' ); ?></p>
-			<?php return; ?>
-		<?php endif; ?>
-		<table class="widefat striped ys-shopline-order-admin-table ys-shopline-order-admin-kv">
-			<tbody>
-				<?php foreach ( $rows as $label => $value ) : ?>
-					<tr>
-						<th><?php echo esc_html( (string) $label ); ?></th>
-						<td>
-							<?php if ( false !== strpos( (string) $label, 'ID' ) || false !== strpos( (string) $label, 'Instrument' ) ) : ?>
-								<code><?php echo esc_html( (string) $value ); ?></code>
-							<?php else : ?>
-								<?php echo esc_html( (string) $value ); ?>
-							<?php endif; ?>
-						</td>
 					</tr>
 				<?php endforeach; ?>
 			</tbody>
@@ -401,45 +337,6 @@ final class YSOrderPaymentAdmin {
 	}
 
 	/**
-	 * Resolve subscriptions related to the current order.
-	 *
-	 * @param \WC_Order|\WC_Subscription $order Order object.
-	 * @return array<int, \WC_Order|\WC_Subscription>
-	 */
-	private function get_related_subscriptions( $order ): array {
-		$subscriptions = array();
-
-		if ( $this->is_subscription( $order ) ) {
-			$subscriptions[ $order->get_id() ] = $order;
-		}
-
-		if ( function_exists( 'wcs_get_subscriptions_for_order' ) ) {
-			foreach ( wcs_get_subscriptions_for_order( $order, array( 'order_type' => 'any' ) ) as $subscription ) {
-				$subscriptions[ $subscription->get_id() ] = $subscription;
-			}
-		}
-
-		if ( function_exists( 'wcs_get_subscriptions_for_renewal_order' ) ) {
-			foreach ( wcs_get_subscriptions_for_renewal_order( $order ) as $subscription ) {
-				$subscriptions[ $subscription->get_id() ] = $subscription;
-			}
-		}
-
-		foreach ( $subscriptions as $id => $subscription ) {
-			if ( ! is_object( $subscription ) || ! method_exists( $subscription, 'get_payment_method' ) ) {
-				unset( $subscriptions[ $id ] );
-				continue;
-			}
-
-			if ( 0 !== strpos( (string) $subscription->get_payment_method(), 'ys_shopline_' ) ) {
-				unset( $subscriptions[ $id ] );
-			}
-		}
-
-		return $subscriptions;
-	}
-
-	/**
 	 * Resolve subscription binding status.
 	 *
 	 * @param string     $instrument_id Instrument ID.
@@ -449,21 +346,21 @@ final class YSOrderPaymentAdmin {
 	private function resolve_subscription_binding_status( string $instrument_id, ?array $linked_card ): array {
 		if ( '' === $instrument_id ) {
 			return array(
-				'label' => __( '未綁定到此訂閱', 'ys-shopline-via-woocommerce' ),
+				'label' => __( '未取得綁定資料', 'ys-shopline-via-woocommerce' ),
 				'class' => 'missing',
 			);
 		}
 
 		if ( null === $linked_card ) {
 			return array(
-				'label' => __( '已綁定，但本機找不到儲存卡', 'ys-shopline-via-woocommerce' ),
+				'label' => __( '有綁定資料，但本機儲存卡不存在', 'ys-shopline-via-woocommerce' ),
 				'class' => 'instrument-missing',
 			);
 		}
 
 		if ( ! empty( $linked_card['is_expired'] ) ) {
 			return array(
-				'label' => __( '已綁定，卡片已過期', 'ys-shopline-via-woocommerce' ),
+				'label' => __( '綁定卡片已過期', 'ys-shopline-via-woocommerce' ),
 				'class' => 'expired',
 			);
 		}
@@ -497,6 +394,28 @@ final class YSOrderPaymentAdmin {
 	}
 
 	/**
+	 * Get minimal order payment rows.
+	 *
+	 * @param \WC_Order|\WC_Subscription $order Order object.
+	 * @return array<string, string>
+	 */
+	private function get_order_payment_rows( $order ): array {
+		$detail = $this->get_payment_detail( $order );
+		$rows   = array(
+			'付款方式' => $this->get_order_payment_method_label( $order, $detail ),
+			'付款狀態' => $this->get_order_payment_status( $order, $detail ),
+			'付款編號' => $this->get_order_payment_identifier( $order, $detail ),
+		);
+
+		return array_filter(
+			$rows,
+			static function ( string $value ): bool {
+				return '' !== trim( $value );
+			}
+		);
+	}
+
+	/**
 	 * Get payment detail meta as an array.
 	 *
 	 * @param \WC_Order|\WC_Subscription $order Order object.
@@ -508,72 +427,107 @@ final class YSOrderPaymentAdmin {
 	}
 
 	/**
-	 * Get card information from order meta/API response snapshot.
+	 * Get the display payment method.
 	 *
 	 * @param \WC_Order|\WC_Subscription $order  Order object.
 	 * @param array<string, mixed>       $detail Payment detail.
 	 * @return string
 	 */
-	private function get_order_card_info( $order, array $detail ): string {
-		$brand = (string) $order->get_meta( YSOrderMeta::CARD_BRAND );
-		$last4 = (string) $order->get_meta( YSOrderMeta::CARD_LAST4 );
-
-		if ( '' === $brand ) {
-			$brand = $this->get_nested_scalar( $detail, array(
-				array( 'creditCard', 'brand' ),
-				array( 'paymentInstrument', 'instrumentCard', 'brand' ),
-				array( 'payment', 'creditCard', 'brand' ),
-			) );
+	private function get_order_payment_method_label( $order, array $detail ): string {
+		$title = trim( (string) $order->get_payment_method_title() );
+		if ( '' !== $title ) {
+			return $title;
 		}
 
-		if ( '' === $last4 ) {
-			$last4 = $this->get_nested_scalar( $detail, array(
-				array( 'creditCard', 'last4' ),
-				array( 'creditCard', 'last' ),
-				array( 'paymentInstrument', 'instrumentCard', 'last4' ),
-				array( 'paymentInstrument', 'instrumentCard', 'last' ),
-				array( 'payment', 'creditCard', 'last4' ),
-			) );
+		$method = (string) $order->get_meta( YSOrderMeta::PAYMENT_METHOD );
+		if ( '' === $method ) {
+			$method = $this->get_nested_scalar(
+				$detail,
+				array(
+					array( 'paymentMethod' ),
+					array( 'payment', 'paymentMethod' ),
+				)
+			);
 		}
 
-		$type = $this->get_nested_scalar( $detail, array(
-			array( 'creditCard', 'type' ),
-			array( 'payment', 'creditCard', 'type' ),
-		) );
-
-		if ( '' === $brand && '' === $last4 ) {
-			return '';
+		if ( '' !== $method ) {
+			return $this->format_shopline_method( $method );
 		}
 
-		$card = trim( strtoupper( $brand ) . ( $last4 ? ' **** ' . $last4 : '' ) );
-		return $type ? $card . ' (' . $type . ')' : $card;
+		return (string) $order->get_payment_method();
 	}
 
 	/**
-	 * Get SHOPLINE payment instrument ID from order/subscription meta.
+	 * Get SHOPLINE payment status.
 	 *
 	 * @param \WC_Order|\WC_Subscription $order  Order object.
 	 * @param array<string, mixed>       $detail Payment detail.
 	 * @return string
 	 */
-	private function get_payment_instrument_id( $order, array $detail ): string {
-		$instrument_id = (string) $order->get_meta( YSOrderMeta::PAYMENT_INSTRUMENT_ID );
-		if ( '' !== $instrument_id ) {
-			return $instrument_id;
+	private function get_order_payment_status( $order, array $detail ): string {
+		$status = (string) $order->get_meta( YSOrderMeta::PAYMENT_STATUS );
+		if ( '' === $status ) {
+			$status = $this->get_nested_scalar(
+				$detail,
+				array(
+					array( 'status' ),
+					array( 'payment', 'status' ),
+				)
+			);
 		}
 
-		return $this->get_nested_scalar( $detail, array(
-			array( 'paymentInstrument', 'paymentInstrumentId' ),
-			array( 'paymentInstrument', 'instrumentId' ),
-			array( 'payment', 'paymentInstrument', 'paymentInstrumentId' ),
-			array( 'payment', 'paymentInstrument', 'instrumentId' ),
-		) );
+		if ( '' !== $status ) {
+			return $status;
+		}
+
+		return function_exists( 'wc_get_order_status_name' )
+			? wc_get_order_status_name( (string) $order->get_status() )
+			: (string) $order->get_status();
+	}
+
+	/**
+	 * Get the SHOPLINE transaction identifier.
+	 *
+	 * @param \WC_Order|\WC_Subscription $order  Order object.
+	 * @param array<string, mixed>       $detail Payment detail.
+	 * @return string
+	 */
+	private function get_order_payment_identifier( $order, array $detail ): string {
+		$trade_order_id = (string) $order->get_meta( YSOrderMeta::TRADE_ORDER_ID );
+		if ( '' !== $trade_order_id ) {
+			return $trade_order_id;
+		}
+
+		$trade_order_id = $this->get_nested_scalar(
+			$detail,
+			array(
+				array( 'tradeOrderId' ),
+				array( 'payment', 'tradeOrderId' ),
+			)
+		);
+
+		if ( '' !== $trade_order_id ) {
+			return $trade_order_id;
+		}
+
+		$reference_order_id = (string) $order->get_meta( YSOrderMeta::REFERENCE_ORDER_ID );
+		if ( '' !== $reference_order_id ) {
+			return $reference_order_id;
+		}
+
+		return $this->get_nested_scalar(
+			$detail,
+			array(
+				array( 'referenceOrderId' ),
+				array( 'payment', 'referenceOrderId' ),
+			)
+		);
 	}
 
 	/**
 	 * Get the first scalar value found at one of the nested paths.
 	 *
-	 * @param array<string, mixed> $source Source data.
+	 * @param array<string, mixed>           $source Source data.
 	 * @param array<int, array<int, string>> $paths Paths to inspect.
 	 * @return string
 	 */
@@ -707,18 +661,24 @@ final class YSOrderPaymentAdmin {
 	}
 
 	/**
-	 * Render scoped styles.
+	 * Render scoped styles once.
 	 *
 	 * @return void
 	 */
 	private function render_styles(): void {
+		static $rendered = false;
+		if ( $rendered ) {
+			return;
+		}
+		$rendered = true;
 		?>
 		<style>
 			.ys-shopline-order-admin-panel h4 {
 				margin: 1em 0 .5em;
 			}
-			.ys-shopline-order-admin-summary {
-				margin: 0 0 12px;
+			.ys-shopline-order-admin-subscription-binding {
+				clear: both;
+				margin-top: 12px;
 			}
 			.ys-shopline-order-admin-summary code,
 			.ys-shopline-order-admin-table code {
@@ -732,7 +692,7 @@ final class YSOrderPaymentAdmin {
 				vertical-align: middle;
 			}
 			.ys-shopline-order-admin-kv th {
-				width: 220px;
+				width: 180px;
 			}
 			.ys-shopline-order-admin-empty {
 				color: #646970;
