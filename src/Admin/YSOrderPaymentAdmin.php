@@ -28,7 +28,7 @@ final class YSOrderPaymentAdmin {
 		$instance = new self();
 
 		add_action( 'add_meta_boxes', array( $instance, 'register_meta_boxes' ), 20, 2 );
-		add_action( 'woocommerce_admin_order_data_after_order_details', array( $instance, 'render_subscription_binding_after_order_details' ), 20 );
+		add_action( 'admin_footer', array( $instance, 'render_subscription_binding_position_script' ) );
 	}
 
 	/**
@@ -40,7 +40,7 @@ final class YSOrderPaymentAdmin {
 	 */
 	public function register_meta_boxes( $post_type, $post = null ): void {
 		$order = $this->resolve_order( $post );
-		if ( $order && ! $this->should_show_for_order( $order ) ) {
+		if ( ! $order ) {
 			return;
 		}
 
@@ -56,15 +56,32 @@ final class YSOrderPaymentAdmin {
 			$screens[] = wc_get_page_screen_id( 'shop_subscription' );
 		}
 
-		foreach ( array_unique( array_filter( $screens ) ) as $screen ) {
-			add_meta_box(
-				'ys-shopline-order-payment-admin',
-				__( 'SHOPLINE 訂單付款資訊', 'ys-shopline-via-woocommerce' ),
-				array( $this, 'render_meta_box' ),
-				$screen,
-				'normal',
-				'low'
-			);
+		$screens = array_unique( array_filter( $screens ) );
+
+		if ( $this->should_show_for_order( $order ) ) {
+			foreach ( $screens as $screen ) {
+				add_meta_box(
+					'ys-shopline-order-payment-admin',
+					__( 'SHOPLINE 訂單付款資訊', 'ys-shopline-via-woocommerce' ),
+					array( $this, 'render_meta_box' ),
+					$screen,
+					'normal',
+					'low'
+				);
+			}
+		}
+
+		if ( $this->should_show_subscription_binding( $order ) ) {
+			foreach ( $screens as $screen ) {
+				add_meta_box(
+					'ys-shopline-subscription-binding-admin',
+					__( '訂閱綁定信用卡', 'ys-shopline-via-woocommerce' ),
+					array( $this, 'render_subscription_binding_meta_box' ),
+					$screen,
+					'normal',
+					'core'
+				);
+			}
 		}
 	}
 
@@ -122,13 +139,13 @@ final class YSOrderPaymentAdmin {
 	}
 
 	/**
-	 * Render subscription card binding below the order data section.
+	 * Render subscription card binding as an independent meta box.
 	 *
-	 * @param \WC_Order|\WC_Subscription|mixed $order Current order object.
+	 * @param \WP_Post|\WC_Abstract_Order|mixed $post_or_order Current screen object.
 	 * @return void
 	 */
-	public function render_subscription_binding_after_order_details( $order ): void {
-		$order = $this->resolve_order( $order );
+	public function render_subscription_binding_meta_box( $post_or_order ): void {
+		$order = $this->resolve_order( $post_or_order );
 		if ( ! $order || ! $this->current_user_can_edit_order( $order ) || ! $this->should_show_subscription_binding( $order ) ) {
 			return;
 		}
@@ -140,8 +157,35 @@ final class YSOrderPaymentAdmin {
 		$this->render_styles();
 		?>
 		<div class="ys-shopline-order-admin-panel ys-shopline-order-admin-subscription-binding">
-			<?php $this->render_subscription_binding( array( $order ), $cards_by_inst ); ?>
+			<?php $this->render_subscription_binding( array( $order ), $cards_by_inst, false ); ?>
 		</div>
+		<?php
+	}
+
+	/**
+	 * Position the independent subscription card box below subscription data and above order items.
+	 *
+	 * @return void
+	 */
+	public function render_subscription_binding_position_script(): void {
+		$order = $this->resolve_order();
+		if ( ! $order || ! $this->current_user_can_edit_order( $order ) || ! $this->should_show_subscription_binding( $order ) ) {
+			return;
+		}
+		?>
+		<script>
+			document.addEventListener('DOMContentLoaded', function () {
+				var box = document.getElementById('ys-shopline-subscription-binding-admin');
+				var subscriptionData = document.getElementById('woocommerce-subscription-data');
+				var orderItems = document.getElementById('woocommerce-order-items');
+
+				if (!box || !subscriptionData || !orderItems || subscriptionData.parentNode !== orderItems.parentNode) {
+					return;
+				}
+
+				subscriptionData.insertAdjacentElement('afterend', box);
+			});
+		</script>
 		<?php
 	}
 
@@ -184,8 +228,7 @@ final class YSOrderPaymentAdmin {
 	 */
 	private function should_show_for_order( $order ): bool {
 		if ( $this->is_subscription( $order ) ) {
-			return (bool) $order->get_meta( YSOrderMeta::PAYMENT_DETAIL )
-				|| (bool) $order->get_meta( YSOrderMeta::TRADE_ORDER_ID );
+			return false;
 		}
 
 		$payment_method = (string) $order->get_payment_method();
@@ -234,14 +277,17 @@ final class YSOrderPaymentAdmin {
 	 *
 	 * @param array<int, \WC_Subscription|\WC_Order> $subscriptions       Subscriptions.
 	 * @param array<string, array<string, mixed>>    $cards_by_instrument Cards by instrument ID.
+	 * @param bool                                   $show_heading        Whether to render an inline heading.
 	 * @return void
 	 */
-	private function render_subscription_binding( array $subscriptions, array $cards_by_instrument ): void {
+	private function render_subscription_binding( array $subscriptions, array $cards_by_instrument, bool $show_heading = true ): void {
 		if ( empty( $subscriptions ) ) {
 			return;
 		}
 		?>
-		<h4><?php esc_html_e( '訂閱綁定信用卡', 'ys-shopline-via-woocommerce' ); ?></h4>
+		<?php if ( $show_heading ) : ?>
+			<h4><?php esc_html_e( '訂閱綁定信用卡', 'ys-shopline-via-woocommerce' ); ?></h4>
+		<?php endif; ?>
 		<table class="widefat striped ys-shopline-order-admin-table">
 			<thead>
 				<tr>

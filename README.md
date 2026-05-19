@@ -4,7 +4,7 @@
 
 ## 版本資訊
 
-- **目前版本**：3.5.23
+- **目前版本**：3.5.24
 - **PHP 需求**：>= 8.0
 - **WordPress 需求**：>= 6.0
 - **WooCommerce 需求**：7.0 - 9.0
@@ -65,6 +65,14 @@ https://your-domain.com/wp-json/ys-shopline/v1/webhook
 ---
 
 ## 變更紀錄
+
+### 3.5.24 - 2026-05-19
+
+**Move subscription card binding to its own admin box**
+
+- Render the subscription-bound card table as an independent WooCommerce admin meta box.
+- Keep the subscription card box on subscription edit screens only, between the order data area and order items.
+- Keep regular order payment summaries out of subscription edit screens.
 
 ### 3.5.23 - 2026-05-19
 
