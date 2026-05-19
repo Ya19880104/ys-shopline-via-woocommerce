@@ -288,7 +288,7 @@ final class YSOrderPaymentAdmin {
 		<?php if ( $show_heading ) : ?>
 			<h4><?php esc_html_e( '訂閱綁定信用卡', 'ys-shopline-via-woocommerce' ); ?></h4>
 		<?php endif; ?>
-		<table class="widefat striped ys-shopline-order-admin-table">
+		<table class="ys-shopline-order-admin-table ys-shopline-order-admin-subscription-table">
 			<thead>
 				<tr>
 					<th><?php esc_html_e( '訂閱', 'ys-shopline-via-woocommerce' ); ?></th>
@@ -735,6 +735,27 @@ final class YSOrderPaymentAdmin {
 			.ys-shopline-order-admin-table th,
 			.ys-shopline-order-admin-table td {
 				vertical-align: middle;
+			}
+			.ys-shopline-order-admin-subscription-table {
+				width: 100%;
+				margin: 0;
+				border: 0;
+				box-shadow: none;
+				border-spacing: 0;
+				border-collapse: collapse;
+			}
+			.ys-shopline-order-admin-subscription-table th {
+				background: #f6f7f7;
+				font-weight: 600;
+				text-align: left;
+			}
+			.ys-shopline-order-admin-subscription-table th,
+			.ys-shopline-order-admin-subscription-table td {
+				padding: 8px 10px;
+				border-bottom: 1px solid #f0f0f1;
+			}
+			.ys-shopline-order-admin-subscription-table tbody tr:last-child td {
+				border-bottom: 0;
 			}
 			.ys-shopline-order-admin-kv th {
 				width: 180px;
