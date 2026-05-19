@@ -4,7 +4,7 @@
 
 ## 版本資訊
 
-- **目前版本**：3.5.25
+- **目前版本**：3.5.26
 - **PHP 需求**：>= 8.0
 - **WordPress 需求**：>= 6.0
 - **WooCommerce 需求**：7.0 - 9.0
@@ -65,6 +65,14 @@ https://your-domain.com/wp-json/ys-shopline/v1/webhook
 ---
 
 ## 變更紀錄
+
+### 3.5.26 - 2026-05-19
+
+**Unify SHOPLINE admin box spacing**
+
+- Remove the postbox content padding from both SHOPLINE admin payment boxes.
+- Use the same no-inner-frame table styling for order payment info and subscription card binding.
+- Remove the duplicate inline order payment heading so both boxes use only the WooCommerce postbox title.
 
 ### 3.5.25 - 2026-05-19
 

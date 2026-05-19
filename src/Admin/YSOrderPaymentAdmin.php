@@ -100,7 +100,7 @@ final class YSOrderPaymentAdmin {
 		$this->render_styles();
 		?>
 		<div class="ys-shopline-order-admin-panel ys-shopline-order-admin-payment-summary">
-			<?php $this->render_order_payment_overview( $order ); ?>
+			<?php $this->render_order_payment_overview( $order, false ); ?>
 		</div>
 		<?php
 	}
@@ -108,18 +108,21 @@ final class YSOrderPaymentAdmin {
 	/**
 	 * Render order payment details with only method, status, and ID.
 	 *
-	 * @param \WC_Order|\WC_Subscription $order Order object.
+	 * @param \WC_Order|\WC_Subscription $order        Order object.
+	 * @param bool                       $show_heading Whether to render an inline heading.
 	 * @return void
 	 */
-	private function render_order_payment_overview( $order ): void {
+	private function render_order_payment_overview( $order, bool $show_heading = true ): void {
 		$rows = $this->get_order_payment_rows( $order );
 		?>
-		<h4><?php esc_html_e( '訂單付款資訊', 'ys-shopline-via-woocommerce' ); ?></h4>
+		<?php if ( $show_heading ) : ?>
+			<h4><?php esc_html_e( '訂單付款資訊', 'ys-shopline-via-woocommerce' ); ?></h4>
+		<?php endif; ?>
 		<?php if ( empty( $rows ) ) : ?>
 			<p class="ys-shopline-order-admin-empty"><?php esc_html_e( '此訂單目前沒有 SHOPLINE 付款資料。', 'ys-shopline-via-woocommerce' ); ?></p>
 			<?php return; ?>
 		<?php endif; ?>
-		<table class="widefat striped ys-shopline-order-admin-table ys-shopline-order-admin-kv">
+		<table class="ys-shopline-order-admin-table ys-shopline-order-admin-box-table ys-shopline-order-admin-kv">
 			<tbody>
 				<?php foreach ( $rows as $label => $value ) : ?>
 					<tr>
@@ -288,7 +291,7 @@ final class YSOrderPaymentAdmin {
 		<?php if ( $show_heading ) : ?>
 			<h4><?php esc_html_e( '訂閱綁定信用卡', 'ys-shopline-via-woocommerce' ); ?></h4>
 		<?php endif; ?>
-		<table class="ys-shopline-order-admin-table ys-shopline-order-admin-subscription-table">
+		<table class="ys-shopline-order-admin-table ys-shopline-order-admin-box-table ys-shopline-order-admin-subscription-table">
 			<thead>
 				<tr>
 					<th><?php esc_html_e( '訂閱', 'ys-shopline-via-woocommerce' ); ?></th>
@@ -718,6 +721,15 @@ final class YSOrderPaymentAdmin {
 		$rendered = true;
 		?>
 		<style>
+			#ys-shopline-order-payment-admin .inside,
+			#ys-shopline-subscription-binding-admin .inside {
+				margin: 0;
+				padding: 0;
+			}
+			#ys-shopline-order-payment-admin .inside > .ys-shopline-order-admin-panel,
+			#ys-shopline-subscription-binding-admin .inside > .ys-shopline-order-admin-panel {
+				margin: 0;
+			}
 			.ys-shopline-order-admin-panel h4 {
 				margin: 1em 0 .5em;
 			}
@@ -736,7 +748,7 @@ final class YSOrderPaymentAdmin {
 			.ys-shopline-order-admin-table td {
 				vertical-align: middle;
 			}
-			.ys-shopline-order-admin-subscription-table {
+			.ys-shopline-order-admin-box-table {
 				width: 100%;
 				margin: 0;
 				border: 0;
@@ -744,17 +756,18 @@ final class YSOrderPaymentAdmin {
 				border-spacing: 0;
 				border-collapse: collapse;
 			}
-			.ys-shopline-order-admin-subscription-table th {
+			.ys-shopline-order-admin-box-table th {
 				background: #f6f7f7;
 				font-weight: 600;
 				text-align: left;
 			}
-			.ys-shopline-order-admin-subscription-table th,
-			.ys-shopline-order-admin-subscription-table td {
+			.ys-shopline-order-admin-box-table th,
+			.ys-shopline-order-admin-box-table td {
 				padding: 8px 10px;
 				border-bottom: 1px solid #f0f0f1;
 			}
-			.ys-shopline-order-admin-subscription-table tbody tr:last-child td {
+			.ys-shopline-order-admin-box-table tbody tr:last-child th,
+			.ys-shopline-order-admin-box-table tbody tr:last-child td {
 				border-bottom: 0;
 			}
 			.ys-shopline-order-admin-kv th {
