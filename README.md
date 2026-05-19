@@ -4,7 +4,7 @@
 
 ## 版本資訊
 
-- **目前版本**：3.5.20
+- **目前版本**：3.5.21
 - **PHP 需求**：>= 8.0
 - **WordPress 需求**：>= 6.0
 - **WooCommerce 需求**：7.0 - 9.0
@@ -65,6 +65,17 @@ https://your-domain.com/wp-json/ys-shopline/v1/webhook
 ---
 
 ## 變更紀錄
+
+### 3.5.21 - 2026-05-19
+
+**Restore admin order payment panel**
+
+- Add a SHOPLINE payment meta box to WooCommerce order and subscription edit screens, including HPOS screens.
+- Show the customer's local saved cards, default/expired status, and masked SHOPLINE instrument IDs.
+- Show subscription card bindings, next payment date, and whether the bound card still exists locally.
+- Show order payment details for SHOPLINE credit card, subscription, ATM, JKOPay, Apple Pay, LINE Pay, and Chailease BNPL records from local order meta.
+- Keep the order edit render path local-only; it does not call the SHOPLINE API or force card sync.
+- Add `tests/admin-order-payment-box-static.php` to lock the order/subscription admin panel.
 
 ### 3.5.20 - 2026-05-19
 
