@@ -4,7 +4,7 @@
 
 ## 版本資訊
 
-- **目前版本**：3.5.19
+- **目前版本**：3.5.20
 - **PHP 需求**：>= 8.0
 - **WordPress 需求**：>= 6.0
 - **WooCommerce 需求**：7.0 - 9.0
@@ -65,6 +65,17 @@ https://your-domain.com/wp-json/ys-shopline/v1/webhook
 ---
 
 ## 變更紀錄
+
+### 3.5.20 - 2026-05-19
+
+**Add admin user card overview**
+
+- Add a SHOPLINE payment section to `wp-admin > Users > Edit User`.
+- Show local WooCommerce saved cards, default/expired status, token IDs, and masked SHOPLINE instrument IDs.
+- Show SHOPLINE WooCommerce Subscriptions bindings and flag subscriptions whose instrument ID has no local saved card.
+- Show recent local SHOPLINE payment records for the user.
+- Add a manual admin-only card sync button; opening the user edit page reads local data only and does not call the SHOPLINE API.
+- Add `tests/admin-user-cards-static.php` to lock the admin display, permission, nonce, and performance boundaries.
 
 ### 3.5.19 - 2026-05-11
 
