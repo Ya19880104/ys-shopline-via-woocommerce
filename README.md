@@ -4,7 +4,7 @@
 
 ## 版本資訊
 
-- **目前版本**：3.5.26
+- **目前版本**：3.5.27
 - **PHP 需求**：>= 8.0
 - **WordPress 需求**：>= 6.0
 - **WooCommerce 需求**：7.0 - 9.0
@@ -65,6 +65,14 @@ https://your-domain.com/wp-json/ys-shopline/v1/webhook
 ---
 
 ## 變更紀錄
+
+### 3.5.27 - 2026-05-21
+
+**Guard admin phone notice from checkout filters**
+
+- Stop the SHOPLINE settings page from calling `WC()->checkout()->get_checkout_fields()` while rendering the phone notice.
+- Read billing phone availability from WooCommerce address fields instead, avoiding fragile `woocommerce_checkout_fields` callbacks in wp-admin.
+- Add a regression test that simulates a third-party checkout field filter failure and confirms the settings notice still renders.
 
 ### 3.5.26 - 2026-05-19
 

@@ -1310,8 +1310,7 @@ class YSAdminSettings {
 	 * Render phone notice.
 	 */
 	private function render_phone_notice() {
-		$checkout_fields = function_exists( 'WC' ) && WC()->checkout() ? WC()->checkout()->get_checkout_fields() : array();
-		$phone_enabled   = isset( $checkout_fields['billing']['billing_phone'] );
+		$phone_enabled = $this->is_billing_phone_enabled_for_notice();
 		?>
 		<div class="ys-section-card">
 			<h3 class="ys-section-title"><span class="dashicons dashicons-warning"></span> <?php _e( '重要設定提醒', 'ys-shopline-via-woocommerce' ); ?></h3>
@@ -1337,6 +1336,40 @@ class YSAdminSettings {
 			</div>
 		</div>
 		<?php
+	}
+
+	/**
+	 * Safely determine whether billing phone is available for the admin notice.
+	 *
+	 * The settings page runs in wp-admin, where WC()->cart may be unavailable. Calling
+	 * the checkout field API here executes third-party checkout filters and can fatal if
+	 * a filter assumes a frontend cart exists.
+	 *
+	 * @return bool
+	 */
+	private function is_billing_phone_enabled_for_notice(): bool {
+		try {
+			if ( ! function_exists( 'WC' ) ) {
+				return true;
+			}
+
+			$woocommerce = WC();
+			if ( ! is_object( $woocommerce ) ) {
+				return true;
+			}
+
+			$countries = $woocommerce->countries ?? null;
+			if ( ! is_object( $countries ) || ! method_exists( $countries, 'get_address_fields' ) ) {
+				return true;
+			}
+
+			$country = method_exists( $countries, 'get_base_country' ) ? (string) $countries->get_base_country() : '';
+			$fields  = $countries->get_address_fields( $country, 'billing_' );
+
+			return ! is_array( $fields ) || isset( $fields['billing_phone'] );
+		} catch ( \Throwable $e ) {
+			return true;
+		}
 	}
 
 	/**
