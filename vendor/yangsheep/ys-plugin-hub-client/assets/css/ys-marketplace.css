@@ -1,0 +1,1424 @@
+/**
+ * YS Plugin Hub Client - 市集頁面樣式
+ * 設計系統：莫蘭迪色 (Morandi Palette)
+ * v2.0.2
+ */
+
+/* ============================================
+   CSS Variables - 莫蘭迪色後台配色
+   ============================================ */
+:root {
+    --ys-adm-bg: #f8fafb;
+    --ys-adm-card-bg: #ffffff;
+    --ys-adm-border: #e2e8ed;
+    --ys-adm-border-light: #edf1f4;
+    --ys-adm-text: #2c3e50;
+    --ys-adm-text-muted: #7b8a96;
+    --ys-adm-primary: #8fa8b8;
+    --ys-adm-primary-dark: #6b8a9a;
+    --ys-adm-primary-light: #b3c7d3;
+    --ys-adm-primary-bg: rgba(143, 168, 184, 0.1);
+    --ys-adm-success: #7dab8e;
+    --ys-adm-success-bg: #e8f3ec;
+    --ys-adm-warning: #c4a67a;
+    --ys-adm-warning-bg: #faf2e5;
+    --ys-adm-danger: #c08080;
+    --ys-adm-danger-bg: #f8e8e8;
+    --ys-adm-info-bg: #e8eff5;
+    --ys-adm-radius: 8px;
+    --ys-adm-shadow: 0 1px 3px rgba(0,0,0,0.06);
+    --ys-adm-shadow-hover: 0 4px 16px rgba(107, 138, 154, 0.15);
+}
+
+/* ============================================
+   市集頁面容器
+   ============================================ */
+.ys-marketplace-wrap {
+    max-width: 100%;
+    padding: 16px 20px 20px 0;
+}
+
+/* ============================================
+   頁面標題
+   ============================================ */
+.ys-marketplace-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 12px;
+    margin-bottom: 20px;
+}
+
+.ys-marketplace-filters {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-width: 0;
+}
+
+.ys-platform-tabs {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+
+.ys-platform-tab {
+    font-weight: 600;
+}
+
+.ys-marketplace-title {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 22px;
+    font-weight: 600;
+    color: var(--ys-adm-text);
+    margin: 0;
+    line-height: 1.3;
+}
+
+.ys-marketplace-title .dashicons {
+    font-size: 28px;
+    width: 28px;
+    height: 28px;
+    color: var(--ys-adm-primary);
+}
+
+.ys-marketplace-actions {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+/* Hub 連線狀態燈號 */
+.ys-hub-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--ys-adm-text-muted);
+    padding: 4px 10px;
+    border-radius: 20px;
+    background: var(--ys-adm-bg);
+    border: 1px solid var(--ys-adm-border-light);
+    cursor: default;
+    transition: all 0.3s ease;
+}
+.ys-hub-status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    display: inline-block;
+    transition: background 0.3s ease;
+}
+/* 檢查中 */
+.ys-hub-status-checking .ys-hub-status-dot {
+    background: var(--ys-adm-warning);
+    animation: ys-pulse 1.2s ease-in-out infinite;
+}
+/* 正常 */
+.ys-hub-status-ok .ys-hub-status-dot {
+    background: var(--ys-adm-success);
+    box-shadow: 0 0 4px var(--ys-adm-success);
+}
+.ys-hub-status-ok {
+    color: var(--ys-adm-success);
+    border-color: rgba(125, 171, 142, 0.3);
+}
+/* 異常 */
+.ys-hub-status-error .ys-hub-status-dot {
+    background: var(--ys-adm-danger);
+    box-shadow: 0 0 4px var(--ys-adm-danger);
+}
+.ys-hub-status-error {
+    color: var(--ys-adm-danger);
+    border-color: rgba(192, 128, 128, 0.3);
+    cursor: pointer;
+}
+/* 熔斷 */
+.ys-hub-status-breaker .ys-hub-status-dot {
+    background: var(--ys-adm-warning);
+    box-shadow: 0 0 4px var(--ys-adm-warning);
+}
+.ys-hub-status-breaker {
+    color: var(--ys-adm-warning);
+    border-color: rgba(196, 166, 122, 0.3);
+}
+@keyframes ys-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
+}
+
+/* ============================================
+   工具列（篩選 + 搜尋）
+   ============================================ */
+.ys-marketplace-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 12px;
+    margin-bottom: 20px;
+}
+
+/* 分類篩選 tabs（pill 樣式） */
+.ys-filter-tabs {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+
+.ys-filter-tab {
+    display: inline-flex;
+    align-items: center;
+    padding: 6px 16px;
+    border: 1px solid var(--ys-adm-border);
+    border-radius: 20px;
+    background: var(--ys-adm-card-bg);
+    color: var(--ys-adm-text-muted);
+    font-size: 13px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    line-height: 1.4;
+}
+
+.ys-filter-tab:hover {
+    border-color: var(--ys-adm-primary-light);
+    color: var(--ys-adm-primary-dark);
+    background: var(--ys-adm-primary-bg);
+}
+
+.ys-filter-tab.active {
+    background: var(--ys-adm-primary);
+    color: #ffffff;
+    border-color: var(--ys-adm-primary);
+}
+
+/* 搜尋欄 */
+.ys-search-box {
+    position: relative;
+}
+
+.ys-search-box input {
+    width: 240px;
+    padding: 7px 14px 7px 36px;
+    border: 1px solid var(--ys-adm-border);
+    border-radius: 20px;
+    background: var(--ys-adm-card-bg);
+    font-size: 13px;
+    color: var(--ys-adm-text);
+    outline: none;
+    transition: border-color 0.2s ease;
+}
+
+.ys-search-box input:focus {
+    border-color: var(--ys-adm-primary);
+    box-shadow: 0 0 0 2px var(--ys-adm-primary-bg);
+}
+
+.ys-search-box .dashicons {
+    position: absolute;
+    left: 12px;
+    top: 50%;
+    transform: translateY(-50%);
+    color: var(--ys-adm-text-muted);
+    font-size: 16px;
+    width: 16px;
+    height: 16px;
+}
+
+/* ============================================
+   公告區
+   ============================================ */
+.ys-announcements-wrap {
+    margin-bottom: 20px;
+}
+
+.ys-announcement {
+    padding: 12px 16px;
+    border-radius: var(--ys-adm-radius);
+    margin-bottom: 12px;
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    font-size: 13px;
+    line-height: 1.5;
+}
+
+.ys-announcement-info {
+    background: var(--ys-adm-info-bg);
+    border-left: 3px solid var(--ys-adm-primary);
+    color: var(--ys-adm-primary-dark);
+}
+
+.ys-announcement-warning {
+    background: var(--ys-adm-warning-bg);
+    border-left: 3px solid var(--ys-adm-warning);
+    color: #8a7350;
+}
+
+.ys-announcement-success {
+    background: var(--ys-adm-success-bg);
+    border-left: 3px solid var(--ys-adm-success);
+    color: #5a8a6a;
+}
+
+.ys-announcement-danger {
+    background: var(--ys-adm-danger-bg);
+    border-left: 3px solid var(--ys-adm-danger);
+    color: #8a5050;
+}
+
+.ys-announcement-pinned {
+    font-weight: 600;
+}
+
+.ys-announcement-body {
+    flex: 1;
+    min-width: 0;
+}
+
+.ys-announcement-title {
+    font-weight: 600;
+    margin-bottom: 4px;
+}
+
+.ys-announcement-content {
+    opacity: 0.85;
+}
+
+.ys-announcement-close {
+    cursor: pointer;
+    margin-left: auto;
+    opacity: 0.5;
+    flex-shrink: 0;
+    font-size: 18px;
+    width: 18px;
+    height: 18px;
+    transition: opacity 0.2s ease;
+}
+
+.ys-announcement-close:hover {
+    opacity: 1;
+}
+
+/* ============================================
+   卡片網格
+   ============================================ */
+.ys-plugin-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+    gap: 16px;
+    margin-bottom: 30px;
+}
+
+/* ============================================
+   外掛卡片
+   ============================================ */
+.ys-plugin-card {
+    background: var(--ys-adm-card-bg);
+    border: 1px solid var(--ys-adm-border);
+    border-radius: var(--ys-adm-radius);
+    padding: 20px;
+    box-shadow: var(--ys-adm-shadow);
+    transition: box-shadow 0.2s ease, transform 0.2s ease;
+    display: flex;
+    flex-direction: column;
+}
+
+.ys-plugin-card:hover {
+    box-shadow: var(--ys-adm-shadow-hover);
+    transform: translateY(-1px);
+}
+
+.ys-plugin-card-header {
+    display: flex;
+    align-items: flex-start;
+    gap: 14px;
+    margin-bottom: 12px;
+}
+
+.ys-plugin-icon {
+    width: 48px;
+    height: 48px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--ys-adm-primary-bg);
+    border-radius: var(--ys-adm-radius);
+    flex-shrink: 0;
+}
+
+.ys-plugin-icon .dashicons {
+    font-size: 24px;
+    width: 24px;
+    height: 24px;
+    color: var(--ys-adm-primary-dark);
+}
+
+.ys-plugin-meta {
+    flex: 1;
+    min-width: 0;
+}
+
+.ys-plugin-name {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--ys-adm-text);
+    margin: 0 0 4px;
+    line-height: 1.3;
+}
+
+.ys-plugin-version {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+    font-size: 12px;
+    color: var(--ys-adm-text-muted);
+}
+
+.ys-plugin-taxonomy-tags {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    flex-wrap: wrap;
+}
+
+.ys-plugin-taxonomy-badge {
+    display: inline-flex;
+    align-items: center;
+    min-height: 20px;
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 600;
+    line-height: 1.35;
+    white-space: nowrap;
+}
+
+.ys-plugin-platform-badge {
+    color: var(--ys-adm-primary-dark);
+    background: rgba(143, 166, 181, 0.14);
+}
+
+.ys-plugin-category-badge {
+    color: #9a6a22;
+    background: rgba(214, 160, 80, 0.16);
+}
+
+.ys-plugin-version-category {
+    color: var(--ys-adm-primary-dark);
+    font-weight: 600;
+}
+
+.ys-plugin-version-separator {
+    color: var(--ys-adm-border);
+}
+
+.ys-plugin-description {
+    font-size: 13px;
+    color: var(--ys-adm-text-muted);
+    line-height: 1.6;
+    margin-bottom: 16px;
+    flex: 1;
+    /* 最多顯示 3 行 */
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+
+.ys-plugin-card-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding-top: 12px;
+    border-top: 1px solid var(--ys-adm-border-light);
+}
+
+/* ============================================
+   狀態徽章與操作按鈕
+   ============================================ */
+.ys-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 4px 12px;
+    border-radius: 12px;
+    font-size: 12px;
+    font-weight: 500;
+    line-height: 1.4;
+}
+
+.ys-badge-installed {
+    background: var(--ys-adm-info-bg);
+    color: var(--ys-adm-primary-dark);
+}
+
+.ys-badge-active {
+    background: var(--ys-adm-success-bg);
+    color: var(--ys-adm-success);
+}
+
+.ys-btn-success {
+    background: var(--ys-adm-success) !important;
+    color: #fff !important;
+    border-color: var(--ys-adm-success) !important;
+}
+.ys-btn-success:hover { opacity: 0.9; }
+
+.ys-badge-update {
+    background: var(--ys-adm-warning-bg);
+    color: var(--ys-adm-warning);
+}
+
+.ys-badge-not-installed {
+    background: var(--ys-adm-border-light);
+    color: var(--ys-adm-text-muted);
+}
+
+/* 按鈕 */
+.ys-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 6px 16px;
+    border: none;
+    border-radius: var(--ys-adm-radius);
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    line-height: 1.4;
+    text-decoration: none;
+}
+
+.ys-btn:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+.ys-btn-primary {
+    background: var(--ys-adm-primary);
+    color: #ffffff;
+}
+
+.ys-btn-primary:hover:not(:disabled) {
+    background: var(--ys-adm-primary-dark);
+}
+
+.ys-btn-success {
+    background: var(--ys-adm-success);
+    color: #ffffff;
+}
+
+.ys-btn-success:hover:not(:disabled) {
+    background: #6a9a7c;
+}
+
+.ys-btn-outline {
+    background: transparent;
+    color: var(--ys-adm-primary);
+    border: 1px solid var(--ys-adm-border);
+}
+
+.ys-btn-outline:hover:not(:disabled) {
+    background: var(--ys-adm-primary-bg);
+    border-color: var(--ys-adm-primary-light);
+}
+
+.ys-btn-sm {
+    padding: 4px 12px;
+    font-size: 12px;
+}
+
+.ys-btn .dashicons {
+    font-size: 16px;
+    width: 16px;
+    height: 16px;
+}
+
+/* ============================================
+   價格徽章
+   ============================================ */
+.ys-price-badge-free {
+    display: inline-flex;
+    align-items: center;
+    background: var(--ys-adm-success-bg);
+    color: var(--ys-adm-success);
+    font-size: 12px;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-weight: 600;
+}
+
+.ys-price-badge-paid {
+    display: inline-flex;
+    align-items: center;
+    background: var(--ys-adm-warning-bg);
+    color: var(--ys-adm-warning);
+    font-size: 12px;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-weight: 600;
+}
+
+/* 查看外掛按鈕（付費） */
+.ys-btn-external {
+    background: var(--ys-adm-warning);
+    color: #fff;
+    border: none;
+}
+
+.ys-btn-external:hover:not(:disabled) {
+    background: #b3955a;
+    color: #fff;
+}
+
+/* ============================================
+   Skeleton Loading
+   ============================================ */
+.ys-skeleton {
+    background: linear-gradient(90deg, #f0f0f0 25%, #e0e0e0 50%, #f0f0f0 75%);
+    background-size: 200% 100%;
+    animation: ys-skeleton-pulse 1.5s ease-in-out infinite;
+    border-radius: 4px;
+}
+
+@keyframes ys-skeleton-pulse {
+    0% { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
+}
+
+.ys-skeleton-card {
+    background: var(--ys-adm-card-bg);
+    border: 1px solid var(--ys-adm-border);
+    border-radius: var(--ys-adm-radius);
+    padding: 20px;
+}
+
+.ys-skeleton-icon {
+    width: 48px;
+    height: 48px;
+    border-radius: var(--ys-adm-radius);
+}
+
+.ys-skeleton-title {
+    height: 16px;
+    width: 60%;
+    margin-bottom: 8px;
+}
+
+.ys-skeleton-text {
+    height: 12px;
+    width: 40%;
+    margin-bottom: 12px;
+}
+
+.ys-skeleton-desc {
+    height: 12px;
+    width: 100%;
+    margin-bottom: 6px;
+}
+
+.ys-skeleton-desc:last-child {
+    width: 70%;
+}
+
+.ys-skeleton-btn {
+    height: 32px;
+    width: 80px;
+    border-radius: var(--ys-adm-radius);
+}
+
+.ys-skeleton-header {
+    display: flex;
+    gap: 14px;
+    margin-bottom: 12px;
+}
+
+.ys-skeleton-body {
+    margin-bottom: 16px;
+}
+
+.ys-skeleton-footer {
+    display: flex;
+    justify-content: space-between;
+    padding-top: 12px;
+    border-top: 1px solid var(--ys-adm-border-light);
+}
+
+/* ============================================
+   訊息提示
+   ============================================ */
+.ys-notice {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 14px 18px;
+    border-radius: var(--ys-adm-radius);
+    font-size: 13px;
+    margin-bottom: 16px;
+}
+
+.ys-notice-error {
+    background: var(--ys-adm-danger-bg);
+    color: var(--ys-adm-danger);
+    border: 1px solid var(--ys-adm-danger);
+}
+
+.ys-notice-success {
+    background: var(--ys-adm-success-bg);
+    color: var(--ys-adm-success);
+    border: 1px solid var(--ys-adm-success);
+}
+
+.ys-notice-warning {
+    background: var(--ys-adm-warning-bg);
+    color: var(--ys-adm-warning);
+    border: 1px solid var(--ys-adm-warning);
+}
+
+.ys-notice-info {
+    background: var(--ys-adm-info-bg);
+    color: var(--ys-adm-primary-dark);
+    border: 1px solid var(--ys-adm-primary-light);
+}
+
+/* ============================================
+   連線設定區
+   ============================================ */
+.ys-settings-section {
+    margin-top: 30px;
+    padding-top: 24px;
+    border-top: 2px solid var(--ys-adm-border-light);
+}
+
+.ys-settings-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 17px;
+    font-weight: 600;
+    color: var(--ys-adm-text);
+    margin: 0 0 20px;
+}
+
+.ys-settings-title .dashicons {
+    color: var(--ys-adm-primary);
+}
+
+.ys-settings-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+}
+
+@media (max-width: 960px) {
+    .ys-settings-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+.ys-setting-row {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.ys-setting-row label {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--ys-adm-text);
+}
+
+.ys-setting-row input[type="text"],
+.ys-setting-row input[type="url"] {
+    padding: 8px 12px;
+    border: 1px solid var(--ys-adm-border);
+    border-radius: var(--ys-adm-radius);
+    font-size: 13px;
+    color: var(--ys-adm-text);
+    background: var(--ys-adm-card-bg);
+    outline: none;
+    transition: border-color 0.2s ease;
+    width: 100%;
+    box-sizing: border-box;
+}
+
+.ys-setting-row input:focus {
+    border-color: var(--ys-adm-primary);
+    box-shadow: 0 0 0 2px var(--ys-adm-primary-bg);
+}
+
+.ys-setting-row input[readonly] {
+    background: var(--ys-adm-bg);
+    color: var(--ys-adm-text-muted);
+    cursor: default;
+}
+
+.ys-setting-inline {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.ys-setting-inline input[type="text"] {
+    flex: 1;
+}
+
+/* Checkbox 設定 */
+.ys-setting-checkbox {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.ys-setting-checkbox input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+    accent-color: var(--ys-adm-primary);
+}
+
+/* 連線狀態 */
+.ys-connection-status {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 14px;
+    border-radius: var(--ys-adm-radius);
+    font-size: 13px;
+}
+
+.ys-status-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+
+.ys-status-closed .ys-status-dot {
+    background: var(--ys-adm-success);
+}
+
+.ys-status-closed {
+    background: var(--ys-adm-success-bg);
+    color: var(--ys-adm-success);
+}
+
+.ys-status-open .ys-status-dot {
+    background: var(--ys-adm-danger);
+}
+
+.ys-status-open {
+    background: var(--ys-adm-danger-bg);
+    color: var(--ys-adm-danger);
+}
+
+.ys-status-half_open .ys-status-dot {
+    background: var(--ys-adm-warning);
+}
+
+.ys-status-half_open {
+    background: var(--ys-adm-warning-bg);
+    color: var(--ys-adm-warning);
+}
+
+/* 設定操作區 */
+.ys-settings-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 20px;
+    padding-top: 16px;
+    border-top: 1px solid var(--ys-adm-border-light);
+}
+
+/* ============================================
+   Toast 提示
+   ============================================ */
+.ys-toast {
+    position: fixed;
+    top: 40px;
+    right: 20px;
+    z-index: 99999;
+    padding: 12px 20px;
+    border-radius: var(--ys-adm-radius);
+    font-size: 13px;
+    font-weight: 500;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.12);
+    transform: translateX(120%);
+    transition: transform 0.3s ease;
+    max-width: 360px;
+}
+
+.ys-toast.show {
+    transform: translateX(0);
+}
+
+.ys-toast-success {
+    background: var(--ys-adm-success);
+    color: #ffffff;
+}
+
+.ys-toast-error {
+    background: var(--ys-adm-danger);
+    color: #ffffff;
+}
+
+.ys-toast-info {
+    background: var(--ys-adm-primary);
+    color: #ffffff;
+}
+
+/* ============================================
+   空狀態
+   ============================================ */
+.ys-empty-state {
+    text-align: center;
+    padding: 60px 20px;
+    color: var(--ys-adm-text-muted);
+}
+
+.ys-empty-state .dashicons {
+    font-size: 48px;
+    width: 48px;
+    height: 48px;
+    color: var(--ys-adm-border);
+    margin-bottom: 12px;
+}
+
+.ys-empty-state p {
+    font-size: 14px;
+    margin: 0;
+}
+
+/* ============================================
+   Spinner
+   ============================================ */
+.ys-spinner {
+    display: inline-block;
+    width: 16px;
+    height: 16px;
+    border: 2px solid rgba(255,255,255,0.3);
+    border-top-color: #ffffff;
+    border-radius: 50%;
+    animation: ys-spin 0.6s linear infinite;
+}
+
+.ys-spinner-dark {
+    border-color: rgba(0,0,0,0.1);
+    border-top-color: var(--ys-adm-primary);
+}
+
+@keyframes ys-spin {
+    to { transform: rotate(360deg); }
+}
+
+/* ============================================
+   響應式
+   ============================================ */
+@media (max-width: 768px) {
+    .ys-marketplace-header {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+
+    .ys-marketplace-toolbar {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+
+    .ys-search-box input {
+        width: 100%;
+    }
+
+    .ys-plugin-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+/* ============================================
+   市集底部
+   ============================================ */
+.ys-marketplace-footer {
+    text-align: center;
+    padding: 24px 0 8px;
+    margin-top: 32px;
+    border-top: 1px solid #e2e8ed;
+    color: #7b8a96;
+    font-size: 13px;
+}
+
+.ys-marketplace-footer a {
+    color: #6b8a9a;
+    text-decoration: none;
+}
+
+.ys-marketplace-footer a:hover {
+    color: #8fa8b8;
+    text-decoration: underline;
+}
+
+/* 外掛標題連結 */
+.ys-plugin-name a {
+    color: var(--ys-adm-text, #2c3e50);
+    text-decoration: none;
+}
+
+.ys-plugin-name a:hover {
+    color: var(--ys-adm-primary-dark, #6b8a9a);
+    text-decoration: underline;
+}
+
+/* ============================================
+   頁面色塊 Hero Header（市集 + 紀錄統一）
+   ============================================ */
+.ys-page-hero {
+    background: linear-gradient(135deg, #8fa8b8 0%, #a8bcc8 50%, #b3c7d3 100%);
+    border-radius: 12px;
+    padding: 28px 32px;
+    margin: -8px -2px 24px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    color: #fff;
+    box-shadow: 0 4px 20px rgba(107, 138, 154, 0.25);
+}
+
+.ys-page-hero h1,
+.ys-hero-title {
+    margin: 0 0 4px;
+    font-size: 22px;
+    font-weight: 700;
+    color: #fff;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.ys-page-hero h1 .dashicons,
+.ys-hero-title .dashicons {
+    font-size: 24px;
+    width: 24px;
+    height: 24px;
+}
+
+.ys-page-hero p,
+.ys-hero-subtitle {
+    margin: 0;
+    font-size: 13px;
+    color: rgba(255, 255, 255, 0.85);
+}
+
+.ys-page-hero-actions {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-shrink: 0;
+}
+
+/* Hero 內的連線狀態膠囊 */
+.ys-page-hero .ys-hub-status {
+    padding: 6px 16px;
+    border-radius: 20px;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    font-weight: 600;
+}
+
+/* 已連線：淺綠底 + 深綠點 + 深綠字 */
+.ys-page-hero .ys-hub-status-connected {
+    background: rgba(200, 235, 210, 0.85);
+}
+.ys-page-hero .ys-hub-status-connected .ys-hub-status-text {
+    color: #2d6a3f;
+}
+.ys-page-hero .ys-hub-status-connected .ys-hub-status-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: #2d8a4e;
+    box-shadow: 0 0 8px rgba(45, 138, 78, 0.6);
+}
+
+/* 斷線：淺紅底 + 深紅點 + 深紅字 */
+.ys-page-hero .ys-hub-status-error {
+    background: rgba(240, 200, 200, 0.85);
+}
+.ys-page-hero .ys-hub-status-error .ys-hub-status-text {
+    color: #8a2d2d;
+}
+.ys-page-hero .ys-hub-status-error .ys-hub-status-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: #c03030;
+    box-shadow: 0 0 8px rgba(192, 48, 48, 0.6);
+}
+
+/* 檢查中：白色半透明 */
+.ys-page-hero .ys-hub-status-checking {
+    background: rgba(255, 255, 255, 0.25);
+}
+.ys-page-hero .ys-hub-status-checking .ys-hub-status-text {
+    color: #fff;
+}
+.ys-page-hero .ys-hub-status-checking .ys-hub-status-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.6);
+    animation: ys-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes ys-pulse {
+    0%, 100% { opacity: 0.4; }
+    50% { opacity: 1; }
+}
+
+/* Hero 內的按鈕 — 白底深藍字 */
+.ys-btn-hero {
+    background: rgba(255, 255, 255, 0.9);
+    color: #2c4a5e;
+    border: 1px solid rgba(255, 255, 255, 0.95);
+    padding: 8px 16px;
+    border-radius: 6px;
+    font-size: 13px;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    transition: background 0.2s;
+}
+
+.ys-btn-hero:hover {
+    background: #fff;
+    color: #1a3548;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+}
+
+.ys-btn-hero .dashicons {
+    font-size: 16px;
+    width: 16px;
+    height: 16px;
+}
+
+/* 響應式 */
+@media screen and (max-width: 782px) {
+    .ys-page-hero {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 16px;
+        padding: 20px 24px;
+    }
+    .ys-page-hero-actions {
+        width: 100%;
+        justify-content: flex-start;
+    }
+}
+
+/* ============================================
+   卡片 Footer 左右分割
+   ============================================ */
+.ys-plugin-card-footer {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+}
+.ys-card-footer-left {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+}
+.ys-card-footer-right {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-left: auto;
+}
+
+/* 已連線狀態文字（hero 內） */
+.ys-hub-status-text {
+    font-size: 13px;
+}
+.ys-page-hero .ys-hub-status-connected .ys-hub-status-text {
+    color: rgba(255, 255, 255, 0.9);
+}
+
+/* 日誌頁工具列 */
+.ys-log-toolbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin: 16px 0;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+.ys-log-filters {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+}
+.ys-log-table {
+    border-color: #e2e8ed;
+}
+
+/* 已啟用/已安裝 badge */
+.ys-badge-active {
+    background: #e8f3ec;
+    color: #7dab8e;
+    padding: 3px 10px;
+    border-radius: 12px;
+    font-size: 11px;
+    font-weight: 600;
+    white-space: nowrap;
+}
+.ys-badge-installed {
+    background: #e8eff5;
+    color: #6b8a9a;
+    padding: 3px 10px;
+    border-radius: 12px;
+    font-size: 11px;
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+/* 防止 WP #wpfooter 重疊底部內容 */
+.ys-marketplace-wrap {
+    padding-bottom: 40px;
+}
+
+/* ============================================
+   系統資訊頁面
+   ============================================ */
+.ys-sysinfo-section {
+    margin-bottom: 24px;
+}
+
+.ys-sysinfo-heading {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--ys-adm-text);
+    margin: 0 0 12px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--ys-adm-border-light);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.ys-sysinfo-heading .dashicons {
+    color: var(--ys-adm-primary);
+    font-size: 18px;
+    width: 18px;
+    height: 18px;
+}
+
+.ys-sysinfo-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 12px;
+}
+
+.ys-sysinfo-card {
+    background: var(--ys-adm-card-bg);
+    border: 1px solid var(--ys-adm-border-light);
+    border-radius: var(--ys-adm-radius);
+    padding: 14px 16px;
+}
+
+.ys-sysinfo-label {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--ys-adm-text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 4px;
+}
+
+.ys-sysinfo-value {
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--ys-adm-text);
+    line-height: 1.3;
+}
+
+.ys-sysinfo-mono {
+    font-family: "SF Mono", "Monaco", "Consolas", monospace;
+    font-size: 15px;
+    word-break: break-all;
+}
+
+.ys-sysinfo-note {
+    font-size: 11px;
+    color: var(--ys-adm-text-muted);
+    margin-top: 4px;
+}
+
+/* 外掛 pills */
+.ys-sysinfo-plugins {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.ys-sysinfo-plugin-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    border-radius: 20px;
+    font-size: 12px;
+    font-weight: 500;
+    background: var(--ys-adm-bg);
+    border: 1px solid var(--ys-adm-border);
+    color: var(--ys-adm-text);
+}
+
+.ys-sysinfo-plugin-pill.active {
+    background: var(--ys-adm-success-bg);
+    border-color: rgba(125, 171, 142, 0.3);
+    color: #3a6d4a;
+}
+
+.ys-sysinfo-plugin-pill.inactive {
+    background: var(--ys-adm-bg);
+    color: var(--ys-adm-text-muted);
+}
+
+.ys-sysinfo-pill-ver {
+    font-family: "SF Mono", "Monaco", "Consolas", monospace;
+    font-size: 11px;
+    color: inherit;
+    opacity: 0.7;
+}
+
+@media screen and (max-width: 782px) {
+    .ys-sysinfo-grid {
+        grid-template-columns: 1fr 1fr;
+    }
+}
+
+/* ============================================
+   傳出 IP 獨立卡片
+   ============================================ */
+.ys-sysinfo-ip-card {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    background: var(--ys-adm-card-bg);
+    border: 1px solid var(--ys-adm-border-light);
+    border-radius: var(--ys-adm-radius);
+    padding: 20px 24px;
+}
+
+.ys-sysinfo-ip-icon {
+    width: 48px;
+    height: 48px;
+    border-radius: 12px;
+    background: var(--ys-adm-primary-bg);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+}
+
+.ys-sysinfo-ip-icon .dashicons {
+    font-size: 24px;
+    width: 24px;
+    height: 24px;
+    color: var(--ys-adm-primary);
+}
+
+.ys-sysinfo-ip-label {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--ys-adm-text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.ys-sysinfo-ip-value {
+    font-size: 22px;
+    font-weight: 700;
+    font-family: "SF Mono", "Monaco", "Consolas", monospace;
+    color: var(--ys-adm-text);
+    margin: 2px 0;
+}
+
+/* ============================================
+   系統資訊表格卡片
+   ============================================ */
+.ys-sysinfo-table-card {
+    background: var(--ys-adm-card-bg);
+    border: 1px solid var(--ys-adm-border-light);
+    border-radius: var(--ys-adm-radius);
+    overflow: hidden;
+}
+
+.ys-sysinfo-table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+.ys-sysinfo-table tr {
+    border-bottom: 1px solid var(--ys-adm-border-light);
+}
+
+.ys-sysinfo-table tr:last-child {
+    border-bottom: none;
+}
+
+.ys-sysinfo-table td {
+    padding: 10px 16px;
+    font-size: 13px;
+    color: var(--ys-adm-text);
+}
+
+.ys-sysinfo-td-label {
+    width: 180px;
+    font-weight: 600;
+    color: var(--ys-adm-text-muted);
+    background: var(--ys-adm-bg);
+}
+
+.ys-sysinfo-note-inline {
+    font-size: 11px;
+    color: var(--ys-adm-text-muted);
+}
+
+/* ============================================
+   停用 / 刪除按鈕
+   ============================================ */
+.ys-btn-muted {
+    background: transparent;
+    color: var(--ys-adm-text-muted, #7b8a96);
+    border: 1px solid var(--ys-adm-border, #e2e8ed);
+    font-size: 12px;
+}
+.ys-btn-muted:hover {
+    background: var(--ys-adm-bg, #f8fafb);
+    color: var(--ys-adm-text, #2c3e50);
+    border-color: var(--ys-adm-text-muted, #7b8a96);
+}
+
+.ys-btn-danger-text {
+    background: transparent;
+    color: var(--ys-adm-danger, #c08080);
+    border: 1px solid transparent;
+    font-size: 12px;
+}
+.ys-btn-danger-text:hover {
+    background: var(--ys-adm-danger-bg, #f8e8e8);
+    color: var(--ys-adm-danger, #c08080);
+    border-color: var(--ys-adm-danger, #c08080);
+}

@@ -1,0 +1,14 @@
+{
+    "name": "yangsheep/ys-plugin-hub-client",
+    "description": "YS Plugin Hub Client - \u9023\u63a5 Hub \u53d6\u5f97\u66f4\u65b0\u548c\u5e02\u96c6\u8cc7\u8a0a",
+    "type": "wordpress-plugin",
+    "license": "GPL-2.0-or-later",
+    "require": {
+        "php": ">=7.4"
+    },
+    "autoload": {
+        "psr-4": {
+            "YangSheep\\PluginHubClient\\": "src/"
+        }
+    }
+}
