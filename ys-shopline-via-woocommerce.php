@@ -3,7 +3,7 @@
  * Plugin Name: YS Shopline via WooCommerce
  * Plugin URI: https://yangsheep.com.tw
  * Description: Support Shopline Payments for WooCommerce, including HPOS and Subscriptions. Supports Credit Card, ATM, JKOPay, Apple Pay, LINE Pay, and Chailease BNPL.
- * Version:           3.5.28
+ * Version:           3.5.29
  * Author: YangSheep
  * Author URI: https://yangsheep.com.tw
  * Text Domain: ys-shopline-via-woocommerce
@@ -17,7 +17,7 @@
 defined( 'ABSPATH' ) || exit;
 
 // Define plugin constants
-define( 'YS_SHOPLINE_VERSION', '3.5.28' );
+define( 'YS_SHOPLINE_VERSION', '3.5.29' );
 // v3.5.14: 資料庫綱要版本（用於 plugins_loaded 一次性 migration），與 plugin 版本解耦。
 define( 'YS_SHOPLINE_DB_VERSION', '3.5.14' );
 define( 'YS_SHOPLINE_PLUGIN_FILE', __FILE__ );
@@ -857,6 +857,12 @@ final class YSShoplinePayment {
             return;
         }
 
+        $existing_offline_payment = $this->maybe_reuse_existing_offline_payment( $order, $payment_method, $gateway );
+        if ( null !== $existing_offline_payment ) {
+            wp_send_json( $existing_offline_payment );
+            return;
+        }
+
         $this->prepare_offline_order_for_repayment( $order, $payment_method );
 
         // 更新訂單的付款方式（可能已變更）
@@ -867,6 +873,73 @@ final class YSShoplinePayment {
         $result = $gateway->process_payment( $order_id );
 
         wp_send_json( $result );
+    }
+
+    /**
+     * Reuse an existing ATM virtual account when the customer re-selects ATM.
+     *
+     * @param \WC_Order          $order          Order object.
+     * @param string             $payment_method Newly selected payment method.
+     * @param WC_Payment_Gateway $gateway        Selected gateway.
+     * @return array|null
+     */
+    private function maybe_reuse_existing_offline_payment( $order, $payment_method, $gateway ) {
+        if ( ! $this->should_reuse_existing_atm_payment( $order, $payment_method ) ) {
+            return null;
+        }
+
+        return array(
+            'result'               => 'success',
+            'redirect'             => $gateway->get_return_url( $order ),
+            'reusedOfflinePayment' => 'atm',
+        );
+    }
+
+    /**
+     * Determine whether an ATM order should keep its current virtual account.
+     *
+     * @param \WC_Order $order          Order object.
+     * @param string    $payment_method Newly selected payment method.
+     * @return bool
+     */
+    private function should_reuse_existing_atm_payment( $order, $payment_method ) {
+        if ( ! $order || 'ys_shopline_atm' !== $order->get_payment_method() || 'ys_shopline_atm' !== $payment_method ) {
+            return false;
+        }
+
+        if ( ! in_array( $order->get_status(), array( 'pending', 'on-hold' ), true ) ) {
+            return false;
+        }
+
+        if ( 'yes' === $order->get_meta( YSOrderMeta::PAYMENT_AUTHORIZED_PENDING ) ) {
+            return false;
+        }
+
+        if ( ! $order->get_meta( YSOrderMeta::VA_ACCOUNT ) || ! $order->get_meta( YSOrderMeta::TRADE_ORDER_ID ) ) {
+            return false;
+        }
+
+        return ! $this->is_existing_atm_payment_expired( $order );
+    }
+
+    /**
+     * Check whether the stored ATM virtual account has expired.
+     *
+     * @param \WC_Order $order Order object.
+     * @return bool
+     */
+    private function is_existing_atm_payment_expired( $order ) {
+        $expire = (string) $order->get_meta( YSOrderMeta::VA_EXPIRE );
+        if ( '' === $expire ) {
+            return false;
+        }
+
+        $expire_timestamp = strtotime( $expire );
+        if ( ! $expire_timestamp ) {
+            return false;
+        }
+
+        return $expire_timestamp <= time();
     }
 
     /**

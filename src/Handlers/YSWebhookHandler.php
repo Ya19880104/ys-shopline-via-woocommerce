@@ -314,7 +314,7 @@ final class YSWebhookHandler {
             return;
         }
 
-        $order = $this->get_order_by_trade_id( $trade_order_id );
+        $order = $this->get_order_for_paid_trade_webhook( $data );
 
         if ( ! $order ) {
             // v3.5.2: Codex F7 — 改走 context，讓 YSLogger 集中遮罩生效
@@ -373,6 +373,9 @@ final class YSWebhookHandler {
 
         $status = $this->normalize_payment_status( (string) ( $data['status'] ?? 'SUCCEEDED' ) );
         $order->update_meta_data( YSOrderMeta::TRADE_ORDER_ID, $trade_order_id );
+        if ( ! empty( $data['referenceOrderId'] ) ) {
+            $order->update_meta_data( YSOrderMeta::REFERENCE_ORDER_ID, (string) $data['referenceOrderId'] );
+        }
         $order->update_meta_data( YSOrderMeta::PAYMENT_STATUS, $status );
         $order->update_meta_data( YSOrderMeta::PAYMENT_DETAIL, YSOrderMeta::sanitize_payment_detail( $data ) );
         $order->save();
@@ -443,7 +446,7 @@ final class YSWebhookHandler {
             return;
         }
 
-        $order = $this->get_order_by_trade_id( $trade_order_id );
+        $order = $this->get_order_for_paid_trade_webhook( $data );
 
         if ( ! $order ) {
             return;
@@ -464,6 +467,10 @@ final class YSWebhookHandler {
         }
 
         $order->add_order_note( __( 'Shopline payment captured.', 'ys-shopline-via-woocommerce' ) );
+        $order->update_meta_data( YSOrderMeta::TRADE_ORDER_ID, $trade_order_id );
+        if ( ! empty( $data['referenceOrderId'] ) ) {
+            $order->update_meta_data( YSOrderMeta::REFERENCE_ORDER_ID, (string) $data['referenceOrderId'] );
+        }
         $order->update_meta_data( YSOrderMeta::PAYMENT_STATUS, 'CAPTURED' );
         $order->update_meta_data( YSOrderMeta::PAYMENT_DETAIL, YSOrderMeta::sanitize_payment_detail( $data ) );
         $order->save();
@@ -878,6 +885,72 @@ final class YSWebhookHandler {
         ] );
 
         return ! empty( $orders ) ? $orders[0] : null;
+    }
+
+    /**
+     * Resolve an order for a paid trade webhook.
+     *
+     * ATM customers can pay an older virtual account after the order has been
+     * re-issued with a newer trade id. Only paid events use reference fallback;
+     * failed/expired/cancelled old attempts must not affect the current attempt.
+     *
+     * @param array $data Webhook payload.
+     * @return \WC_Order|null
+     */
+    private function get_order_for_paid_trade_webhook( array $data ): ?\WC_Order {
+        $trade_order_id = (string) ( $data['tradeOrderId'] ?? '' );
+        if ( '' !== $trade_order_id ) {
+            $order = $this->get_order_by_trade_id( $trade_order_id );
+            if ( $order ) {
+                return $order;
+            }
+        }
+
+        $reference_order_id = (string) ( $data['referenceOrderId'] ?? '' );
+        if ( '' === $reference_order_id ) {
+            return null;
+        }
+
+        return $this->get_order_by_reference_order_id( $reference_order_id );
+    }
+
+    /**
+     * Resolve a WooCommerce order from the plugin-generated referenceOrderId.
+     *
+     * @param string $reference_order_id SHOPLINE referenceOrderId.
+     * @return \WC_Order|null
+     */
+    private function get_order_by_reference_order_id( string $reference_order_id ): ?\WC_Order {
+        $order_id = $this->extract_order_id_from_reference_order_id( $reference_order_id );
+        if ( ! $order_id ) {
+            return null;
+        }
+
+        $order = wc_get_order( $order_id );
+        if ( ! $order ) {
+            return null;
+        }
+
+        YSLogger::info( 'Webhook: resolved paid trade by referenceOrderId fallback', [
+            'order_id'           => $order_id,
+            'reference_order_id' => $reference_order_id,
+        ] );
+
+        return $order;
+    }
+
+    /**
+     * Extract the WooCommerce order id from references like 2486_2.
+     *
+     * @param string $reference_order_id SHOPLINE referenceOrderId.
+     * @return int
+     */
+    private function extract_order_id_from_reference_order_id( string $reference_order_id ): int {
+        if ( ! preg_match( '/^(\d+)_(\d+)$/', $reference_order_id, $matches ) ) {
+            return 0;
+        }
+
+        return (int) $matches[1];
     }
 
     /**
