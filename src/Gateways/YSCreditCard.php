@@ -134,18 +134,24 @@ class YSCreditCard extends YSGatewayBase {
     public function get_sdk_config() {
         $config = parent::get_sdk_config();
 
-        // Add bind card configuration
-        // 只有已登入用戶且有 customerToken 時才啟用儲存卡片功能
-        $has_customer_token = isset( $config['customerToken'] ) && ! empty( $config['customerToken'] );
+        // v3.5.31: 儲存卡片選項對「已登入用戶」一律開放，與 customerToken 解耦。
+        //   舊邏輯把勾選框綁在 has_customer_token，導致「首次顧客（customer/token
+        //   API 尚未成功）」看不到儲存卡勾選框 → 無法存卡。
+        //   customerToken 的用途只是顯示既有卡列表；「能否儲存新卡」取決於是否登入。
+        //   訪客（未登入，user_id=0）不送 paymentInstrument → 不顯示勾選框。
+        $user_id = get_current_user_id();
 
-        if ( $has_customer_token ) {
+        // v3.5.32: 移除 textType。SDK 在 switchVisible=true（顯示勾選框）+ 有 customerToken
+        //   的情境下，帶 textType 會觸發 initData.paymentInstrument 參數異常 (4208)。
+        //   原始可正常綁卡的設定本來就沒有 textType，故移除。
+        if ( $user_id ) {
             $config['paymentInstrument'] = array(
                 'bindCard' => array(
                     'enable'   => true,
                     'protocol' => array(
-                        'switchVisible'       => true,
-                        'defaultSwitchStatus' => false,
-                        'mustAccept'          => false,
+                        'switchVisible'       => true,   // 顯示勾選框（用戶自選）
+                        'defaultSwitchStatus' => false,  // 預設不勾
+                        'mustAccept'          => false,  // 不勾也能付款
                     ),
                 ),
             );

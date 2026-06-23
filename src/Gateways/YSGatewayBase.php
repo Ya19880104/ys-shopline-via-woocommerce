@@ -382,17 +382,19 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
             }
         }
 
-        // v3.4.18: bind-only 情境（新增付款方式 / 訂閱變更付款方式 / $0 訂閱試用）
-        // 一律傳 paymentInstrument + mustAccept=true 才能真正鎖住 checkbox
-        // 原本只有 JS 預設 protocol 但 mustAccept=false → SHOPLINE SDK 仍顯示 checkbox
+        // bind-only 情境（新增付款方式 / 訂閱變更付款方式 / $0 訂閱試用）一律強制綁卡。
+        // v3.5.30: mustAccept 改 false + 補 textType，對齊 SLP 客服建議的綁卡 protocol。
+        //   switchVisible=false（隱藏開關）+ defaultSwitchStatus=true（預設綁）+
+        //   mustAccept=false（不需顧客額外點選同意）= 靜默強制綁卡，SLP 才會真正建立 paymentInstrument。
+        // v3.5.32: 移除 textType（避免 4208 initData.paymentInstrument 參數異常）。
         if ( $bind_only_mode ) {
             $config['paymentInstrument'] = array(
                 'bindCard' => array(
                     'enable'   => true,
                     'protocol' => array(
                         'switchVisible'       => false,  // 隱藏開關
-                        'defaultSwitchStatus' => true,   // 預設勾選
-                        'mustAccept'          => true,   // 強制接受（不可取消）
+                        'defaultSwitchStatus' => true,   // 預設綁卡
+                        'mustAccept'          => false,  // 不需額外同意（隱藏開關下 mustAccept=true 會讓 SLP 不綁卡）
                     ),
                 ),
             );

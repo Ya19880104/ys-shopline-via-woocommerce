@@ -110,19 +110,25 @@ class YSCreditSubscription extends YSGatewayBase {
     public function get_sdk_config() {
         $config = parent::get_sdk_config();
 
-        // 訂閱 SDK config（v3.3.3 回正邏輯）：
+        // 訂閱 SDK config：
         // - 保留 parent 提供的 customerToken → SDK 自己顯示「已綁卡 tab + 新卡 tab」
-        // - bindCard.enable 跟隨是否有 customerToken（有才能綁新卡到會員）
-        $has_customer_token = isset( $config['customerToken'] ) && ! empty( $config['customerToken'] );
+        // - v3.5.30: bindCard.enable 一律 true（與 customerToken 解耦）
+        //   SLP 客服確認：SLP 以 SDK 的 bindCard.enable 為準，即使 API 帶
+        //   savePaymentInstrument:true，若 SDK enable=false 仍不綁卡。
+        //   舊邏輯把 enable 綁在 has_customer_token，導致「首次訂閱顧客（無既有
+        //   token）」被送 enable=false → 卡片永遠綁不上 → 訂閱無法續扣。
+        //   customerToken 的作用只是讓 SDK 顯示既有卡列表，與「能否綁新卡」無關。
 
+        // v3.5.32: 移除 textType（避免 4208 initData.paymentInstrument 參數異常）。
+        //   原始可正常綁卡的設定本來就沒有 textType；enable:true 才是 SLP 確認的關鍵修法。
         $config['forceSaveCard']     = true;
         $config['paymentInstrument'] = array(
             'bindCard' => array(
-                'enable'   => $has_customer_token,
+                'enable'   => true,
                 'protocol' => array(
                     'switchVisible'       => false,
                     'defaultSwitchStatus' => true,
-                    'mustAccept'          => true,
+                    'mustAccept'          => false,
                 ),
             ),
         );

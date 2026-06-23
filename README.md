@@ -4,7 +4,7 @@
 
 ## 版本資訊
 
-- **目前版本**：3.5.27
+- **目前版本**：3.5.32
 - **PHP 需求**：>= 8.0
 - **WordPress 需求**：>= 6.0
 - **WooCommerce 需求**：7.0 - 9.0
@@ -65,6 +65,33 @@ https://your-domain.com/wp-json/ys-shopline/v1/webhook
 ---
 
 ## 變更紀錄
+
+### 3.5.32 - 2026-06-23
+
+**修正 SDK initData.paymentInstrument 參數異常 (4208)：移除 textType**
+
+- v3.5.30 / v3.5.31 在 `bindCard.protocol` 內新增的 `textType`，在 `switchVisible:true`（顯示勾選框）+ 有 `customerToken` 的情境下會觸發 SDK 錯誤 4208「initData.paymentInstrument 參數異常」，導致信用卡結帳無法載入。
+- 三處（訂閱 / 一般信用卡 / bind-only）皆移除 `textType`。原始可正常綁卡的設定本來就沒有 `textType`，移除不影響綁卡。
+- 保留關鍵修法：`bindCard.enable:true`（訂閱 / bind-only 強制；一般信用卡對登入用戶開放）與 `mustAccept:false`。
+
+### 3.5.31 - 2026-06-23
+
+**一般信用卡：儲存卡片選項對所有登入用戶開放（與 customerToken 解耦）**
+
+- **問題**：一般信用卡 gateway 的「儲存卡片」勾選框原本綁在 `customerToken` 是否存在。首次顧客若 `customer/token` API 尚未成功，看不到勾選框 → 無法儲存卡片。
+- `YSCreditCard::get_sdk_config`：閘門改為「是否登入」（`get_current_user_id()`）。登入用戶一律顯示勾選框（`switchVisible:true`、預設不勾、用戶自選），新增 `textType`。
+- `customerToken` 仍照舊用於顯示既有卡列表；「能否儲存新卡」僅取決於是否登入。
+- 訪客（未登入）不送 `paymentInstrument` → 不顯示勾選框，無法儲存卡片（維持原樣）。
+
+### 3.5.30 - 2026-06-23
+
+**修正訂閱 / 綁卡的 SDK bindCard.enable，讓 SHOPLINE 真正建立 paymentInstrument**
+
+- **根因**：SLP 客服確認，SHOPLINE 以 SDK 的 `paymentInstrument.bindCard.enable` 為準；即使 Server API 帶 `savePaymentInstrument:true`，若 SDK `enable=false` 仍不綁卡並回 `savePaymentInstrument:false`。
+- 訂閱 gateway 原本 `enable` 綁在「是否有 customerToken」，導致**首次訂閱顧客（無既有 token）** 被送 `enable=false` → 卡片永遠綁不上 → 訂閱無法續扣。
+- `YSCreditSubscription::get_sdk_config`：`bindCard.enable` 改為一律 `true`（與 customerToken 解耦），`mustAccept` 改 `false`，新增 `textType`。
+- `YSGatewayBase::get_sdk_config`（新增付款方式 / 訂閱變更付款 / $0 試用 bind-only）：`mustAccept` 改 `false`，新增 `textType`（`enable` 本就為 `true`）。
+- 一般信用卡（非訂閱）儲存卡片維持不變：仍由顧客自行勾選（`switchVisible:true`、預設關閉）。
 
 ### 3.5.27 - 2026-05-21
 
