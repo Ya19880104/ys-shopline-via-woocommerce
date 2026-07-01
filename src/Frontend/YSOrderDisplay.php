@@ -143,11 +143,13 @@ class YSOrderDisplay {
 		$trade_order_id = $order->get_meta( YSOrderMeta::TRADE_ORDER_ID );
 		$payment_method = $order->get_meta( YSOrderMeta::PAYMENT_METHOD );
 		$method_display = $this->get_payment_method_display( $payment_method );
+		// v3.5.33: 標題依實際 WC gateway 選字，避免一次付清誤顯示「分期付款授權成功」。
+		$notice_title = $this->get_authorized_pending_title( $order->get_payment_method() );
 		?>
 		<div class="ys-shopline-notice ys-shopline-notice-success">
 			<div class="ys-shopline-notice-icon">✓</div>
 			<div class="ys-shopline-notice-content">
-				<h3><?php esc_html_e( '分期付款授權成功，等待銀行確認', 'ys-shopline-via-woocommerce' ); ?></h3>
+				<h3><?php echo esc_html( $notice_title ); ?></h3>
 				<p>
 					<?php esc_html_e( '通常約需1~5分鐘，付款完成後系統將會自動變更訂單並通知您。', 'ys-shopline-via-woocommerce' ); ?>
 				</p>
@@ -166,6 +168,28 @@ class YSOrderDisplay {
 			</div>
 		</div>
 		<?php
+	}
+
+	/**
+	 * v3.5.33: 依 WC gateway 取「已授權待確認」標題，讓文字跟隨實際付款方式。
+	 *
+	 * 分期（信用卡分期 / 中租零卡）→「分期付款授權成功」；
+	 * 一次付清信用卡 / 訂閱 →「信用卡授權成功」；其餘 →「付款授權成功」。
+	 *
+	 * @param string $wc_gateway_id WooCommerce 付款方式 ID。
+	 * @return string
+	 */
+	private function get_authorized_pending_title( $wc_gateway_id ) {
+		switch ( $wc_gateway_id ) {
+			case 'ys_shopline_credit_installment':
+			case 'ys_shopline_bnpl':
+				return __( '分期付款授權成功，等待銀行確認', 'ys-shopline-via-woocommerce' );
+			case 'ys_shopline_credit':
+			case 'ys_shopline_credit_subscription':
+				return __( '信用卡授權成功，等待銀行確認', 'ys-shopline-via-woocommerce' );
+			default:
+				return __( '付款授權成功，等待銀行確認', 'ys-shopline-via-woocommerce' );
+		}
 	}
 
 	/**
