@@ -10,6 +10,19 @@ jQuery(function ($) {
     'use strict';
 
     /**
+     * v3.5.34: 腳本單例守衛（防衛性）
+     *
+     * 部分客戶站的結帳外掛會以 AJAX 重繪含 <script> 的區塊，導致本腳本被重複執行。
+     * 每次重複執行都會生出一套全新的 closure（paymentInstances / _isSubmitting 各自獨立），
+     * 多套副本互搶 SDK 掛載且鎖互不相通。只允許第一份存活。
+     */
+    if (window.__ysShoplineCheckoutBooted) {
+        console.warn('[YS Shopline] Duplicate script execution blocked by singleton guard');
+        return;
+    }
+    window.__ysShoplineCheckoutBooted = true;
+
+    /**
      * Gateway configurations mapping
      */
     var GATEWAY_CONFIG = {
@@ -95,6 +108,34 @@ jQuery(function ($) {
     var sdkConfigs = {};             // { gatewayId: serverConfig }
 
     /**
+     * v3.5.34: WC 結帳更新生命週期追蹤（純被動 flag，無計時器）
+     *
+     * update_checkout（發起）→ update_order_review AJAX → updated_checkout（完成，DOM 可能已被替換）。
+     * 正式站故障根因：自動填入觸發的更新在使用者按下單前後落地，替換付款 DOM 並換掉 SDK instance，
+     * 導致 nextAction（3DS）永遠不啟動、交易卡在 CREATED。
+     *
+     * 防護設計 = 一條互斥線：
+     *   起跑前（placeOrder gate）— 以「實體狀態」判斷可否起跑（更新不在途 + instance 存在 + iframe 活著），
+     *   不依賴時間魔法數；未就緒則 defer 自動等待沉澱後續行。
+     *   起跑後（onUpdatedCheckout 凍結 + instance 閉包直傳）— 付款到 nextAction 之間不受任何更新干擾。
+     *
+     * 實測依據（2026-07-11 HiNet+Cloudflare 正式站量測）：
+     *   update_checkout→AJAX 發出 ~360ms、AJAX 往返 ~550ms、全程沉澱 ~0.9s（異常樣本 5.4s）；
+     *   SHOPLINE create API 伺服器端 28 筆全數 <2s；SDK 重掛 ~2-3s。
+     */
+    var updateInFlight = false;      // update_checkout 已發起、updated_checkout 尚未回來
+    var updateEventAt = 0;           // 最近一次 update_checkout 事件時間（flag 丟失自癒的 grace 基準）
+    var lastUpdateSettledAt = 0;     // 上次 updated_checkout 完成時間（ms）
+    var wcAjaxActive = [];           // 在途 wc-ajax jqXHR 集合（cart 突變不一定先發 update_checkout 事件；
+                                     // 以真實 XHR + readyState 過濾自癒，不用會漂移的裸計數器）
+    var SETTLE_QUIET_MS = 250;       // 更新剛完成後的靜默期：吸收連鎖更新的起手空檔（sc-icg 類外掛會鏈式觸發）
+    var UPDATE_EVENT_GRACE_MS = 8000; // update_checkout 事件後多久內未觀察到對應 XHR 仍視為在途
+                                      //（實測事件→AJAX 發出常態 ~360ms、異常樣本 5.4s；超過 grace 且無 XHR = 事件丟失，flag 自癒）
+    var DEFER_TICK_MS = 150;         // defer 等待的檢查間隔（僅被 gate 攔下時啟動的有限輪詢，非常駐）
+    var DEFER_TIMEOUT_MS = 5000;     // defer 檢查點：到點後看實體在途證據——慢而未壞就續等（fail-closed），不清狀態開閘
+    var DEFER_HARD_LIMIT_MS = 20000; // defer 硬上限：慢站/CDN 最壞情境仍等不到沉澱 → 停止等待並提示重整（fail-closed，不自動送單）
+
+    /**
      * Main Shopline Checkout Handler
      */
     var ShoplineCheckout = {
@@ -125,9 +166,47 @@ jQuery(function ($) {
                 });
             }
 
-            // 重置提交 flag：WC 在錯誤或頁面更新時觸發
-            $(document.body).on('checkout_error updated_checkout', function () {
+            // 重置提交 flag：只在 checkout_error（付款流程已明確失敗）時解鎖。
+            // v3.5.34: 移除 updated_checkout 解鎖 — 提交進行中 WC 更新不該解開鎖，
+            // 否則使用者可在 nextAction 處理期間再次送出造成雙重提交。
+            $(document.body).on('checkout_error', function () {
                 self._isSubmitting = false;
+                // 提交期間被凍結略過的 DOM 更新，在失敗解鎖後補做一次重掛
+                if (self._pendingRemount) {
+                    self._pendingRemount = false;
+                    self.onUpdatedCheckout();
+                }
+            });
+
+            // v3.5.34: WC 結帳更新生命週期追蹤 — 純被動 flag，不操作任何 UI、無計時器。
+            // 按鈕狀態唯一由 deferPlaceOrder 管理（點下單時才介入），避免多處搶控按鈕互相干擾。
+            // updated_checkout 遺失（update AJAX 失敗）的 flag 卡死由 defer 逾時分支重置。
+            $(document.body).on('update_checkout', function () {
+                updateInFlight = true;
+                updateEventAt = Date.now();
+            });
+            $(document.body).on('updated_checkout', function () {
+                updateInFlight = false;
+                lastUpdateSettledAt = Date.now();
+            });
+
+            // v3.5.34: 部分 cart 突變（WC 折價券、第三方外掛的加購/數量調整）只在自己的
+            // AJAX 成功「之後」才 trigger update_checkout，事件 flag 看不到在途的前置請求。
+            // 以全域 ajaxSend/ajaxComplete 維護在途 wc-ajax 的「真實 jqXHR 集合」補上盲區
+            //（排除 wc-ajax=checkout 本身；ajaxComplete 於 error/abort 也會觸發；
+            //  查詢時再以 readyState 過濾一次，殭屍條目自癒，不依賴逾時清零）。
+            var isTrackedWcAjax = function (settings) {
+                return settings && typeof settings.url === 'string' &&
+                    settings.url.indexOf('wc-ajax=') !== -1 &&
+                    settings.url.indexOf('wc-ajax=checkout') === -1;
+            };
+            $(document).ajaxSend(function (e, xhr, settings) {
+                if (isTrackedWcAjax(settings)) wcAjaxActive.push(xhr);
+            });
+            $(document).ajaxComplete(function (e, xhr, settings) {
+                if (!isTrackedWcAjax(settings)) return;
+                var i = wcAjaxActive.indexOf(xhr);
+                if (i !== -1) wcAjaxActive.splice(i, 1);
             });
 
             // Bind checkout events
@@ -196,6 +275,16 @@ jQuery(function ($) {
          * 2. 重新排程當前 selected gateway 的 mount（debounce）
          */
         onUpdatedCheckout: function () {
+            // v3.5.34: 提交進行中 → 凍結生命週期（不作廢 runs、不清 instance、不重掛）。
+            // WC 觸發本事件前 DOM 可能已被替換，但 SDK instance 物件存活於 JS heap，
+            // 凍結可保證 nextAction 沿用原 instance 完成 3DS。被略過的更新記為 pending，
+            // 付款失敗解鎖後（checkout_error / resetAllSubmitLocks）補做重掛。
+            if (this._isSubmitting) {
+                console.log('[YS Shopline] updated_checkout ignored: submission in progress');
+                this._pendingRemount = true;
+                return;
+            }
+
             // v3.5.2: WC 可能已替換 DOM → 所有既有 runs 立刻失效
             domVersion++;
             activeRuns = {};
@@ -210,11 +299,12 @@ jQuery(function ($) {
             // WC 可能重建表單 → 清 paySession hidden input
             $('form.checkout').find('input[name="ys_shopline_pay_session"]').remove();
 
-            // 檢查每個 gateway 的 DOM 是否還活著；被 WC 替換掉的 mark 為 idle
-            $.each(GATEWAY_CONFIG, function (gatewayId, config) {
+            // 檢查每個 gateway 的掛載是否還健康（卡片家族看 iframe、其他金流看 SDK 內容）；
+            // 被 WC 替換掉的 mark 為 idle
+            var self2 = this;
+            $.each(GATEWAY_CONFIG, function (gatewayId) {
                 if (gatewayState[gatewayId] !== 'mounted') return;
-                var $c = $('#' + config.containerId);
-                if (!$c.length || $c.find('iframe').length === 0) {
+                if (!self2.isMountHealthy(gatewayId)) {
                     // WC 砍掉 DOM → 清狀態讓後續 requestMount 能重 mount
                     gatewayState[gatewayId] = 'idle';
                     delete paymentInstances[gatewayId];
@@ -280,9 +370,9 @@ jQuery(function ($) {
             var $container = $('#' + config.containerId);
             if (!$container.length) return;
 
-            // 已 mounted 且 DOM 還活著 → 不需動
+            // 已 mounted 且掛載健康（卡片家族看 iframe、其他金流看 SDK 內容）→ 不需動
             if (gatewayState[gatewayId] === 'mounted') {
-                if ($container.find('iframe').length > 0 && paymentInstances[gatewayId]) return;
+                if (this.isMountHealthy(gatewayId)) return;
                 // DOM 失效 → 降為 idle 繼續 mount
                 gatewayState[gatewayId] = 'idle';
                 delete paymentInstances[gatewayId];
@@ -648,6 +738,195 @@ jQuery(function ($) {
         },
 
         /**
+         * v3.5.34: 結帳頁是否處於「不可送單」狀態
+         *
+         * 條件（實體狀態優先）：WC 更新事件在途、wc-ajax 請求在途（cart 突變的前置 AJAX）、
+         * 上次更新完成未滿靜默期（吸收連鎖更新起手空檔）、SDK instance 不存在、
+         * 或 container 內 iframe 已被 DOM 替換移除。
+         *
+         * @param {string} gatewayId Gateway ID
+         * @return {boolean}
+         */
+        /**
+         * v3.5.34: 下單按鈕共用鎖（window 級引用計數，與 YS 結帳優化外掛同協定）。
+         *
+         * 「各自記取得前狀態」在雙持有情境會互解（A 持鎖期間 B 取鎖，A 先釋放
+         * 會 enable 掉 B 的鎖）→ 以 window.__ysPlaceOrderLocks 引用計數：
+         * count 歸零才考慮 enable，且尊重第一位取鎖者記下的「非參與者已 disable」。
+         */
+        acquirePlaceOrderLock: function () {
+            if (!window.__ysPlaceOrderLocks) {
+                window.__ysPlaceOrderLocks = { count: 0, externalDisabled: false };
+            }
+            var reg = window.__ysPlaceOrderLocks;
+            var $btn = $('#place_order');
+            if (reg.count === 0) {
+                reg.externalDisabled = $btn.length ? $btn.prop('disabled') === true : false;
+            }
+            reg.count++;
+            $btn.prop('disabled', true).attr('aria-busy', 'true');
+        },
+
+        releasePlaceOrderLock: function () {
+            var reg = window.__ysPlaceOrderLocks;
+            if (!reg || reg.count === 0) return;
+            reg.count--;
+            if (reg.count === 0) {
+                var $btn = $('#place_order');
+                $btn.removeAttr('aria-busy');
+                if (!reg.externalDisabled) {
+                    $btn.prop('disabled', false);
+                }
+            }
+        },
+
+        /**
+         * v3.5.34: 在途 wc-ajax 數（readyState 過濾自癒後）
+         */
+        wcAjaxInFlightCount: function () {
+            // readyState 4 = 完成、0 = 已 abort（abort 後停在 0，不是在途）；
+            // ajaxComplete 於 abort 也會移除，此過濾為第二道保險
+            wcAjaxActive = wcAjaxActive.filter(function (x) { return x && x.readyState !== 4 && x.readyState !== 0; });
+            return wcAjaxActive.length;
+        },
+
+        /**
+         * v3.5.34: 是否仍有「結帳更新活動」的實體在途證據。
+         *
+         * - wc-ajax XHR 在飛 → 明確在途。
+         * - update_checkout 事件 flag 為 true：事件到實際發出 XHR 有排程延遲
+         *   （實測常態 ~360ms、異常 5.4s），grace 期內視為在途；
+         *   超過 grace 且無任何 XHR = updated_checkout 丟失 → flag 自癒歸位。
+         */
+        hasCheckoutActivityEvidence: function () {
+            if (this.wcAjaxInFlightCount() > 0) return true;
+            if (updateInFlight) {
+                if (Date.now() - updateEventAt < UPDATE_EVENT_GRACE_MS) return true;
+                updateInFlight = false; // 事件丟失自癒（有 XHR 的情況已在上面攔住）
+            }
+            return false;
+        },
+
+        /**
+         * v3.5.34: SDK 掛載是否健康（統一判斷，三處共用：onUpdatedCheckout / doMount / isCheckoutBusy）。
+         *
+         * 只有卡片家族（paymentMethod=CreditCard：信用卡/分期/訂閱）的 SDK 會渲染 PCI iframe；
+         * ATM / LINE Pay / Apple Pay / JKO / BNPL 只渲染 DIV 或按鈕——
+         * 對這些金流要求 iframe 會讓 gate 永遠 busy、完全無法下單（v3.5.34 首版實測 regression）。
+         * 非卡金流的健康條件＝instance 存在＋容器仍在 DOM＋SDK 已渲染內容（排除本外掛的 loading spinner）。
+         *
+         * @param {string} gatewayId Gateway ID
+         * @return {boolean}
+         */
+        isMountHealthy: function (gatewayId) {
+            if (!paymentInstances[gatewayId]) return false;
+            var config = GATEWAY_CONFIG[gatewayId] || {};
+            var $c = $('#' + config.containerId);
+            if (!$c.length) return false;
+            if (config.paymentMethod === 'CreditCard') {
+                return $c.find('iframe').length > 0;
+            }
+            return $c.children().not('.ys-shopline-loading').length > 0;
+        },
+
+        isCheckoutBusy: function (gatewayId) {
+            if (this.hasCheckoutActivityEvidence()) return true;
+            if (Date.now() - lastUpdateSettledAt < SETTLE_QUIET_MS) return true;
+            if (!this.isMountHealthy(gatewayId)) return true;
+            return false;
+        },
+
+        /**
+         * v3.5.34: 等待結帳更新沉澱後自動續行下單
+         *
+         * 每 150ms 檢查一次（僅在被 gate 攔下時啟動的有限輪詢，非常駐），
+         * 最多等 5 秒。沉澱後自動重新進入 placeOrder；逾時則主動重掛 SDK 並提示重試。
+         * 期間鎖定下單按鈕避免重複點擊。
+         *
+         * @param {string} gatewayId Gateway ID
+         */
+        deferPlaceOrder: function (gatewayId) {
+            var self = this;
+            if (self._deferTimer) return; // 已在等待中
+            var startedAt = Date.now();
+            var slowNotified = false;
+            // 共用鎖 registry：取得/釋放走引用計數，雙持有（結帳優化突變鎖同時在場）不互解
+            self.acquirePlaceOrderLock();
+
+            var finish = function () {
+                self._deferTimer = null;
+                self.releasePlaceOrderLock();
+            };
+
+            var tick = function () {
+                self._deferTimer = null;
+                // 使用者已改選其他付款方式 → 放棄本次續行
+                if (self.getSelectedGateway() !== gatewayId) {
+                    finish();
+                    return;
+                }
+                if (!self.isCheckoutBusy(gatewayId)) {
+                    finish();
+                    console.log('[YS Shopline] Checkout settled after ' + (Date.now() - startedAt) + 'ms, resuming placeOrder');
+                    self.placeOrder(gatewayId);
+                    return;
+                }
+                if (Date.now() - startedAt > DEFER_TIMEOUT_MS) {
+                    // 檢查點（fail-closed）：仍有實體在途證據（XHR 在飛 / 事件 grace 內）＝慢而未壞
+                    // → 不清狀態、不放行，續等真正的完成信號（慢站/CDN 正是最需要保護的時候）
+                    if (self.hasCheckoutActivityEvidence()) {
+                        if (Date.now() - startedAt > DEFER_HARD_LIMIT_MS) {
+                            finish();
+                            console.warn('[YS Shopline] Checkout activity still in flight after ' + DEFER_HARD_LIMIT_MS + 'ms, giving up (fail-closed, no auto-submit)');
+                            self.showFormError('結帳更新回應逾時，請重新整理頁面後再試。');
+                            return;
+                        }
+                        if (!slowNotified) {
+                            slowNotified = true;
+                            console.warn('[YS Shopline] Checkout update slow (>' + DEFER_TIMEOUT_MS + 'ms), keep waiting (fail-closed)');
+                        }
+                        self._deferTimer = setTimeout(tick, DEFER_TICK_MS);
+                        return;
+                    }
+                    // 無任何在途證據（flag 已於證據檢查中自癒）：剩下的 busy 只可能是掛載本體問題
+                    finish();
+                    if (!self.isCheckoutBusy(gatewayId)) {
+                        console.log('[YS Shopline] Checkout settled at timeout checkpoint, resuming placeOrder');
+                        self.placeOrder(gatewayId);
+                        return;
+                    }
+                    // instance 缺失 / iframe 被移除 / state 卡在 loading，且無在途請求 → 真壞死，強制重掛
+                    console.warn('[YS Shopline] Mount broken with no in-flight activity, force remounting SDK');
+                    self.forceRemount(gatewayId);
+                    self.showFormError('付款元件重新載入中，請稍候幾秒後再按一次「下單」。');
+                    return;
+                }
+                self._deferTimer = setTimeout(tick, DEFER_TICK_MS);
+            };
+            self._deferTimer = setTimeout(tick, DEFER_TICK_MS);
+        },
+
+        /**
+         * v3.5.34: 強制重置該 gateway 的掛載狀態機後重掛。
+         *
+         * requestMount → doMount 遇到 state 卡在 'loading'（config AJAX 懸掛、
+         * run 被作廢但 state 未復位）會直接 return 而永遠掛不回來——
+         * 此方法先歸零狀態再重掛，是 defer 逾時路徑專用的脫困出口。
+         *
+         * @param {string} gatewayId Gateway ID
+         */
+        forceRemount: function (gatewayId) {
+            if (pendingAjax[gatewayId]) {
+                try { pendingAjax[gatewayId].abort(); } catch (e) {}
+                delete pendingAjax[gatewayId];
+            }
+            delete activeRuns[gatewayId];
+            delete paymentInstances[gatewayId];
+            gatewayState[gatewayId] = 'idle';
+            this.requestMount(gatewayId);
+        },
+
+        /**
          * Handle order placement
          *
          * @param {string} gatewayId Gateway ID
@@ -693,6 +972,14 @@ jQuery(function ($) {
             if (existingPaySession) {
                 console.log('[YS Shopline] paySession exists, allowing WooCommerce to process');
                 return true; // Let WooCommerce handle the submission
+            }
+
+            // v3.5.34: 結帳更新沉澱 gate — 更新進行中 / 剛完成（SDK 可能重掛中）/ instance 或 iframe 尚未就緒
+            // 一律先等待沉澱再自動續行，把「客人手動等幾秒再按就不會錯」自動化、確定化。
+            if (this.isCheckoutBusy(gatewayId)) {
+                console.log('[YS Shopline] Checkout busy (update in flight / SDK remounting), deferring submission');
+                this.deferPlaceOrder(gatewayId);
+                return false;
             }
 
             var paymentInstance = paymentInstances[gatewayId];
@@ -843,7 +1130,8 @@ jQuery(function ($) {
                 console.log('[YS Shopline] paySession saved, submitting to WooCommerce via AJAX...');
 
                 // 直接發送 AJAX 到 WooCommerce checkout endpoint
-                self.submitCheckoutAjax($form);
+                // v3.5.34: 把建立 paySession 的 instance 一路傳下去 — nextAction 必須用同一實例
+                self.submitCheckoutAjax($form, gatewayId, paymentInstance);
 
             }).catch(function (error) {
                 console.error('Shopline createPayment error:', error);
@@ -861,10 +1149,12 @@ jQuery(function ($) {
          * 直接發送 AJAX 請求，不依賴 WooCommerce 的事件機制
          *
          * @param {jQuery} $form Checkout form
+         * @param {string} [gatewayId] v3.5.34: 發起提交時的 gateway（避免提交期間使用者切換付款方式造成錯配）
+         * @param {Object} [capturedInstance] v3.5.34: 建立 paySession 的 SDK instance（nextAction 必須沿用）
          */
-        submitCheckoutAjax: function ($form) {
+        submitCheckoutAjax: function ($form, gatewayId, capturedInstance) {
             var self = this;
-            var gatewayId = this.getSelectedGateway();
+            gatewayId = gatewayId || this.getSelectedGateway();
 
             // 確認 wc_checkout_params 存在
             if (typeof wc_checkout_params === 'undefined') {
@@ -898,7 +1188,8 @@ jQuery(function ($) {
                         if (response.nextAction) {
                             console.log('[YS Shopline] Got nextAction (type=' + (response.nextAction.type || 'unknown') + '), processing with SDK...');
                             // v3.5.5: 傳 failureUrl（pay-for-order），3DS/Confirm 失敗時自動導過去
-                            self.processNextAction(gatewayId, response.nextAction, response.returnUrl, response.failureUrl);
+                            // v3.5.34: 傳 capturedInstance — 就算提交期間 DOM 被更新換掉全域 instance，仍沿用原實例
+                            self.processNextAction(gatewayId, response.nextAction, response.returnUrl, response.failureUrl, capturedInstance);
                         } else if (response.redirect) {
                             // 直接跳轉（無需額外驗證）
                             console.log('[YS Shopline] Redirecting (has redirect URL)');
@@ -951,8 +1242,11 @@ jQuery(function ($) {
          * @param {Object} nextAction Next action data from API
          * @param {string} returnUrl Return URL after success (SDK 會自動使用)
          * @param {string} [failureUrl] v3.5.5: 3DS/Confirm 失敗時導向的 pay-for-order URL（主結帳頁才傳）
+         * @param {Object} [capturedInstance] v3.5.34: 建立 paySession 的原 SDK instance。
+         *                 提交期間 WC 更新可能已把全域 paymentInstances 換成新實例（無原卡片 session），
+         *                 nextAction 必須沿用原實例；全域 map 僅作為舊呼叫端的 fallback。
          */
-        processNextAction: async function (gatewayId, nextAction, returnUrl, failureUrl) {
+        processNextAction: async function (gatewayId, nextAction, returnUrl, failureUrl, capturedInstance) {
             var self = this;
             // v3.5.6: 三個頁面共用此 method，form selector 要 fallback
             // - 主結帳頁: form.checkout
@@ -961,11 +1255,12 @@ jQuery(function ($) {
             var $form = $('form.checkout');
             if (!$form.length) { $form = $('#order_review'); }
             if (!$form.length) { $form = $('form#add_payment_method'); }
-            var paymentInstance = paymentInstances[gatewayId];
+            var paymentInstance = capturedInstance || paymentInstances[gatewayId];
 
             console.log('[YS Shopline] processNextAction called', {
                 gatewayId: gatewayId,
                 hasInstance: !!paymentInstance,
+                usingCapturedInstance: !!capturedInstance,
                 nextActionType: nextAction.type || 'unknown',
                 nextActionKeys: nextAction ? Object.keys(nextAction) : [],
                 hasFailureUrl: !!failureUrl
@@ -974,7 +1269,15 @@ jQuery(function ($) {
             if (!paymentInstance) {
                 console.error('[YS Shopline] No payment instance for nextAction processing');
                 $form.removeClass('processing').unblock();
-                self.showFormError('付款處理失敗，請重新整理頁面後重試。');
+                self.resetAllSubmitLocks($form);
+                // v3.5.34: 走到這裡代表 WC 訂單與 SHOPLINE 交易皆已建立，
+                // 停在結帳頁會讓訂單隱形 — 導向 pay-for-order 頁讓訂單可見並重掛 SDK 重試。
+                if (failureUrl) {
+                    self.showFormError('付款元件已被頁面更新重置，正在為您導向訂單付款頁...');
+                    setTimeout(function () { window.location.href = failureUrl; }, 1500);
+                } else {
+                    self.showFormError('付款處理失敗，請重新整理頁面後重試。');
+                }
                 return;
             }
 
@@ -1051,10 +1354,21 @@ jQuery(function ($) {
                 }
             } catch (_) { /* ignore undefined handler lookups */ }
             // Re-enable submit buttons（WC 或外部 theme 可能把 button 加 disabled）
+            // v3.5.34: #place_order 受共用鎖 registry 管轄——仍有人持鎖
+            //（結帳優化的購物車突變鎖等）時不可代解，只解其餘 submit 元件
             if ($form && $form.length) {
-                $form.find('#place_order, button[type="submit"], input[type="submit"]').prop('disabled', false).removeClass('disabled');
+                $form.find('button[type="submit"], input[type="submit"]').not('#place_order').prop('disabled', false).removeClass('disabled');
             }
-            $('#place_order').prop('disabled', false).removeClass('disabled');
+            var lockReg = window.__ysPlaceOrderLocks;
+            if (!lockReg || lockReg.count === 0) {
+                $('#place_order').prop('disabled', false).removeClass('disabled');
+            }
+
+            // v3.5.34: 提交期間被凍結略過的 DOM 更新，在解鎖後補做重掛（instance 已失效，重建乾淨狀態）
+            if (this._pendingRemount) {
+                this._pendingRemount = false;
+                this.onUpdatedCheckout();
+            }
         },
 
         /**
@@ -1794,8 +2108,9 @@ jQuery(function ($) {
                         if (response.result === 'success') {
                             if (response.nextAction) {
                                 // 需要 SDK 處理 nextAction（3DS/Confirm）
+                                // v3.5.34: 沿用建立 paySession 的原 instance（第 5 參數；failureUrl 本頁不傳，原地顯示錯誤）
                                 console.log('[YS Shopline] Pay-for-order: processing nextAction (type=' + (response.nextAction.type || 'unknown') + ')');
-                                ShoplineCheckout.processNextAction(gatewayId, response.nextAction, response.returnUrl);
+                                ShoplineCheckout.processNextAction(gatewayId, response.nextAction, response.returnUrl, undefined, paymentInstance);
                             } else if (response.redirect) {
                                 window.location.href = response.redirect;
                             }

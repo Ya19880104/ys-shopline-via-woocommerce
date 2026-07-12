@@ -4,7 +4,7 @@
 
 ## 版本資訊
 
-- **目前版本**：3.5.33
+- **目前版本**：3.5.34
 - **PHP 需求**：>= 8.0
 - **WordPress 需求**：>= 6.0
 - **WooCommerce 需求**：7.0 - 9.0
@@ -65,6 +65,28 @@ https://your-domain.com/wp-json/ys-shopline/v1/webhook
 ---
 
 ## 變更紀錄
+
+### 3.5.34 - 2026-07-11
+
+**修正快速付款（自動填入）在結帳更新期間送單導致 3DS 未啟動、交易卡在 CREATED**
+
+正式站故障模式：自動填入觸發的 WooCommerce 結帳更新（`update_checkout`）在使用者按下單前後落地，替換付款區 DOM 並換掉 SDK instance，導致後端已建立 SHOPLINE 交易、前端卻無法執行 `payment.pay(nextAction)`（3DS 永不啟動），交易停在 CREATED 直到約 1 小時後 EXPIRED；期間同單重試被既存交易保護阻擋。
+
+- **結帳更新沉澱 gate**：`placeOrder` 入口以實體狀態（更新事件在途 / wc-ajax 請求在途 / SDK 掛載健康）判斷可否起跑；未就緒則鎖定下單按鈕並自動等待沉澱（最多 5 秒）後續行，把「等幾秒再按就不會錯」自動化。
+- **掛載健康判斷分金流家族（`isMountHealthy`，三處共用）**：只有卡片家族（信用卡/分期/訂閱，`paymentMethod=CreditCard`）的 SDK 渲染 PCI iframe，健康＝iframe 存在；ATM / LINE Pay / Apple Pay / JKO / BNPL 只渲染 DIV/按鈕，健康＝instance 存在＋容器在 DOM＋SDK 已渲染內容——對非卡金流要求 iframe 會讓 gate 永遠 busy 而完全無法下單（首版實測 regression，已修並回歸各金流）。
+- **逾時＝fail-closed 檢查點（非開閘）**：等待到 5 秒檢查點時，仍有實體在途證據（wc-ajax XHR 在飛 / 更新事件在 grace 期內）＝慢而未壞 → 不清狀態、不放行，續等真正的完成信號（20 秒硬上限後停止並提示重整，不自動送單）；只有「無任何在途證據且掛載本體壞死」才走 `forceRemount`（中止在途請求、狀態機歸零後重掛，脫離 state 卡在 loading 的死局）。
+- **wc-ajax 在途以真實 jqXHR 集合追蹤**：折價券、第三方加購/移除等 cart 突變只在自己的 AJAX 成功後才觸發 `update_checkout`，事件 flag 看不到前置請求；以全域 ajaxSend/ajaxComplete 維護在途 jqXHR 集合並以 `readyState` 過濾自癒（不用會漂移、需逾時清零的裸計數器）。
+- **提交期間凍結生命週期**：`updated_checkout` 於提交中不再清除 instance、不重掛、不解除提交鎖（解鎖只留 `checkout_error`）；被略過的更新在失敗解鎖後補做重掛。
+- **nextAction 沿用原 instance**：建立 paySession 的 SDK instance 以參數一路傳遞至 `processNextAction`（主結帳 + pay-for-order 皆改），不再於回應後從全域 map 重查。
+- **instance 遺失時導向訂單付款頁**：訂單與交易已建立卻無 instance 可用時，導向 pay-for-order 頁讓訂單可見並重掛重試（原本僅顯示「請重新整理」，訂單隱形）。
+- **腳本單例守衛**（防衛性）：結帳頁腳本被外部區塊重繪機制重複執行時，只允許第一份存活，避免多套 closure 互搶掛載。
+- **取消失敗改以遠端實況分級**：本地 meta 已終態時跳過 cancel API；取消失敗（1008 僅為通用 Status error，另有 6001/6002/6401 等）一律**查詢交易實際狀態**再定級——遠端已終態＝warning 無風險；遠端已收款＝ERROR＋「立即退款」備註；遠端進行中＝ERROR＋後台核對備註；查詢失敗＝ERROR＋無法確認風險備註。
+- **取消結果追蹤閉環**：取消 API 回 200 但狀態非終態（官方：可能 PROCESSING）或取消失敗但遠端仍進行中時，**排程單次 followup**（2 分鐘後首查、之後每 5 分鐘、最多 5 次）主動確認最終結果——已取消訂單不在 pending/on-hold 的 cron 掃描範圍，沒有這條路徑付款狀態會永久停住；`trade.cancelled` webhook 對已取消訂單也改為補寫付款狀態 meta（不動訂單狀態），雙路收斂。
+- **下單按鈕共用鎖（window 級引用計數）**：defer 與 YS 結帳優化外掛共用 `window.__ysPlaceOrderLocks` 引用計數——「各自記取得前狀態」在雙持有情境仍會互解（A 持鎖期間 B 取鎖，A 先釋放會 enable 掉 B 的鎖），改為 count 歸零才考慮 enable、尊重首位取鎖時的外部 disable；`resetAllSubmitLocks()` 對 `#place_order` 僅在無人持鎖時 enable。
+- **取消追蹤斷鏈補齊**：取消失敗且首查也失敗時同樣排程 followup（不再寫備註即斷）；followup 執行時 API 暫時不可用改為重排下一次；`wp_schedule_single_event` 失敗留 ERROR。
+- **取消終態集合補齊**：安全終態納入 REFUNDED（款項已退回）；已收款風險納入 PARTIALLY_REFUND（部分退款＝仍有款項在店家側），避免重試耗盡後誤報。
+- **舊 ATM 入帳 fallback 核對**：referenceOrderId fallback 命中後，入帳前核對 gateway 歸屬＋`paymentMethod === VirtualAccount`（此 fallback 僅服務舊 ATM 帳號入帳）＋金額＋幣別；金額讀取採**官方 `trade.succeeded` 電文欄位 `payment.paidAmount`（備援 `order.amount`）**，未帶金額或幣別、或任一不符即拒絕自動入帳（fail-closed，留 ERROR 與訂單備註）——官方格式 7 案例測試矩陣全數通過。
+- **取消流程終態集合全面套用**：本地跳過檢查（cancel 前）與取消 API 即時回應分類與 followup 使用同一組 `TRADE_TERMINAL_SAFE` / `TRADE_PAID_RISK` 集合——已退款交易不再呼叫取消 API；即時回應為安全終態直接收斂、為已收款立即示警，不再延後兩分鐘等 followup 分類。
 
 ### 3.5.33 - 2026-07-01
 

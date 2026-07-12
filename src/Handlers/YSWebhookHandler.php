@@ -488,7 +488,24 @@ final class YSWebhookHandler {
 
         $order = $this->get_order_by_trade_id( $trade_order_id );
 
-        if ( ! $order || ! in_array( $order->get_status(), [ 'pending', 'on-hold' ], true ) ) {
+        if ( ! $order ) {
+            return;
+        }
+
+        // v3.5.34: 訂單已取消（例如取消 API 回 PROCESSING 後的最終 webhook）
+        // → 只補付款狀態 meta 讓其收斂，不再動訂單狀態
+        if ( 'cancelled' === $order->get_status() ) {
+            $prior = strtoupper( (string) $order->get_meta( YSOrderMeta::PAYMENT_STATUS ) );
+            if ( ! in_array( $prior, [ 'CANCELLED', 'CANCELED' ], true ) ) {
+                $order->update_meta_data( YSOrderMeta::PAYMENT_STATUS, 'CANCELLED' );
+                $order->update_meta_data( YSOrderMeta::PAYMENT_DETAIL, YSOrderMeta::sanitize_payment_detail( $data ) );
+                $order->add_order_note( __( 'Shopline 金流：SHOPLINE 已確認交易取消（webhook）。', 'ys-shopline-via-woocommerce' ) );
+                $order->save();
+            }
+            return;
+        }
+
+        if ( ! in_array( $order->get_status(), [ 'pending', 'on-hold' ], true ) ) {
             return;
         }
 
@@ -911,7 +928,95 @@ final class YSWebhookHandler {
             return null;
         }
 
-        return $this->get_order_by_reference_order_id( $reference_order_id );
+        $order = $this->get_order_by_reference_order_id( $reference_order_id );
+        if ( ! $order ) {
+            return null;
+        }
+
+        // v3.5.34: fallback 只憑 reference 前綴命中（舊 ATM 入帳情境），
+        // 入帳前必須核對歸屬（gateway）與金額/幣別，否則拒絕自動入帳
+        if ( ! $this->validate_fallback_paid_order( $order, $data, $reference_order_id ) ) {
+            return null;
+        }
+
+        return $order;
+    }
+
+    /**
+     * 核對 reference fallback 命中的訂單可否接受此筆入帳。
+     *
+     * 訂單金額可能曾被後台修改、reference 也可能屬於他站/他外掛，
+     * 只驗前綴就 payment_complete() 會把錯誤金額的訂單標成已付款。
+     * fail-closed：webhook 未帶金額或任一核對不符 → 拒絕（留 ERROR + 訂單備註供人工核對）。
+     *
+     * @param \WC_Order $order              fallback 命中的訂單。
+     * @param array     $data               Webhook payload。
+     * @param string    $reference_order_id webhook 的 referenceOrderId。
+     * @return bool
+     */
+    private function validate_fallback_paid_order( \WC_Order $order, array $data, string $reference_order_id ): bool {
+        $context = [
+            'order_id'           => $order->get_id(),
+            'reference_order_id' => $reference_order_id,
+        ];
+
+        // 1. 必須是本外掛的訂單
+        if ( 0 !== strpos( (string) $order->get_payment_method(), 'ys_shopline' ) ) {
+            YSLogger::error( 'Webhook fallback rejected: order not paid via ys_shopline gateway', $context + [
+                'gateway' => (string) $order->get_payment_method(),
+            ] );
+            return false;
+        }
+
+        // 2. 此 fallback 僅服務「舊 ATM 虛擬帳號入帳」情境（重開新交易後客戶匯舊帳號）
+        //    → 非 VirtualAccount 一律拒絕走 fallback
+        $payment_method = (string) ( $data['paymentMethod'] ?? ( $data['payment']['paymentMethod'] ?? '' ) );
+        if ( 'VirtualAccount' !== $payment_method ) {
+            YSLogger::error( 'Webhook fallback rejected: not a VirtualAccount payment', $context + [
+                'payment_method' => $payment_method,
+            ] );
+            return false;
+        }
+
+        // 3. 金額核對（官方 trade.succeeded 電文金額＝payment.paidAmount，備援 order.amount；單位「分」）。
+        //    未帶金額或幣別一律拒絕，fail-closed。
+        $amount_value = $data['payment']['paidAmount']['value'] ?? ( $data['order']['amount']['value'] ?? null );
+        $currency     = (string) ( $data['payment']['paidAmount']['currency'] ?? ( $data['order']['amount']['currency'] ?? '' ) );
+        $expected     = (int) round( (float) $order->get_total() * 100 );
+
+        if ( ! is_numeric( $amount_value ) || '' === $currency ) {
+            YSLogger::error( 'Webhook fallback rejected: no amount/currency in payload to verify against', $context + [
+                'has_amount'   => is_numeric( $amount_value ) ? 'yes' : 'no',
+                'has_currency' => '' !== $currency ? 'yes' : 'no',
+            ] );
+            $order->add_order_note( sprintf(
+                /* translators: %s: reference order id */
+                __( 'Shopline 金流：⚠️ 收到無金額/幣別資訊的付款通知（reference %s，以舊帳號比對命中），已拒絕自動入帳，請人工核對。', 'ys-shopline-via-woocommerce' ),
+                $reference_order_id
+            ) );
+            $order->save();
+            return false;
+        }
+
+        if ( (int) $amount_value !== $expected || $order->get_currency() !== $currency ) {
+            YSLogger::error( 'Webhook fallback rejected: amount/currency mismatch', $context + [
+                'webhook_amount'  => (int) $amount_value,
+                'expected_amount' => $expected,
+                'webhook_currency' => $currency,
+                'order_currency'  => $order->get_currency(),
+            ] );
+            $order->add_order_note( sprintf(
+                /* translators: 1: webhook amount, 2: order amount, 3: reference order id */
+                __( 'Shopline 金流：⚠️ 付款通知金額（%1$s 分）與訂單金額（%2$s 分）不符（reference %3$s），已拒絕自動入帳，請人工核對此筆款項。', 'ys-shopline-via-woocommerce' ),
+                (string) (int) $amount_value,
+                (string) $expected,
+                $reference_order_id
+            ) );
+            $order->save();
+            return false;
+        }
+
+        return true;
     }
 
     /**
