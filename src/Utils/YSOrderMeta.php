@@ -85,6 +85,12 @@ final class YSOrderMeta {
     /** @var string ATM 繳費期限 */
     public const VA_EXPIRE = '_ys_shopline_va_expire';
 
+    /** @var string 重新付款時棄用的前次交易 ID 清單（v3.5.35：顧客未完成態不支援取消 API，棄用歸檔供 webhook 溯源） */
+    public const ABANDONED_TRADE_IDS = '_ys_shopline_abandoned_trade_ids';
+
+    /** @var string 已棄用但顧客事後仍完成收款的交易 ID 清單（v3.5.35：重複收款警示，需人工退款） */
+    public const ABANDONED_TRADE_PAID_IDS = '_ys_shopline_abandoned_trade_paid_ids';
+
     /** @var string 信用卡分期期數 */
     public const INSTALLMENT = '_ys_shopline_installment';
 

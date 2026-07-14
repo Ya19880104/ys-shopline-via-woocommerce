@@ -810,10 +810,18 @@ jQuery(function ($) {
         /**
          * v3.5.34: SDK 掛載是否健康（統一判斷，三處共用：onUpdatedCheckout / doMount / isCheckoutBusy）。
          *
-         * 只有卡片家族（paymentMethod=CreditCard：信用卡/分期/訂閱）的 SDK 會渲染 PCI iframe；
+         * 卡片家族（paymentMethod=CreditCard：信用卡/分期/訂閱）有兩種健康形態：
+         *   1. 新卡表單 → 渲染 PCI iframe
+         *   2. 已存卡快速結帳 → 渲染 saved-card 列表（class 含 shoplinepayments_item_，見
+         *      _tryAutoSelectDefaultCard），**此形態沒有 iframe**
+         * v3.5.35 Review P1-3：原本只認 iframe，會員已存卡情境（列表已正常渲染但 iframe=0）
+         * 被誤判不健康 → 主結帳 placeOrder 走 isCheckoutBusy→defer→5 秒 force remount→紅字
+         * 「付款元件重新載入中」，等於擋掉已存卡快速結帳。改為「iframe 或 saved-card 列表
+         * 任一存在」皆健康；只有容器空、只剩本外掛 loading spinner、或 DOM 被替換才不健康。
+         *
          * ATM / LINE Pay / Apple Pay / JKO / BNPL 只渲染 DIV 或按鈕——
          * 對這些金流要求 iframe 會讓 gate 永遠 busy、完全無法下單（v3.5.34 首版實測 regression）。
-         * 非卡金流的健康條件＝instance 存在＋容器仍在 DOM＋SDK 已渲染內容（排除本外掛的 loading spinner）。
+         * 非卡金流的健康條件＝instance 存在＋容器仍在 DOM＋SDK 已渲染內容（排除 loading spinner）。
          *
          * @param {string} gatewayId Gateway ID
          * @return {boolean}
@@ -824,7 +832,9 @@ jQuery(function ($) {
             var $c = $('#' + config.containerId);
             if (!$c.length) return false;
             if (config.paymentMethod === 'CreditCard') {
-                return $c.find('iframe').length > 0;
+                // 新卡表單 iframe，或已存卡列表（shoplinepayments_item_）任一存在即健康
+                return $c.find('iframe').length > 0
+                    || $c.find('[class*="shoplinepayments_item_"]').length > 0;
             }
             return $c.children().not('.ys-shopline-loading').length > 0;
         },
@@ -924,6 +934,53 @@ jQuery(function ($) {
             delete paymentInstances[gatewayId];
             gatewayState[gatewayId] = 'idle';
             this.requestMount(gatewayId);
+        },
+
+        /**
+         * v3.5.35: 等待指定 gateway 掛載健康後續行（order-pay 重新付款頁使用）。
+         *
+         * 切換付款方式後 SDK 掛載需時（debounce 80ms + config AJAX + SDK render），
+         * 手快的使用者按下付款時 instance 還不存在。過去直接 alert 斷頭；
+         * 改以 DEFER_TICK_MS 輪詢 isMountHealthy：
+         * - 健康 → onReady()（呼叫端自動續行付款）
+         * - 使用者又切換金流 → onFail('gateway_switched')（新金流由 change handler 接手）
+         * - DEFER_TIMEOUT_MS 仍未健康 → forceRemount 自癒一次後繼續等
+         * - DEFER_HARD_LIMIT_MS → onFail('timeout')（fail-closed，絕不自動送單）
+         *
+         * @param {string}   gatewayId Gateway ID
+         * @param {Function} onReady   掛載健康時呼叫
+         * @param {Function} onFail    放棄等待時呼叫（參數 'gateway_switched' | 'timeout'）
+         */
+        waitForMountThenContinue: function (gatewayId, onReady, onFail) {
+            var self = this;
+            var startedAt = Date.now();
+            var forcedRemount = false;
+
+            var tick = function () {
+                if (self.getSelectedGateway() !== gatewayId) {
+                    onFail('gateway_switched');
+                    return;
+                }
+                if (self.isMountHealthy(gatewayId)) {
+                    onReady();
+                    return;
+                }
+
+                var elapsed = Date.now() - startedAt;
+                if (elapsed >= DEFER_HARD_LIMIT_MS) {
+                    onFail('timeout');
+                    return;
+                }
+                if (elapsed >= DEFER_TIMEOUT_MS && !forcedRemount) {
+                    // 掛載卡死（config AJAX 懸掛/run 作廢未復位）→ 自癒一次後繼續等
+                    forcedRemount = true;
+                    console.warn('[YS Shopline] waitForMount: mount unhealthy after ' + elapsed + 'ms, forcing remount:', gatewayId);
+                    self.forceRemount(gatewayId);
+                }
+                setTimeout(tick, DEFER_TICK_MS);
+            };
+
+            tick();
         },
 
         /**
@@ -1551,7 +1608,7 @@ jQuery(function ($) {
             $form.prepend(
                 '<div class="woocommerce-NoticeGroup woocommerce-NoticeGroup-checkout">' +
                 '<ul class="woocommerce-error" role="alert">' +
-                '<li>' + this.escapeHtml(message) + '</li>' +
+                '<li>' + this.escapeHtml(message).replace(/\n/g, '<br>') + '</li>' +
                 '</ul>' +
                 '</div>'
             );
@@ -2014,8 +2071,33 @@ jQuery(function ($) {
 
             var paymentInstance = paymentInstances[gatewayId];
 
-            if (!paymentInstance) {
-                alert(ys_shopline_params.i18n.payment_not_ready || 'Payment not ready. Please wait and try again.');
+            // v3.5.35 Review P2: 不只看 instance 是否存在——instance 尚在但 iframe/container
+            // 已被結帳更新替換脫離 DOM 時，createPayment 會打在死 instance 上而失敗。
+            // 改用 isMountHealthy（instance 存在 + 容器 iframe/內容健在）判定。
+            if (!ShoplineCheckout.isMountHealthy(gatewayId)) {
+                // v3.5.35: 切換金流後 SDK 掛載尚未完成／已失效 — 等待掛載健康後自動續行付款，
+                // 不再直接 alert 斷頭（fail-closed：硬逾時才報錯，絕不猜測送單）
+                if (self._isWaitingMount) {
+                    console.log('[YS Shopline] Pay-for-order: already waiting for mount');
+                    return;
+                }
+                self._isWaitingMount = true;
+                ShoplineCheckout.acquirePlaceOrderLock();
+                console.log('[YS Shopline] Pay-for-order: instance not ready, waiting for mount:', gatewayId);
+
+                ShoplineCheckout.waitForMountThenContinue(gatewayId, function () {
+                    self._isWaitingMount = false;
+                    ShoplineCheckout.releasePlaceOrderLock();
+                    console.log('[YS Shopline] Pay-for-order: mount ready, resuming payment:', gatewayId);
+                    self.processPayment($form, gatewayId);
+                }, function (reason) {
+                    self._isWaitingMount = false;
+                    ShoplineCheckout.releasePlaceOrderLock();
+                    if (reason === 'timeout') {
+                        ShoplineCheckout.showFormError(ys_shopline_params.i18n.payment_component_timeout || '付款元件載入逾時，請重新整理頁面後再試。');
+                    }
+                    // gateway_switched：使用者已改選其他金流，靜默結束（新金流自行掛載）
+                });
                 return;
             }
 
@@ -2036,16 +2118,15 @@ jQuery(function ($) {
                     console.error('[YS Shopline] Pay-for-order createPayment error:', { code: result.error.code, message: result.error.message });
                     self._isSubmitting = false;
                     $form.removeClass('processing').unblock();
-                    // v3.5.9: 透過 ShoplineCheckout.sanitizeErrorMessage 遮罩 SHOPLINE 識別碼（與一般 checkout 一致）
-                    var rawMsg1 = result.error.message || 'Payment failed';
-                    alert(window.ShoplineCheckout && window.ShoplineCheckout.sanitizeErrorMessage ? window.ShoplineCheckout.sanitizeErrorMessage(rawMsg1) : rawMsg1);
+                    // v3.5.35: alert → 頁內 WC notice（showFormError 內建 sanitize + escape）
+                    ShoplineCheckout.showFormError(result.error.message || '付款失敗，請重試。');
                     return;
                 }
 
                 if (!result.paySession) {
                     self._isSubmitting = false;
                     $form.removeClass('processing').unblock();
-                    alert('Payment session creation failed. Please try again.');
+                    ShoplineCheckout.showFormError('付款流程建立失敗，請重試。');
                     return;
                 }
 
@@ -2117,15 +2198,17 @@ jQuery(function ($) {
                         } else {
                             self._isSubmitting = false;
                             $form.removeClass('processing').unblock();
-                            var errorMsg = response.messages || response.message || '付款處理失敗，請重試。';
-                            alert(errorMsg);
+                            // v3.5.35: 後端已把真實原因（含既存交易處理結果）收攏進 messages（純文字，
+                            // 可能多行）；防禦性去除任何殘留標籤後以頁內 notice 呈現
+                            var errorMsg = String(response.messages || response.message || '付款處理失敗，請重試。').replace(/<[^>]*>/g, ' ');
+                            ShoplineCheckout.showFormError(errorMsg);
                         }
                     },
                     error: function (xhr, status, error) {
                         console.error('[YS Shopline] Pay-for-order AJAX error:', status, error);
                         self._isSubmitting = false;
                         $form.removeClass('processing').unblock();
-                        alert('網路錯誤，請檢查連線後重試。');
+                        ShoplineCheckout.showFormError('網路錯誤，請檢查連線後重試。');
                     }
                 });
 
@@ -2133,9 +2216,8 @@ jQuery(function ($) {
                 console.error('[YS Shopline] Pay-for-order createPayment error:', error);
                 self._isSubmitting = false;
                 $form.removeClass('processing').unblock();
-                // v3.5.9: 與 createPayment.error 分支一致 — sanitize SHOPLINE 識別碼
-                var rawMsg2 = error.message || 'Payment error occurred';
-                alert(window.ShoplineCheckout && window.ShoplineCheckout.sanitizeErrorMessage ? window.ShoplineCheckout.sanitizeErrorMessage(rawMsg2) : rawMsg2);
+                // v3.5.35: alert → 頁內 notice（showFormError 內建 sanitize + escape）
+                ShoplineCheckout.showFormError(error.message || '付款處理發生錯誤，請重試。');
             });
         }
     };

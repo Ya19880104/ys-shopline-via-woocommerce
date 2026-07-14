@@ -12,6 +12,7 @@ namespace YangSheep\ShoplinePayment\Handlers;
 use YangSheep\ShoplinePayment\DTOs\YSPaymentDTO;
 use YangSheep\ShoplinePayment\Utils\YSLogger;
 use YangSheep\ShoplinePayment\Utils\YSOrderMeta;
+use YangSheep\ShoplinePayment\Utils\YSTradeStatus;
 
 defined( 'ABSPATH' ) || exit;
 
@@ -69,18 +70,18 @@ final class YSStatusManager {
 
     /**
      * 取消場景的交易安全終態（無收款風險）。
-     * REFUNDED = 款項已退回消費者，同屬安全終態。
+     * v3.5.35: 事實來源移至共用分類器 YSTradeStatus，此處保留別名維持既有呼叫點不動。
      *
      * @var string[]
      */
-    private const TRADE_TERMINAL_SAFE = [ 'EXPIRED', 'FAILED', 'CANCELLED', 'CANCELED', 'REFUNDED' ];
+    private const TRADE_TERMINAL_SAFE = YSTradeStatus::TERMINAL_SAFE;
 
     /**
      * 已收款狀態（含部分退款＝仍有款項在店家側）——訂單已取消時屬最高風險，需人工退款。
      *
      * @var string[]
      */
-    private const TRADE_PAID_RISK = [ 'SUCCEEDED', 'SUCCESS', 'CAPTURED', 'PARTIALLY_REFUND', 'PARTIALLY_REFUNDED' ];
+    private const TRADE_PAID_RISK = YSTradeStatus::PAID_RISK;
 
     /**
      * Bootstrap.

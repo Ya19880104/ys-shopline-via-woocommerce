@@ -11,6 +11,7 @@ defined( 'ABSPATH' ) || exit;
 
 use YangSheep\ShoplinePayment\Utils\YSLogger;
 use YangSheep\ShoplinePayment\Utils\YSOrderMeta;
+use YangSheep\ShoplinePayment\Utils\YSTradeStatus;
 use YangSheep\ShoplinePayment\Api\YSApi;
 use YangSheep\ShoplinePayment\Handlers\YSRedirectHandler;
 use YangSheep\ShoplinePayment\Customer\YSCustomer;
@@ -234,6 +235,7 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
                     'processing'         => __( 'Processing payment...', 'ys-shopline-via-woocommerce' ),
                     'applepay_unsupported' => __( '此裝置或瀏覽器不支援 Apple Pay。請使用 iPhone/iPad/Mac 上的 Safari 瀏覽器。', 'ys-shopline-via-woocommerce' ),
                     'payment_not_ready'  => __( '付款尚未準備就緒，請稍候再試。', 'ys-shopline-via-woocommerce' ),
+                    'payment_component_timeout' => __( '付款元件載入逾時，請重新整理頁面後再試。', 'ys-shopline-via-woocommerce' ),
                 ),
             )
         );
@@ -572,8 +574,7 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
             if ( null !== $prior_result ) {
                 return $prior_result;
             }
-            // prior trade 已失敗/過期 → 清除舊 tradeOrderId，繼續建立新交易
-            $order->add_order_note( __( 'Shopline 金流：前次交易已終態（失敗/過期），允許重新建立交易', 'ys-shopline-via-woocommerce' ) );
+            // v3.5.35: 放行原因與 note 由 resolve_prior_trade 記錄（終態放行/取消後放行）
         }
 
         // Get pay session from POST
@@ -1199,21 +1200,64 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
     }
 
     /**
-     * 查詢前一筆交易狀態，決定是否允許重新付款。
-     *
-     * - SUCCEEDED/CAPTURED → 導向感謝頁（已成功）
-     * - CREATED/PENDING/AUTHORIZED → 顯示「付款尚未完成」錯誤
-     * - FAILED/EXPIRED/其他 → 清除舊 tradeOrderId，return null 讓流程繼續
-     * - API 查詢失敗 → 顯示錯誤，不冒險建立新交易
+     * 查詢前一筆交易狀態，決定是否允許重新付款（v3.5.35 改為 resolve_prior_trade 的轉接層）。
      *
      * @param WC_Order $order            訂單物件。
-     * @param string   $existing_trade_id 已存在的 tradeOrderId。
+     * @param string   $existing_trade_id 已存在的 tradeOrderId（僅保留簽名相容，實際由 resolver 重讀 meta）。
      * @return array|null 回傳 process_payment 格式陣列或 null（允許繼續）。
      */
     protected function check_prior_trade_status( $order, $existing_trade_id ) {
+        $resolution = $this->resolve_prior_trade( $order );
+
+        if ( 'paid' === $resolution['action'] ) {
+            return array(
+                'result'   => 'success',
+                'redirect' => isset( $resolution['redirect'] ) ? $resolution['redirect'] : $this->get_return_url( $order ),
+            );
+        }
+
+        if ( 'allow' === $resolution['action'] ) {
+            return null;
+        }
+
+        // blocked：真實原因進 WC notice（主結帳由 WC core 帶回前端；
+        // order-pay 由 ajax_pay_for_order 收攏進 messages 回傳）
+        $message = isset( $resolution['message'] ) && '' !== $resolution['message']
+            ? $resolution['message']
+            : __( '前次付款流程尚未完成，請稍候片刻後再試。若持續出現此訊息，請聯繫客服。', 'ys-shopline-via-woocommerce' );
+        wc_add_notice( $message, 'error' );
+        return array( 'result' => 'failure' );
+    }
+
+    /**
+     * v3.5.35: 統一解決「前次交易」——order-pay 變更付款方式與主結帳同單重試共用。
+     *
+     * 分類（依 YSTradeStatus 共用分類器）：
+     * - 無前次交易                        → allow
+     * - PAID_RISK（已收款）               → paid（導感謝頁，RedirectHandler 補齊 meta）
+     * - TERMINAL_SAFE（終態無風險）       → 清付款 meta → allow
+     * - CUSTOMER_PENDING（顧客未完成）    → 主動取消 → 重查確認終態 → allow；
+     *                                       取消未確認 → blocked（fail-closed）
+     *   ※ 取消 API 回 200 仍可能 PROCESSING（官方文件），一律以重查結果為準。
+     * - PROCESSING/AUTHORIZED/其他/查詢失敗 → blocked（fail-closed，避免重複扣款）
+     *
+     * 呼叫端約定：blocked 時「不得」改寫訂單付款方式或任何本地付款 meta。
+     *
+     * @param WC_Order $order 訂單物件。
+     * @return array{action:string, redirect?:string, message?:string, status?:string}
+     */
+    public function resolve_prior_trade( $order ) {
+        $existing_trade_id = (string) $order->get_meta( YSOrderMeta::TRADE_ORDER_ID );
+
+        if ( '' === $existing_trade_id ) {
+            return array( 'action' => 'allow', 'status' => '' );
+        }
+
         if ( ! $this->api ) {
-            wc_add_notice( __( '付款閘道未設定，請聯繫客服。', 'ys-shopline-via-woocommerce' ), 'error' );
-            return array( 'result' => 'failure' );
+            return array(
+                'action'  => 'blocked',
+                'message' => __( '付款閘道未設定，請聯繫客服。', 'ys-shopline-via-woocommerce' ),
+            );
         }
 
         YSLogger::info( 'Checking prior trade status before retry', array(
@@ -1228,14 +1272,13 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
                 'order_id' => $order->get_id(),
                 'error'    => $response->get_error_message(),
             ) );
-            wc_add_notice(
-                __( '無法確認前次付款狀態，請稍後再試或聯繫客服。', 'ys-shopline-via-woocommerce' ),
-                'error'
+            return array(
+                'action'  => 'blocked',
+                'message' => __( '無法確認前次付款狀態，請稍後再試或聯繫客服。', 'ys-shopline-via-woocommerce' ),
             );
-            return array( 'result' => 'failure' );
         }
 
-        $status = isset( $response['status'] ) ? strtoupper( $response['status'] ) : '';
+        $status = isset( $response['status'] ) ? strtoupper( (string) $response['status'] ) : '';
 
         YSLogger::info( 'Prior trade status result', array(
             'order_id'       => $order->get_id(),
@@ -1243,37 +1286,234 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
             'status'         => $status,
         ) );
 
-        // 終態白名單：只有這些狀態才允許建立新交易
-        $terminal_failed = array( 'FAILED', 'EXPIRED', 'CANCELLED' );
-
-        // 前一筆已成功 → 導向感謝頁（RedirectHandler 會查 API 補齊所有 meta）
-        if ( in_array( $status, array( 'SUCCEEDED', 'SUCCESS', 'CAPTURED' ), true ) ) {
+        // 前一筆已收款 → 導向感謝頁（RedirectHandler 會查 API 補齊所有 meta）
+        if ( YSTradeStatus::is_paid( $status ) ) {
             return array(
-                'result'   => 'success',
+                'action'   => 'paid',
                 'redirect' => $this->get_return_url( $order ),
+                'status'   => $status,
             );
         }
 
-        // 前一筆已失敗/過期/取消 → 清除舊 tradeOrderId，允許重新付款
-        if ( in_array( $status, $terminal_failed, true ) ) {
-            $order->delete_meta_data( YSOrderMeta::TRADE_ORDER_ID );
-            $order->save();
-
-            YSLogger::info( 'Prior trade failed/expired, allowing retry', array(
-                'order_id'          => $order->get_id(),
-                'old_trade_order_id' => $existing_trade_id,
-                'old_status'        => $status,
+        // 前一筆已終態（失敗/過期/取消/退款）→ 清付款 meta，允許重新付款
+        if ( YSTradeStatus::is_terminal_safe( $status ) ) {
+            $this->clear_prior_payment_meta( $order );
+            $order->add_order_note( sprintf(
+                /* translators: %s: prior trade status */
+                __( 'Shopline 金流：前次交易已終態（%s），允許重新建立交易。', 'ys-shopline-via-woocommerce' ),
+                $status
             ) );
-
-            return null;
+            YSLogger::info( 'Prior trade terminal, allowing retry', array(
+                'order_id'           => $order->get_id(),
+                'old_trade_order_id' => $existing_trade_id,
+                'old_status'         => $status,
+            ) );
+            return array( 'action' => 'allow', 'status' => $status );
         }
 
-        // 其他所有狀態（CREATED/PENDING/AUTHORIZED/PROCESSING/未知）→ 進行中，禁止新交易
-        wc_add_notice(
-            __( '前次付款流程尚未完成，請稍候片刻後重新整理頁面。若持續出現此訊息，請聯繫客服。', 'ys-shopline-via-woocommerce' ),
-            'error'
+        // 顧客端未完成（CREATED/CUSTOMER_ACTION：關閉 Apple Pay/3DS 視窗、未完成授權）
+        //
+        // 此狀態家族「沒有授權保留、沒有款項在途」。SHOPLINE 取消 API 僅支援已授權
+        // 交易，對此家族實測一律拒絕（VA:"not support cancel"、LinePay:"can not cancel"）
+        // — 若堅持取消確認才放行，等同把「關閉視窗後死鎖到交易過期（最長 6 小時）」
+        // 原 bug 運回去。
+        //
+        // 流程（v3.5.35 Review P1-1：重查後嚴格分類，杜絕 fail-open）：
+        //   best-effort 取消（VA 跳過，實證不支援）→ 一律重查取權威狀態，依重查結果分：
+        //     PAID              → 導付款結果頁（競態：確認期間顧客完成收款）
+        //     TERMINAL          → 取消生效，乾淨放行
+        //     仍 CUSTOMER_PENDING → 無授權/無款項在途，棄用歸檔放行（供 webhook 溯源）
+        //     PROCESSING/AUTHORIZED/未知/查詢失敗 → 款項可能在途 → blocked，不棄用、不改 meta
+        if ( YSTradeStatus::is_customer_pending( $status ) ) {
+            $remote_method = (string) ( $response['paymentMethod'] ?? ( $response['payment']['paymentMethod'] ?? '' ) );
+
+            // best-effort 取消 — VirtualAccount 已實證不支援（"not support cancel"），跳過直接重查
+            if ( 'VirtualAccount' !== $remote_method ) {
+                $reference_id = (string) $order->get_meta( YSOrderMeta::REFERENCE_ORDER_ID );
+                $cancel       = $this->api->cancel_payment_by_ids( $existing_trade_id, $reference_id );
+                if ( is_wp_error( $cancel ) ) {
+                    YSLogger::info( 'Prior pending trade cancel rejected, verifying by re-query', array(
+                        'order_id'       => $order->get_id(),
+                        'trade_order_id' => $existing_trade_id,
+                        'error'          => $cancel->get_error_message(),
+                    ) );
+                }
+            }
+
+            // 一律重查取權威狀態（cancel 回 200 不可信；VA 沒取消也要確認未在收款）
+            $verify = $this->api->get_payment_trade( $existing_trade_id );
+
+            // 查詢失敗 → 無法確認 → fail-closed（不棄用、不改任何 meta）
+            if ( is_wp_error( $verify ) ) {
+                YSLogger::warning( 'Prior pending trade re-query failed, blocking', array(
+                    'order_id'       => $order->get_id(),
+                    'trade_order_id' => $existing_trade_id,
+                    'error'          => $verify->get_error_message(),
+                ) );
+                $order->add_order_note( __( 'Shopline 金流：無法確認前次交易目前狀態（查詢失敗），為避免重複交易暫不放行。', 'ys-shopline-via-woocommerce' ) );
+                return array(
+                    'action'  => 'blocked',
+                    'message' => __( '暫時無法確認前次付款狀態，請稍候約 1 分鐘後再試。若持續發生請聯繫客服。', 'ys-shopline-via-woocommerce' ),
+                    'status'  => '',
+                );
+            }
+
+            $vstatus = strtoupper( (string) ( $verify['status'] ?? '' ) );
+
+            // 重查已收款（競態）→ 導付款結果頁
+            if ( YSTradeStatus::is_paid( $vstatus ) ) {
+                $order->add_order_note( sprintf(
+                    /* translators: %s: verified trade status */
+                    __( 'Shopline 金流：確認期間前次交易已完成收款（狀態 %s），導向付款結果頁。', 'ys-shopline-via-woocommerce' ),
+                    $vstatus
+                ) );
+                return array(
+                    'action'   => 'paid',
+                    'redirect' => $this->get_return_url( $order ),
+                    'status'   => $vstatus,
+                );
+            }
+
+            // 重查已終態（取消生效）→ 乾淨放行
+            if ( YSTradeStatus::is_terminal_safe( $vstatus ) ) {
+                $this->clear_prior_payment_meta( $order );
+                $order->add_order_note( sprintf(
+                    /* translators: %s: verified trade status */
+                    __( 'Shopline 金流：前次未完成交易已確認取消（狀態 %s），允許重新建立交易。', 'ys-shopline-via-woocommerce' ),
+                    $vstatus
+                ) );
+                YSLogger::info( 'Prior pending trade cancelled, allowing retry', array(
+                    'order_id'        => $order->get_id(),
+                    'trade_order_id'  => $existing_trade_id,
+                    'verified_status' => $vstatus,
+                ) );
+                return array( 'action' => 'allow', 'status' => $vstatus );
+            }
+
+            // 重查仍為顧客未完成（VA/LinePay 不支援取消；此態無授權、無款項在途）→ 棄用歸檔放行
+            if ( YSTradeStatus::is_customer_pending( $vstatus ) ) {
+                $abandoned   = (array) $order->get_meta( YSOrderMeta::ABANDONED_TRADE_IDS );
+                $abandoned[] = $existing_trade_id;
+                $order->update_meta_data( YSOrderMeta::ABANDONED_TRADE_IDS, array_values( array_unique( array_filter( $abandoned ) ) ) );
+                $order->save();
+                $this->clear_prior_payment_meta( $order );
+
+                $order->add_order_note( sprintf(
+                    /* translators: 1: trade order id, 2: prior trade status, 3: payment method */
+                    __( '⚠️ Shopline 金流：棄用前次顧客未完成交易（%1$s，狀態 %2$s，方式 %3$s；金流端不支援取消此狀態，該交易無授權/未收款）。若顧客事後仍完成舊流程，付款通知將以重複收款警示標記，需人工確認退款。', 'ys-shopline-via-woocommerce' ),
+                    $existing_trade_id,
+                    $vstatus,
+                    '' !== $remote_method ? $remote_method : 'UNKNOWN'
+                ) );
+                YSLogger::info( 'Prior pending trade abandoned for repayment', array(
+                    'order_id'        => $order->get_id(),
+                    'trade_order_id'  => $existing_trade_id,
+                    'remote_method'   => $remote_method,
+                    'verified_status' => $vstatus,
+                ) );
+                return array( 'action' => 'allow', 'status' => $vstatus );
+            }
+
+            // 其餘（PROCESSING/AUTHORIZED/未知）→ 款項可能在途 → fail-closed（不棄用、不改 meta）
+            YSLogger::warning( 'Prior pending trade moved to in-flight state, blocking', array(
+                'order_id'        => $order->get_id(),
+                'trade_order_id'  => $existing_trade_id,
+                'verified_status' => $vstatus,
+            ) );
+            $order->add_order_note( sprintf(
+                /* translators: %s: verified trade status */
+                __( 'Shopline 金流：前次交易已進入處理中（狀態 %s），為避免重複扣款暫不放行。', 'ys-shopline-via-woocommerce' ),
+                '' !== $vstatus ? $vstatus : 'UNKNOWN'
+            ) );
+            return array(
+                'action'  => 'blocked',
+                'message' => sprintf(
+                    /* translators: %s: verified trade status */
+                    __( '前次付款已進入處理中（狀態 %s），為避免重複扣款暫時無法重新付款。請稍候片刻再試，若持續發生請聯繫客服。', 'ys-shopline-via-woocommerce' ),
+                    '' !== $vstatus ? $vstatus : 'UNKNOWN'
+                ),
+                'status'  => $vstatus,
+            );
+        }
+
+        // PROCESSING/AUTHORIZED/PENDING/未知 → 金流端處理中，取消有重複扣款風險 → fail-closed
+        return array(
+            'action'  => 'blocked',
+            'message' => sprintf(
+                /* translators: %s: prior trade status */
+                __( '前次付款仍在金流端處理中（狀態 %s），為避免重複扣款暫時無法重新付款。請稍候片刻再試，若持續發生請聯繫客服。', 'ys-shopline-via-woocommerce' ),
+                '' !== $status ? $status : 'UNKNOWN'
+            ),
+            'status'  => $status,
         );
-        return array( 'result' => 'failure' );
+    }
+
+    /**
+     * v3.5.35: 重用 ATM 虛擬帳號前，以遠端實況驗證前次交易確為 VirtualAccount
+     * 且仍為顧客待付款狀態。
+     *
+     * 本地 payment method / VA meta 可能被失敗的付款方式變更嘗試污染
+     *（歷史 P0：先寫入新 gateway 再判斷舊交易），不可單獨信任。
+     * 驗證失敗一律回 false（fail-closed）→ 呼叫端改走 resolve_prior_trade 統一處理。
+     *
+     * @param WC_Order $order 訂單物件。
+     * @return bool 是否可安全重用既有 VA。
+     */
+    public function verify_reusable_offline_trade( $order ) {
+        if ( ! $this->api ) {
+            return false;
+        }
+
+        $trade_id = (string) $order->get_meta( YSOrderMeta::TRADE_ORDER_ID );
+        if ( '' === $trade_id ) {
+            return false;
+        }
+
+        $response = $this->api->get_payment_trade( $trade_id );
+        if ( is_wp_error( $response ) ) {
+            YSLogger::warning( 'Offline reuse verification query failed', array(
+                'order_id' => $order->get_id(),
+                'error'    => $response->get_error_message(),
+            ) );
+            return false;
+        }
+
+        $status = isset( $response['status'] ) ? strtoupper( (string) $response['status'] ) : '';
+        $method = (string) ( $response['paymentMethod'] ?? ( $response['payment']['paymentMethod'] ?? '' ) );
+
+        $reusable = ( 'VirtualAccount' === $method ) && YSTradeStatus::is_customer_pending( $status );
+
+        if ( ! $reusable ) {
+            YSLogger::info( 'Offline reuse rejected by remote state', array(
+                'order_id'       => $order->get_id(),
+                'trade_order_id' => $trade_id,
+                'remote_method'  => '' !== $method ? $method : 'UNKNOWN',
+                'remote_status'  => '' !== $status ? $status : 'UNKNOWN',
+            ) );
+        }
+
+        return $reusable;
+    }
+
+    /**
+     * v3.5.35: 清除前次付款週期的訂單 meta（重新付款前）。
+     *
+     * 涵蓋交易指標與 ATM 離線付款展示資訊；「不」清除 REFERENCE_ORDER_ID 與
+     * PAYMENT_ATTEMPT（_N 嘗試序號需要延續遞增，冪等鍵才不會重複）。
+     *
+     * @param WC_Order $order 訂單物件。
+     * @return void
+     */
+    protected function clear_prior_payment_meta( $order ) {
+        $order->delete_meta_data( YSOrderMeta::TRADE_ORDER_ID );
+        $order->delete_meta_data( YSOrderMeta::SESSION_ID );
+        $order->delete_meta_data( YSOrderMeta::PAYMENT_STATUS );
+        $order->delete_meta_data( YSOrderMeta::PAYMENT_DETAIL );
+        $order->delete_meta_data( YSOrderMeta::NEXT_ACTION );
+        $order->delete_meta_data( YSOrderMeta::VA_ACCOUNT );
+        $order->delete_meta_data( YSOrderMeta::VA_BANK_CODE );
+        $order->delete_meta_data( YSOrderMeta::VA_EXPIRE );
+        $order->save();
     }
 
     /**

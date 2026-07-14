@@ -314,6 +314,11 @@ final class YSWebhookHandler {
             return;
         }
 
+        // v3.5.35 Review P1-2：命中已棄用交易 → 記重複收款警示、不覆寫現行交易 meta
+        if ( $this->guard_abandoned_trade_paid( (string) $trade_order_id, $data ) ) {
+            return;
+        }
+
         $order = $this->get_order_for_paid_trade_webhook( $data );
 
         if ( ! $order ) {
@@ -443,6 +448,11 @@ final class YSWebhookHandler {
         $trade_order_id = $data['tradeOrderId'] ?? '';
 
         if ( ! $trade_order_id ) {
+            return;
+        }
+
+        // v3.5.35 Review P1-2：命中已棄用交易 → 記重複收款警示、不覆寫現行交易 meta
+        if ( $this->guard_abandoned_trade_paid( (string) $trade_order_id, $data ) ) {
             return;
         }
 
@@ -914,6 +924,89 @@ final class YSWebhookHandler {
      * @param array $data Webhook payload.
      * @return \WC_Order|null
      */
+    /**
+     * v3.5.35 Review P1-2：攔截「已棄用交易」的付款成功／請款通知。
+     *
+     * 顧客未完成的舊交易被 resolve_prior_trade 棄用（歸檔進
+     * ABANDONED_TRADE_IDS）後，若顧客事後仍完成該筆舊流程，其 paid webhook
+     * 會攜帶舊 tradeOrderId：
+     *   - 舊 tradeOrderId 已非現行交易（TRADE_ORDER_ID 已清），get_order_by_trade_id 查無；
+     *   - 非 ATM 會被 reference fallback 拒絕而「靜默丟棄」；
+     *   - ATM 反而可能經 fallback 入帳 → 覆寫現行交易 meta / 重複標記已付款。
+     * 一律在此攔下：以 referenceOrderId 反推訂單、比對歸檔清單，命中則記
+     * 🔴 重複收款警示 note + ERROR log，**不觸發 payment_complete、不覆寫現行交易**。
+     *
+     * @param string $trade_order_id 傳入交易 ID。
+     * @param array  $data           Webhook payload。
+     * @return bool 是否為已棄用交易（true 代表呼叫端應提前 return，不做一般處理）。
+     */
+    private function guard_abandoned_trade_paid( string $trade_order_id, array $data ): bool {
+        $order = $this->find_order_with_abandoned_trade( $trade_order_id, $data );
+        if ( ! $order ) {
+            return false;
+        }
+
+        $current_trade = (string) $order->get_meta( YSOrderMeta::TRADE_ORDER_ID );
+        $already_paid  = $order->is_paid();
+
+        YSLogger::error( 'Webhook: 收到已棄用交易的付款通知（重複收款風險）', array(
+            'order_id'           => $order->get_id(),
+            'abandoned_trade'    => $trade_order_id,
+            'current_trade'      => $current_trade,
+            'order_already_paid' => $already_paid ? 'yes' : 'no',
+        ) );
+
+        // 記錄「已棄用但事後收款」的交易，供後台/報表追蹤與去重
+        $paid_abandoned   = (array) $order->get_meta( YSOrderMeta::ABANDONED_TRADE_PAID_IDS );
+        if ( in_array( $trade_order_id, $paid_abandoned, true ) ) {
+            // 同一筆重送 → 已標記過，不重複寫 note
+            return true;
+        }
+        $paid_abandoned[] = $trade_order_id;
+        $order->update_meta_data( YSOrderMeta::ABANDONED_TRADE_PAID_IDS, array_values( array_unique( array_filter( $paid_abandoned ) ) ) );
+
+        $order->add_order_note( sprintf(
+            /* translators: 1: abandoned trade id, 2: current trade id, 3: paid state */
+            __( '🔴 Shopline 金流：收到「已棄用交易」%1$s 的收款通知——此交易先前因顧客未完成而被棄用，顧客事後仍完成付款。現行交易＝%2$s、訂單付款狀態＝%3$s。**已阻擋自動入帳以免覆寫現行交易**；請人工確認是否重複收款並辦理退款。', 'ys-shopline-via-woocommerce' ),
+            $trade_order_id,
+            '' !== $current_trade ? $current_trade : '（無）',
+            $already_paid ? '已付款' : '未付款'
+        ) );
+        $order->save();
+
+        return true;
+    }
+
+    /**
+     * v3.5.35 Review P1-2：以 referenceOrderId 反推訂單，判斷傳入交易是否為其歸檔的棄用交易。
+     *
+     * referenceOrderId 格式為 {order_id}_{attempt}（見 generate_reference_order_id），
+     * 直接反推 order id 載入訂單，再比對 ABANDONED_TRADE_IDS，避免對序列化 meta 做 LIKE 查詢。
+     *
+     * @param string $trade_order_id 傳入交易 ID。
+     * @param array  $data           Webhook payload。
+     * @return \WC_Order|null 命中則回傳該訂單，否則 null。
+     */
+    private function find_order_with_abandoned_trade( string $trade_order_id, array $data ): ?\WC_Order {
+        if ( '' === $trade_order_id ) {
+            return null;
+        }
+
+        $reference = (string) ( $data['referenceOrderId'] ?? '' );
+        $order_id  = $this->extract_order_id_from_reference_order_id( $reference );
+        if ( ! $order_id ) {
+            return null;
+        }
+
+        $order = wc_get_order( $order_id );
+        if ( ! $order ) {
+            return null;
+        }
+
+        $abandoned = (array) $order->get_meta( YSOrderMeta::ABANDONED_TRADE_IDS );
+        return in_array( $trade_order_id, $abandoned, true ) ? $order : null;
+    }
+
     private function get_order_for_paid_trade_webhook( array $data ): ?\WC_Order {
         $trade_order_id = (string) ( $data['tradeOrderId'] ?? '' );
         if ( '' !== $trade_order_id ) {

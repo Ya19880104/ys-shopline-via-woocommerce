@@ -3,7 +3,7 @@
  * Plugin Name: YS Shopline via WooCommerce
  * Plugin URI: https://yangsheep.com.tw
  * Description: Support Shopline Payments for WooCommerce, including HPOS and Subscriptions. Supports Credit Card, ATM, JKOPay, Apple Pay, LINE Pay, and Chailease BNPL.
- * Version:           3.5.34
+ * Version:           3.5.35
  * Author: YangSheep
  * Author URI: https://yangsheep.com.tw
  * Text Domain: ys-shopline-via-woocommerce
@@ -17,7 +17,7 @@
 defined( 'ABSPATH' ) || exit;
 
 // Define plugin constants
-define( 'YS_SHOPLINE_VERSION', '3.5.34' );
+define( 'YS_SHOPLINE_VERSION', '3.5.35' );
 // v3.5.14: 資料庫綱要版本（用於 plugins_loaded 一次性 migration），與 plugin 版本解耦。
 define( 'YS_SHOPLINE_DB_VERSION', '3.5.14' );
 define( 'YS_SHOPLINE_PLUGIN_FILE', __FILE__ );
@@ -56,6 +56,7 @@ use YangSheep\ShoplinePayment\Api\YSApi;
 use YangSheep\ShoplinePayment\Admin\YSAdminSettings;
 use YangSheep\ShoplinePayment\Admin\YSUserCardsAdmin;
 use YangSheep\ShoplinePayment\Admin\YSOrderPaymentAdmin;
+use YangSheep\ShoplinePayment\Gateways\YSGatewayBase;
 use YangSheep\ShoplinePayment\Gateways\YSSubscription;
 use YangSheep\ShoplinePayment\Gateways\YSCreditCard;
 use YangSheep\ShoplinePayment\Gateways\YSCreditInstallment;
@@ -857,22 +858,155 @@ final class YSShoplinePayment {
             return;
         }
 
+        // v3.5.35: 訂單級互斥 — 同一張訂單的 cancel→query→create 鏈一次只允許一條
+        //（雙分頁、連點、併發重試都會被擋在這裡）
+        if ( ! $this->acquire_order_payment_lock( $order_id ) ) {
+            wp_send_json( array(
+                'result'   => 'failure',
+                'messages' => __( '另一筆付款請求正在處理中，請稍候片刻再試。', 'ys-shopline-via-woocommerce' ),
+            ) );
+            return;
+        }
+
+        // ATM 同方式重用：必須在 resolve 之前判斷，否則待付款的 VA 交易會被自動取消。
+        // v3.5.35: 重用前以遠端實況驗證（本地 meta 可能被失敗的變更嘗試污染）
         $existing_offline_payment = $this->maybe_reuse_existing_offline_payment( $order, $payment_method, $gateway );
         if ( null !== $existing_offline_payment ) {
             wp_send_json( $existing_offline_payment );
             return;
         }
 
-        $this->prepare_offline_order_for_repayment( $order, $payment_method );
+        // v3.5.35 P0 修正：先解決前次交易，確認可以重新付款「之後」才允許任何本地改寫。
+        // 過去順序（先儲存新 gateway → 再判斷舊交易）會讓失敗的變更嘗試污染
+        // payment method，進而誤把其他金流的有效交易當 ATM 清掉 → 產生兩筆可付款交易。
+        $resolution = $gateway->resolve_prior_trade( $order );
 
-        // 更新訂單的付款方式（可能已變更）
+        if ( 'paid' === $resolution['action'] ) {
+            wp_send_json( array(
+                'result'   => 'success',
+                'redirect' => isset( $resolution['redirect'] ) ? $resolution['redirect'] : $gateway->get_return_url( $order ),
+            ) );
+            return;
+        }
+
+        if ( 'blocked' === $resolution['action'] ) {
+            // fail-closed：不改寫付款方式、不動任何本地 meta
+            wp_send_json( array(
+                'result'   => 'failure',
+                'messages' => isset( $resolution['message'] ) ? $resolution['message'] : __( '前次付款尚未完成，請稍候再試。', 'ys-shopline-via-woocommerce' ),
+            ) );
+            return;
+        }
+
+        // action === 'allow'：前次交易已解決（meta 已由 resolver 清除），本地改寫安全
+
+        // ATM 保留單回到待付款（process_payment 會把 on-hold 視為已付款早退）
+        if ( 'on-hold' === $order->get_status() && 'yes' !== $order->get_meta( YSOrderMeta::PAYMENT_AUTHORIZED_PENDING ) ) {
+            $order->update_status( 'pending', __( '顧客變更付款方式，訂單回到待付款。', 'ys-shopline-via-woocommerce' ) );
+        }
+
+        // v3.5.35: 付款方式延後提交＋失敗回復 — 只有付款成功建立才保留新方式
+        $previous_method = $order->get_payment_method();
         $order->set_payment_method( $gateway );
         $order->save();
 
         // 執行付款
         $result = $gateway->process_payment( $order_id );
 
+        if ( ! is_array( $result ) || 'success' !== ( isset( $result['result'] ) ? $result['result'] : '' ) ) {
+            // 失敗回復：避免失敗嘗試污染訂單付款方式（P0 毒化源頭）
+            if ( '' !== $previous_method && $previous_method !== $payment_method ) {
+                $order_fresh = wc_get_order( $order_id );
+                if ( $order_fresh ) {
+                    $order_fresh->set_payment_method( $previous_method );
+                    $order_fresh->save();
+                    $order_fresh->add_order_note( sprintf(
+                        /* translators: 1: failed gateway id, 2: restored gateway id */
+                        __( 'Shopline 金流：以 %1$s 重新付款未成立，付款方式回復為 %2$s。', 'ys-shopline-via-woocommerce' ),
+                        $payment_method,
+                        $previous_method
+                    ) );
+                }
+            }
+
+            // v3.5.35: 把真實失敗原因帶回前端（process_payment 走 wc_add_notice，
+            // 本 AJAX 端點沒有 WC checkout 的 notices 轉運機制，需自行收攏）
+            $result = is_array( $result ) ? $result : array( 'result' => 'failure' );
+            if ( empty( $result['messages'] ) ) {
+                $notice_text = $this->drain_wc_error_notices();
+                if ( '' !== $notice_text ) {
+                    $result['messages'] = $notice_text;
+                }
+            }
+        }
+
         wp_send_json( $result );
+    }
+
+    /**
+     * v3.5.35: 取得訂單級付款互斥鎖（MySQL GET_LOCK）。
+     *
+     * wp_send_json 以 die() 結束、不會走正常 return 路徑，因此以
+     * register_shutdown_function 保底釋放；非持久連線在請求結束時
+     * MySQL 也會自動釋放同連線持有的 named lock。
+     *
+     * @param int $order_id 訂單 ID。
+     * @return bool 是否取得鎖。
+     */
+    private function acquire_order_payment_lock( $order_id ) {
+        global $wpdb;
+
+        $lock_name = 'ys_slp_pay_' . absint( $order_id );
+        $acquired  = $wpdb->get_var( $wpdb->prepare( 'SELECT GET_LOCK(%s, %d)', $lock_name, 0 ) );
+
+        if ( '1' !== (string) $acquired ) {
+            YSLogger::warning( 'Order payment lock busy', array( 'order_id' => $order_id ) );
+            return false;
+        }
+
+        register_shutdown_function( static function () use ( $lock_name ) {
+            global $wpdb;
+            if ( $wpdb instanceof \wpdb ) {
+                $wpdb->get_var( $wpdb->prepare( 'SELECT RELEASE_LOCK(%s)', $lock_name ) );
+            }
+        } );
+
+        return true;
+    }
+
+    /**
+     * v3.5.35: 收攏 WC session 中的 error notices 為純文字（並清空全部 notices）。
+     *
+     * 本外掛的 order-pay AJAX 端點沒有 WooCommerce checkout 的
+     * send_ajax_failure_response 轉運，若不收攏，錯誤原因會滯留 session、
+     * 前端只看得到通用錯誤，且下一頁還會噴出殘留 notice。
+     *
+     * @return string 純文字錯誤訊息（多則以換行分隔），無則空字串。
+     */
+    private function drain_wc_error_notices() {
+        if ( ! function_exists( 'wc_get_notices' ) || ! WC()->session ) {
+            return '';
+        }
+
+        $notices = wc_get_notices( 'error' );
+        $texts   = array();
+
+        foreach ( (array) $notices as $notice ) {
+            $text = '';
+            if ( is_array( $notice ) && isset( $notice['notice'] ) ) {
+                $text = (string) $notice['notice'];
+            } elseif ( is_string( $notice ) ) {
+                $text = $notice;
+            }
+            $text = trim( wp_strip_all_tags( $text ) );
+            if ( '' !== $text ) {
+                $texts[] = $text;
+            }
+        }
+
+        wc_clear_notices();
+
+        return implode( "\n", $texts );
     }
 
     /**
@@ -885,6 +1019,16 @@ final class YSShoplinePayment {
      */
     private function maybe_reuse_existing_offline_payment( $order, $payment_method, $gateway ) {
         if ( ! $this->should_reuse_existing_atm_payment( $order, $payment_method ) ) {
+            return null;
+        }
+
+        // v3.5.35: 本地 meta 可能被歷史失敗嘗試污染（payment method 曾被先寫後失敗）
+        // — 重用前必以遠端實況確認交易確為 VirtualAccount 且仍待顧客付款；
+        // 驗證不過就交給 resolve_prior_trade 統一處理（取消或封鎖），不得盲目重用。
+        if ( ! ( $gateway instanceof YSGatewayBase ) || ! $gateway->verify_reusable_offline_trade( $order ) ) {
+            YSLogger::warning( 'ATM reuse skipped: remote trade verification failed or mismatched', array(
+                'order_id' => $order->get_id(),
+            ) );
             return null;
         }
 
@@ -940,57 +1084,6 @@ final class YSShoplinePayment {
         }
 
         return $expire_timestamp <= time();
-    }
-
-    /**
-     * Clear stale offline-payment data before creating a replacement payment.
-     *
-     * ATM virtual-account orders may be on-hold/pending with an existing trade.
-     * When the customer uses order-pay to change payment, the old offline
-     * instructions must stop driving the front-end display and the gateway must
-     * be allowed to create a fresh trade.
-     *
-     * @param \WC_Order $order          Order object.
-     * @param string    $payment_method Newly selected payment method.
-     * @return void
-     */
-    private function prepare_offline_order_for_repayment( $order, $payment_method ) {
-        if ( ! $order || 'ys_shopline_atm' !== $order->get_payment_method() ) {
-            return;
-        }
-
-        if ( ! in_array( $order->get_status(), array( 'pending', 'on-hold' ), true ) ) {
-            return;
-        }
-
-        if ( 'yes' === $order->get_meta( YSOrderMeta::PAYMENT_AUTHORIZED_PENDING ) ) {
-            return;
-        }
-
-        $had_offline_details = (bool) $order->get_meta( YSOrderMeta::VA_ACCOUNT );
-
-        $order->delete_meta_data( YSOrderMeta::VA_ACCOUNT );
-        $order->delete_meta_data( YSOrderMeta::VA_BANK_CODE );
-        $order->delete_meta_data( YSOrderMeta::VA_EXPIRE );
-        $order->delete_meta_data( YSOrderMeta::TRADE_ORDER_ID );
-        $order->delete_meta_data( YSOrderMeta::SESSION_ID );
-        $order->delete_meta_data( YSOrderMeta::PAYMENT_STATUS );
-        $order->delete_meta_data( YSOrderMeta::PAYMENT_DETAIL );
-        $order->delete_meta_data( YSOrderMeta::NEXT_ACTION );
-
-        if ( 'pending' !== $order->get_status() ) {
-            $order->update_status( 'pending', __( 'Customer is changing payment method from offline payment.', 'ys-shopline-via-woocommerce' ) );
-        }
-
-        if ( $had_offline_details ) {
-            $order->add_order_note( sprintf(
-                /* translators: %s: payment method id */
-                __( 'Shopline 金流：顧客變更付款方式，已清除原離線付款資訊（new gateway=%s）。', 'ys-shopline-via-woocommerce' ),
-                $payment_method
-            ) );
-        }
-
-        $order->save();
     }
 
     /**

@@ -66,6 +66,22 @@ https://your-domain.com/wp-json/ys-shopline/v1/webhook
 
 ## 變更紀錄
 
+### 3.5.35 - 2026-07-14
+
+**修正 order-pay（重新付款）頁取消 Apple Pay／3DS／授權視窗後無法換其他付款方式**
+
+故障模式（客戶站實錄）：顧客在重新付款頁按下付款後關閉 Apple Pay／3DS 視窗，交易停在 CREATED／CUSTOMER_ACTION（官方文件：未付款交易可能長達 6 小時才 EXPIRED）；既存交易保護只放行 FAILED／EXPIRED／CANCELLED，導致切換任何付款方式都被擋，且錯誤原因滯留 session、前端只看到通用錯誤。另外切換付款方式後 SDK 掛載未完成時按付款會直接 alert 斷頭。
+
+- **前次交易統一解決（resolve_prior_trade）**：CREATED／CUSTOMER_ACTION（顧客端未完成＝無授權、無款項在途）先 best-effort 取消（VA 跳過，實測不支援）→**一律重查取權威狀態，依重查結果嚴格分類**：PAID→導付款結果頁；TERMINAL→乾淨放行；仍 CREATED／CUSTOMER_ACTION→棄用舊交易放行（歸檔 `_ys_shopline_abandoned_trade_ids`＋⚠️ note）；**PROCESSING／AUTHORIZED／未知／重查失敗一律 blocked，不棄用、不改任何 meta**（Review P1-1 fail-closed，杜絕款項在途時誤放行造成重複扣款）。實測 SHOPLINE 取消 API 僅支援已授權交易，對顧客未完成家族一律拒絕（VA「not support cancel」、LinePay「can not cancel」），故此家族靠「重查仍未完成」判定棄用。主結帳同單重試共用同一邏輯（`check_prior_trade_status` 改為轉接層），一併解決主結帳「關視窗後卡既存交易至過期（最長 6 小時）」死鎖。
+- **歸檔交易 webhook 防護（Review P1-2）**：被棄用的舊交易若顧客事後仍完成付款，其 paid／captured webhook（trade.succeeded／trade.captured）在入口即以 referenceOrderId 反推訂單、比對歸檔清單攔截：**不觸發 payment_complete、不覆寫現行交易 meta**，改記 🔴 重複收款警示 note＋ERROR log、將該筆記入 `_ys_shopline_abandoned_trade_paid_ids` 供人工退款。修正歸檔清單原本 write-only（舊 ATM 事後入帳覆寫現行交易、舊卡／LinePay 事後成功被靜默丟棄）。
+- **P0 付款方式延後提交＋失敗回復**：`ajax_pay_for_order` 過去先儲存新付款方式再判斷舊交易，失敗的變更嘗試會污染 payment method，進而把其他金流的有效交易誤當 ATM 清掉（產生兩筆可付款交易＝重複收款風險）。改為前次交易解決成功後才改寫付款方式，付款未成立即回復原方式。
+- **移除 ATM 盲目清理出口**：改由 `resolve_prior_trade` 統一取消／清理；ATM 同方式重用前以遠端實況驗證交易確為 VirtualAccount 且待顧客付款（`verify_reusable_offline_trade`），本地 meta 不再單獨信任。
+- **訂單級付款互斥**：`ajax_pay_for_order` 以 MySQL `GET_LOCK`（每訂單一鎖）序列化 cancel→query→create 鏈，雙分頁／連點併發只允許一條，其餘回覆「另一筆付款請求正在處理中」。
+- **order-pay 等待 SDK 掛載**：付款當下改以 `isMountHealthy(gatewayId)` 判定（instance 存在＋容器 iframe／內容健在，Review P2：instance 在但 iframe 已被結帳更新替換脫離 DOM 時也算不健康），不健康則輪詢等待掛載完成後自動續行（共用 DEFER 常數；5 秒未健康 `forceRemount` 自癒一次、20 秒硬逾時才報錯；等待期間鎖定付款鈕、切換金流即中止等待）。
+- **信用卡已存卡快速結帳健康判斷（Review P1-3）**：`isMountHealthy()` 對 CreditCard 原本只認 PCI iframe，但**會員已存卡**情境 SDK 渲染的是 saved-card 列表（class 含 `shoplinepayments_item_`，無 iframe）→ 被誤判不健康 → 主結帳 placeOrder 走 `isCheckoutBusy→deferPlaceOrder→` 5 秒 `forceRemount →` 紅字「付款元件重新載入中」，等於擋掉已存卡快速結帳（wecoware 客戶站實錯）。改為「iframe 或 saved-card 列表任一存在」皆健康，只有容器空／只剩 loading spinner／DOM 被替換才 defer/remount。此判斷三處共用（onUpdatedCheckout／doMount／isCheckoutBusy＋order-pay），一併修好主結帳與 order-pay。
+- **錯誤訊息透傳**：`ajax_pay_for_order` 失敗時把 WC session error notices 收攏為純文字 `messages` 回傳並清空（原因不再滯留 session）；前端 order-pay 全面以頁內 WooCommerce notice 取代 `alert()`（自動 sanitize＋escape，支援多行）。
+- **共用狀態分類器**：新增 `Utils\YSTradeStatus`（TERMINAL_SAFE／PAID_RISK／CUSTOMER_PENDING），`YSStatusManager` 常數改為別名，取消閉環與前次交易解決共用單一事實來源。
+
 ### 3.5.34 - 2026-07-11
 
 **修正快速付款（自動填入）在結帳更新期間送單導致 3DS 未啟動、交易卡在 CREATED**
