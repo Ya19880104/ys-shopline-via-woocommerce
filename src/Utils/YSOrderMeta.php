@@ -91,6 +91,21 @@ final class YSOrderMeta {
     /** @var string 已棄用但顧客事後仍完成收款的交易 ID 清單（v3.5.35：重複收款警示，需人工退款） */
     public const ABANDONED_TRADE_PAID_IDS = '_ys_shopline_abandoned_trade_paid_ids';
 
+    /** @var string 需人工審核旗標（v3.5.36：後台可追蹤/查詢，值為 review type，如 duplicate_has_current / paid_no_current_trade） */
+    public const MANUAL_REVIEW_FLAG = '_ys_shopline_manual_review';
+
+    /** @var string 需人工審核明細（v3.5.36：結構化陣列，逐筆記 type/abandoned_trade/current_trade/ts） */
+    public const MANUAL_REVIEW_DATA = '_ys_shopline_manual_review_data';
+
+    /** @var string 人工審核已結案時間戳（v3.5.36：>0 代表已處理，不再列入待辦） */
+    public const MANUAL_REVIEW_RESOLVED = '_ys_shopline_manual_review_resolved';
+
+    /** @var string 付款結果不明（unknown）封鎖旗標（v3.5.36：值為當時 referenceOrderId，代表可能已建交易、禁止用新鍵再建） */
+    public const INDETERMINATE_REF = '_ys_shopline_indeterminate_ref';
+
+    /** @var string 付款結果不明明細（v3.5.36：reference/session_id/gateway/amount/currency/ts，供收斂比對） */
+    public const INDETERMINATE_DATA = '_ys_shopline_indeterminate_data';
+
     /** @var string 信用卡分期期數 */
     public const INSTALLMENT = '_ys_shopline_installment';
 

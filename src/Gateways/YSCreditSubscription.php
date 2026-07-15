@@ -11,6 +11,8 @@ defined( 'ABSPATH' ) || exit;
 
 use YangSheep\ShoplinePayment\Utils\YSLogger;
 use YangSheep\ShoplinePayment\Utils\YSOrderMeta;
+use YangSheep\ShoplinePayment\Utils\YSApiError;
+use YangSheep\ShoplinePayment\Utils\YSTradeStatus;
 
 /**
  * YSCreditSubscription Class.
@@ -56,6 +58,63 @@ class YSCreditSubscription extends YSGatewayBase {
 
         // 宣告 subscription 需要的 meta 欄位
         add_filter( 'woocommerce_subscription_payment_meta', array( $this, 'subscription_payment_meta' ), 10, 2 );
+    }
+
+    /**
+     * Prevent transaction-scoped SHOPLINE meta from being copied into a new renewal.
+     *
+     * WooCommerce Subscriptions copies custom meta on an opt-out basis. Customer and
+     * instrument IDs belong to the subscription, but trade/reference/status markers
+     * belong to one specific order and must never seed the next billing cycle.
+     *
+     * @param string $query      Renewal meta-copy SQL.
+     * @param int    $to_order   Renewal order ID.
+     * @param int    $from_order Subscription ID.
+     * @return string
+     */
+    public static function exclude_order_specific_meta_from_renewals( $query, $to_order, $from_order ) {
+        $excluded = array(
+            YSOrderMeta::TRADE_ORDER_ID,
+            YSOrderMeta::SESSION_ID,
+            YSOrderMeta::PAYMENT_METHOD,
+            YSOrderMeta::PAYMENT_DETAIL,
+            YSOrderMeta::PAYMENT_STATUS,
+            YSOrderMeta::REFUND_DETAIL,
+            YSOrderMeta::REFUND_ATTEMPT,
+            YSOrderMeta::NEXT_ACTION,
+            YSOrderMeta::BIND_CARD_ATTEMPTED,
+            YSOrderMeta::BIND_CARD_NOT_PERSISTED,
+            YSOrderMeta::PAYMENT_AUTHORIZED_PENDING,
+            YSOrderMeta::PAYMENT_COMPLETE_LOCK,
+            YSOrderMeta::PAYMENT_ATTEMPT,
+            YSOrderMeta::REFERENCE_ORDER_ID,
+            YSOrderMeta::CARD_LAST4,
+            YSOrderMeta::CARD_BRAND,
+            YSOrderMeta::ERROR_CODE,
+            YSOrderMeta::ERROR_MESSAGE,
+            YSOrderMeta::VA_BANK_CODE,
+            YSOrderMeta::VA_ACCOUNT,
+            YSOrderMeta::VA_EXPIRE,
+            YSOrderMeta::ABANDONED_TRADE_IDS,
+            YSOrderMeta::ABANDONED_TRADE_PAID_IDS,
+            YSOrderMeta::MANUAL_REVIEW_FLAG,
+            YSOrderMeta::MANUAL_REVIEW_DATA,
+            YSOrderMeta::MANUAL_REVIEW_RESOLVED,
+            YSOrderMeta::INDETERMINATE_REF,
+            YSOrderMeta::INDETERMINATE_DATA,
+            YSOrderMeta::INSTALLMENT,
+            YSOrderMeta::BNPL_INSTALLMENT,
+            YSOrderMeta::PENDING_BIND,
+            YSOrderMeta::ADD_METHOD_NEXT_ACTION,
+            YSOrderMeta::INSTRUMENTS_CACHE,
+        );
+
+        $quoted = array_map(
+            static fn( $key ) => "'" . esc_sql( $key ) . "'",
+            $excluded
+        );
+
+        return $query . ' AND `meta_key` NOT IN (' . implode( ',', $quoted ) . ')';
     }
 
     /**
@@ -196,14 +255,16 @@ class YSCreditSubscription extends YSGatewayBase {
 
         if ( ! $order ) {
             wc_add_notice( __( 'Order not found.', 'ys-shopline-via-woocommerce' ), 'error' );
-            return array( 'result' => 'failure' );
+            return array( 'result' => 'failure', 'remote_outcome' => 'rejected' );
         }
 
         // 統一走 parent（SDK CardBindPayment），prepare_payment_data() 會強制綁卡
         $result = parent::process_payment( $order_id );
 
-        // 首次付款成功後，儲存 subscription meta
-        if ( 'success' === ( $result['result'] ?? '' ) ) {
+        // v3.5.36 P2: 只在遠端「明確受理」時才寫 subscription meta——
+        // 不可用 result==='success'（WP_Error rejected 也回 success+redirect）、
+        // 也不可用 accepted!==false（unknown 會誤過）；必須 remote_outcome === 'accepted'。
+        if ( 'accepted' === ( is_array( $result ) ? ( $result['remote_outcome'] ?? '' ) : '' ) ) {
             $this->save_subscription_meta_from_order( $order );
         }
 
@@ -239,6 +300,12 @@ class YSCreditSubscription extends YSGatewayBase {
             return;
         }
 
+        // A renewal has no browser redirect to finish reconciliation. Resolve or block
+        // indeterminate/prior trades before generate_reference_order_id() can advance.
+        if ( ! $this->can_start_recurring_payment( $order ) ) {
+            return;
+        }
+
         $customer_id = $this->get_shopline_customer_id( $user_id );
         if ( ! $customer_id ) {
             $this->log( 'No Shopline customer ID for user #' . $user_id, 'error' );
@@ -258,14 +325,21 @@ class YSCreditSubscription extends YSGatewayBase {
                 substr( (string) $bound_instrument_id, -6 )
             ) );
 
-            $response = $this->try_recurring_charge( $order, $amount, $customer_id, $bound_instrument_id );
+            $attempt  = $this->try_recurring_charge( $order, $amount, $customer_id, $bound_instrument_id );
+            $response = $attempt['response'];
+            $outcome  = YSApiError::classify_create_trade_response( $response );
 
-            if ( $this->is_charge_success( $response ) ) {
+            if ( 'accepted' === $outcome ) {
                 $this->handle_recurring_response( $order, $response );
                 return;
             }
 
-            // 綁定卡失敗，記錄原因並評估 fallback
+            if ( 'unknown' === $outcome ) {
+                $this->handle_recurring_unknown( $order, $attempt, $bound_instrument_id );
+                return;
+            }
+
+            // Only a definitive rejection may try a different instrument.
             $fail_reason = is_wp_error( $response )
                 ? $response->get_error_message()
                 : ( $response['paymentMsg']['msg'] ?? $response['status'] ?? 'UNKNOWN' );
@@ -291,15 +365,22 @@ class YSCreditSubscription extends YSGatewayBase {
                     substr( (string) $fallback_instrument_id, -6 )
                 ) );
 
-                $response2 = $this->try_recurring_charge( $order, $amount, $customer_id, $fallback_instrument_id );
+                $attempt2  = $this->try_recurring_charge( $order, $amount, $customer_id, $fallback_instrument_id );
+                $response2 = $attempt2['response'];
+                $outcome2  = YSApiError::classify_create_trade_response( $response2 );
 
-                if ( $this->is_charge_success( $response2 ) ) {
-                    $order->add_order_note( __( '訂閱續扣：預設卡片 fallback 成功。原綁定卡請客戶檢查或更換。', 'ys-shopline-via-woocommerce' ) );
+                if ( 'accepted' === $outcome2 ) {
+                    $order->add_order_note( __( '訂閱續扣：預設卡片 fallback 已由 SHOPLINE 受理。原綁定卡請客戶檢查或更換。', 'ys-shopline-via-woocommerce' ) );
                     $this->handle_recurring_response( $order, $response2 );
                     return;
                 }
 
-                // Both failed
+                if ( 'unknown' === $outcome2 ) {
+                    $this->handle_recurring_unknown( $order, $attempt2, $fallback_instrument_id );
+                    return;
+                }
+
+                // Both attempts were definitively rejected.
                 $order->add_order_note( __( '訂閱續扣：綁定卡與預設卡均扣款失敗，請人工處理。', 'ys-shopline-via-woocommerce' ) );
                 $this->handle_recurring_response( $order, $response2 );
                 return;
@@ -317,7 +398,15 @@ class YSCreditSubscription extends YSGatewayBase {
                 substr( (string) $fallback_instrument_id, -6 )
             ) );
 
-            $response = $this->try_recurring_charge( $order, $amount, $customer_id, $fallback_instrument_id );
+            $attempt  = $this->try_recurring_charge( $order, $amount, $customer_id, $fallback_instrument_id );
+            $response = $attempt['response'];
+            $outcome  = YSApiError::classify_create_trade_response( $response );
+
+            if ( 'unknown' === $outcome ) {
+                $this->handle_recurring_unknown( $order, $attempt, $fallback_instrument_id );
+                return;
+            }
+
             $this->handle_recurring_response( $order, $response );
             return;
         }
@@ -334,7 +423,7 @@ class YSCreditSubscription extends YSGatewayBase {
      * @param float     $amount
      * @param string    $customer_id
      * @param string    $instrument_id
-     * @return array|\WP_Error
+     * @return array{response:array|\WP_Error,payment_data:array,idempotent_key:string}
      */
     protected function try_recurring_charge( $order, $amount, $customer_id, $instrument_id ) {
         $data = $this->build_recurring_payment_data( $order, $amount, $customer_id, $instrument_id );
@@ -350,25 +439,11 @@ class YSCreditSubscription extends YSGatewayBase {
         // 每次嘗試使用獨立冪等鍵（reference_order_id + instrument 尾碼），避免 retry 被 SHOPLINE 冪等擋下
         $idempotent_key = (string) $order->get_meta( YSOrderMeta::REFERENCE_ORDER_ID ) . '-' . substr( (string) $instrument_id, -6 );
 
-        return $this->api->create_payment_trade( $data, $idempotent_key );
-    }
-
-    /**
-     * 判斷 Recurring 回應是否為扣款成功。
-     *
-     * 成功: SUCCEEDED / SUCCESS / CAPTURED
-     * 待處理: CREATED / AUTHORIZED（不視為失敗，不 retry）
-     * 失敗: WP_Error / FAILED / 其他
-     *
-     * @param array|\WP_Error $response
-     * @return bool True 表示成功或 pending，不需要 fallback retry
-     */
-    protected function is_charge_success( $response ) {
-        if ( is_wp_error( $response ) ) {
-            return false;
-        }
-        $status = isset( $response['status'] ) ? strtoupper( (string) $response['status'] ) : '';
-        return in_array( $status, array( 'SUCCEEDED', 'SUCCESS', 'CAPTURED', 'CREATED', 'AUTHORIZED' ), true );
+        return array(
+            'response'        => $this->api->create_payment_trade( $data, $idempotent_key ),
+            'payment_data'    => $data,
+            'idempotent_key'  => $idempotent_key,
+        );
     }
 
     /**
@@ -461,8 +536,26 @@ class YSCreditSubscription extends YSGatewayBase {
             return;
         }
 
-        $trade_order_id = $response['tradeOrderId'] ?? '';
-        $status         = isset( $response['status'] ) ? strtoupper( $response['status'] ) : '';
+        if ( ! is_array( $response ) ) {
+            $this->put_recurring_on_hold(
+                $order,
+                __( 'Subscription payment returned a malformed response. The payment status requires manual confirmation.', 'ys-shopline-via-woocommerce' )
+            );
+            return;
+        }
+
+        $trade_order_id = trim( (string) ( $response['tradeOrderId'] ?? '' ) );
+        $status         = strtoupper( trim( (string) ( $response['status'] ?? '' ) ) );
+
+        // Defensive fail-closed guard. Normal callers route this case through
+        // handle_recurring_unknown() so the exact request envelope is retained.
+        if ( '' === $trade_order_id || '' === $status ) {
+            $this->put_recurring_on_hold(
+                $order,
+                __( 'Subscription payment was accepted without complete trade information. The payment status requires manual confirmation.', 'ys-shopline-via-woocommerce' )
+            );
+            return;
+        }
 
         $order->update_meta_data( YSOrderMeta::TRADE_ORDER_ID, $trade_order_id );
         $order->update_meta_data( YSOrderMeta::PAYMENT_STATUS, $status ?: 'UNKNOWN' );
@@ -473,7 +566,7 @@ class YSCreditSubscription extends YSGatewayBase {
             'status'         => $status,
         ) );
 
-        if ( in_array( $status, array( 'SUCCEEDED', 'SUCCESS', 'CAPTURED' ), true ) ) {
+        if ( YSTradeStatus::is_paid( $status ) ) {
             $order->save();
             $order->payment_complete( $trade_order_id );
             $order->add_order_note(
@@ -484,9 +577,10 @@ class YSCreditSubscription extends YSGatewayBase {
             );
             $this->log( 'Subscription payment completed for order #' . $order->get_id() );
 
-        } elseif ( in_array( $status, array( 'CREATED', 'AUTHORIZED' ), true ) ) {
+        } elseif ( YSTradeStatus::is_customer_pending( $status ) || YSTradeStatus::is_in_flight( $status ) ) {
             $order->save();
-            $order->update_status( 'on-hold',
+            $this->put_recurring_on_hold(
+                $order,
                 sprintf(
                     __( 'Subscription payment awaiting confirmation (status: %s).', 'ys-shopline-via-woocommerce' ),
                     $status
@@ -494,7 +588,7 @@ class YSCreditSubscription extends YSGatewayBase {
             );
             $this->log( "Subscription payment on-hold (status: {$status}) for order #" . $order->get_id() );
 
-        } else {
+        } elseif ( YSTradeStatus::is_terminal_safe( $status ) ) {
             $error_msg = $response['msg'] ?? $response['message'] ?? __( 'Unknown payment status', 'ys-shopline-via-woocommerce' );
             $order->save();
             $order->update_status( 'failed',
@@ -505,7 +599,136 @@ class YSCreditSubscription extends YSGatewayBase {
                 )
             );
             $this->log( 'Subscription payment failed for order #' . $order->get_id() . ' - status: ' . $status, 'error' );
+        } else {
+            $order->save();
+            $this->put_recurring_on_hold(
+                $order,
+                sprintf(
+                    __( 'Subscription payment returned an unknown status (%s). The payment status requires manual confirmation.', 'ys-shopline-via-woocommerce' ),
+                    $status
+                )
+            );
+            $this->log( 'Subscription payment unknown for order #' . $order->get_id() . ' - status: ' . $status, 'error' );
         }
+    }
+
+    /**
+     * Resolve an indeterminate or existing renewal trade before creating a new one.
+     *
+     * @param \WC_Order $order Renewal order.
+     * @return bool True when a new recurring trade may be created.
+     */
+    protected function can_start_recurring_payment( $order ) {
+        $indeterminate = $this->resolve_indeterminate( $order );
+        if ( 'blocked' === $indeterminate ) {
+            $this->put_recurring_on_hold(
+                $order,
+                __( '訂閱續扣：前次付款結果仍在確認中，為避免重複扣款，本次未建立新交易。', 'ys-shopline-via-woocommerce' )
+            );
+            return false;
+        }
+
+        if ( $order->is_paid() ) {
+            return false;
+        }
+
+        $trade_order_id = trim( (string) $order->get_meta( YSOrderMeta::TRADE_ORDER_ID ) );
+        if ( '' === $trade_order_id ) {
+            return true;
+        }
+
+        // Renewal orders may inherit extension meta from the subscription. A trade is
+        // current only when its reference was generated for this renewal order.
+        $reference       = trim( (string) $order->get_meta( YSOrderMeta::REFERENCE_ORDER_ID ) );
+        $expected_prefix = (string) $order->get_id() . '_';
+        if ( '' === $reference || 0 !== strpos( $reference, $expected_prefix ) ) {
+            $this->clear_prior_payment_meta( $order );
+            $order->delete_meta_data( YSOrderMeta::REFERENCE_ORDER_ID );
+            $order->delete_meta_data( YSOrderMeta::PAYMENT_ATTEMPT );
+            $order->add_order_note( __( '訂閱續扣：已忽略從前一期複製而來的交易資料，將為本期建立獨立交易。', 'ys-shopline-via-woocommerce' ) );
+            $order->save();
+            return true;
+        }
+
+        $response = $this->api->get_payment_trade( $trade_order_id );
+        if ( is_wp_error( $response ) ) {
+            $this->put_recurring_on_hold(
+                $order,
+                __( '訂閱續扣：無法確認前次交易狀態，為避免重複扣款，本次未建立新交易。', 'ys-shopline-via-woocommerce' )
+            );
+            return false;
+        }
+
+        $status = strtoupper( trim( (string) ( $response['status'] ?? '' ) ) );
+        if ( YSTradeStatus::is_terminal_safe( $status ) ) {
+            $this->clear_prior_payment_meta( $order );
+            $order->add_order_note( sprintf(
+                __( '訂閱續扣：前次交易已確認終止（%s），允許建立新的續扣交易。', 'ys-shopline-via-woocommerce' ),
+                $status
+            ) );
+            return true;
+        }
+
+        if ( YSTradeStatus::is_paid( $status )
+            || YSTradeStatus::is_customer_pending( $status )
+            || YSTradeStatus::is_in_flight( $status ) ) {
+            $response['tradeOrderId'] = $trade_order_id;
+            $this->handle_recurring_response( $order, $response );
+            return false;
+        }
+
+        $this->put_recurring_on_hold(
+            $order,
+            sprintf(
+                __( '訂閱續扣：前次交易回傳未知狀態（%s），為避免重複扣款，本次未建立新交易。', 'ys-shopline-via-woocommerce' ),
+                $status ?: 'empty'
+            )
+        );
+        return false;
+    }
+
+    /**
+     * Persist an indeterminate recurring attempt and prevent alternate-card retry.
+     *
+     * @param \WC_Order $order         Renewal order.
+     * @param array     $attempt       Attempt envelope from try_recurring_charge().
+     * @param string    $instrument_id Instrument used for the attempt.
+     * @return void
+     */
+    protected function handle_recurring_unknown( $order, array $attempt, $instrument_id ) {
+        $payment_data   = isset( $attempt['payment_data'] ) && is_array( $attempt['payment_data'] ) ? $attempt['payment_data'] : array();
+        $idempotent_key = (string) ( $attempt['idempotent_key'] ?? '' );
+
+        $this->mark_indeterminate( $order, '{}', $idempotent_key, $payment_data );
+        $order->update_meta_data( YSOrderMeta::PAYMENT_STATUS, 'INDETERMINATE' );
+        $order->save();
+
+        $this->put_recurring_on_hold(
+            $order,
+            __( '訂閱續扣：SHOPLINE 回應不明，可能已扣款。為避免重複扣款，已停止 fallback 與後續重試，請等待 webhook 或人工核對。', 'ys-shopline-via-woocommerce' )
+        );
+
+        YSLogger::warning( 'Recurring payment indeterminate; alternate-card retry blocked', array(
+            'order_id'         => $order->get_id(),
+            'reference'        => (string) ( $payment_data['referenceOrderId'] ?? '' ),
+            'instrument_suffix'=> substr( (string) $instrument_id, -6 ),
+        ) );
+    }
+
+    /**
+     * Put a renewal on hold without duplicating status transitions.
+     *
+     * @param \WC_Order $order   Renewal order.
+     * @param string    $message Audit note/status message.
+     * @return void
+     */
+    protected function put_recurring_on_hold( $order, $message ) {
+        if ( 'on-hold' === $order->get_status() ) {
+            $order->add_order_note( $message );
+            return;
+        }
+
+        $order->update_status( 'on-hold', $message );
     }
 
     /**

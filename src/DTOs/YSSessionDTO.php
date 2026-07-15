@@ -9,6 +9,8 @@ declare(strict_types=1);
 
 namespace YangSheep\ShoplinePayment\DTOs;
 
+use YangSheep\ShoplinePayment\Utils\YSTradeStatus;
+
 defined( 'ABSPATH' ) || exit;
 
 /**
@@ -45,11 +47,13 @@ final class YSSessionDTO {
             throw new \Exception( '回應缺少 sessionId' );
         }
 
-        $trade_order_id = $response['tradeOrderId'] ?? null;
-        if ( empty( $trade_order_id ) && ! empty( $response['paymentDetails'] ) && is_array( $response['paymentDetails'] ) ) {
-            $first_payment  = reset( $response['paymentDetails'] );
-            $trade_order_id = is_array( $first_payment ) ? ( $first_payment['tradeOrderId'] ?? null ) : null;
-        }
+        // v3.5.36 Review P1（覆核五輪）：一律經共用嚴格 selector 從 paymentDetails 產生交易 ID——
+        // root tradeOrderId **不得**優先繞過安全判斷（否則多筆 active／malformed 時會用 root
+        // 遮蔽 selector 的 fail-closed，把較低風險或錯的那筆寫進訂單 meta）。
+        // selector 已對「盲取 [0]／多筆 active／未知／malformed」全數 fail-closed。
+        $details        = ( isset( $response['paymentDetails'] ) && is_array( $response['paymentDetails'] ) ) ? $response['paymentDetails'] : array();
+        $selected       = YSTradeStatus::select_representative_trade_id( $details );
+        $trade_order_id = ( '' !== $selected ) ? $selected : null;
 
         return new self(
             session_id: $response['sessionId'],

@@ -1508,27 +1508,33 @@ jQuery(function ($) {
                 if (!items.length) return;
                 clearInterval(intervalId);
 
+                // v3.5.36 P1: 只在「SDK 實際渲染出恰好一個 last4 相符 item」時才自動點選——
+                // 本地 WC token 數不等於 SDK 實際渲染（token 僅特定頁面同步、已有任一 token 便不補同步），
+                // 若兩張不同卡同末四碼、SDK 渲染出 2 個相符 item，自動點第一個會點錯卡。
+                var matches = [];
                 for (var i = 0; i < items.length; i++) {
-                    var text = items[i].innerText || '';
-                    if (text.indexOf(last4) >= 0) {
-                        var opts = { bubbles: true, cancelable: true, view: window };
-                        try {
-                            // React 用 root-based event delegation → 需完整 pointer 序列才認
-                            if (typeof PointerEvent !== 'undefined') {
-                                items[i].dispatchEvent(new PointerEvent('pointerdown', opts));
-                                items[i].dispatchEvent(new PointerEvent('pointerup', opts));
-                            }
-                            items[i].dispatchEvent(new MouseEvent('mousedown', opts));
-                            items[i].dispatchEvent(new MouseEvent('mouseup', opts));
-                            items[i].dispatchEvent(new MouseEvent('click', opts));
-                            console.log('[YS Shopline] v3.5.8 auto-selected default card ending ' + last4);
-                        } catch (e) {
-                            console.warn('[YS Shopline] v3.5.8 auto-select failed:', e.message);
-                        }
-                        return;
+                    if (String(items[i].innerText || '').indexOf(last4) >= 0) {
+                        matches.push(items[i]);
                     }
                 }
-                console.log('[YS Shopline] v3.5.8 default card last4=' + last4 + ' not found among ' + items.length + ' SDK items');
+                if (matches.length !== 1) {
+                    console.log('[YS Shopline] auto-select skipped: last4=' + last4 + ' matched ' + matches.length + ' SDK items (need exactly 1)');
+                    return;
+                }
+                var opts = { bubbles: true, cancelable: true, view: window };
+                try {
+                    // React 用 root-based event delegation → 需完整 pointer 序列才認
+                    if (typeof PointerEvent !== 'undefined') {
+                        matches[0].dispatchEvent(new PointerEvent('pointerdown', opts));
+                        matches[0].dispatchEvent(new PointerEvent('pointerup', opts));
+                    }
+                    matches[0].dispatchEvent(new MouseEvent('mousedown', opts));
+                    matches[0].dispatchEvent(new MouseEvent('mouseup', opts));
+                    matches[0].dispatchEvent(new MouseEvent('click', opts));
+                    console.log('[YS Shopline] v3.5.8 auto-selected default card ending ' + last4);
+                } catch (e) {
+                    console.warn('[YS Shopline] auto-select failed:', e.message);
+                }
             }, 300);
         },
 

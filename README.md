@@ -4,7 +4,7 @@
 
 ## 版本資訊
 
-- **目前版本**：3.5.34
+- **目前版本**：3.5.36
 - **PHP 需求**：>= 8.0
 - **WordPress 需求**：>= 6.0
 - **WooCommerce 需求**：7.0 - 9.0
@@ -65,6 +65,25 @@ https://your-domain.com/wp-json/ys-shopline/v1/webhook
 ---
 
 ## 變更紀錄
+
+### 3.5.36 - 2026-07-15
+
+**小範圍風險修正（承 v3.5.35／v3.5.36 多輪 CODEX／Claude 覆核）**
+
+- **🔴 API 錯誤三態＋不明付款封鎖（防雙扣）**：`process_payment()` 遇 API 錯誤不再一律當「未受理」。新增 `Utils\YSApiError` 分類器：僅「明確 rejected allowlist」（建立前參數/驗簽/權限/設定錯誤，或銀行拒絕、卡片失效、定期付款無法完成等明確終止結果）視為 rejected，**其餘（timeout／空回應／JSON 解析失敗，以及 1001 交易已存在／4003 通路 timeout／4458 processing／1018 未知原因等業務碼）一律 unknown**。所有 return 改帶 `remote_outcome`（`accepted`／`rejected`／`unknown`，消費端完整 switch、未知值 fail-closed）取代原 bool `accepted`。unknown 時標記訂單 `_ys_shopline_indeterminate_ref` 並在**主結帳與 order-pay 產生新 referenceOrderId/冪等鍵前封鎖再建交易**，避免「遠端已建交易但我方未收到→下次用新鍵建第二筆」的雙扣。
+- **不明付款收斂（全金流）**：webhook `trade.succeeded/captured` 新增 exact-indeterminate-reference 路徑——以精確 referenceOrderId 命中封鎖訂單、核對 gateway＋金額＋幣別後接管交易入帳（不再僅限 ATM reference fallback）；`trade.failed/expired` 以 exact reference 解除封鎖、允許重試。另加 `query_session` 正向接管：查得 `paymentDetails.tradeOrderId` 才接管，查不到不放行（官方將 paymentDetails 定義為選填）。
+- **重新付款失敗回復語意**：依 `remote_outcome` 完整分流——`rejected` 才完整還原付款方式 **ID＋title**（含清空、含同 ID 不同 title）並以頁內 failure 呈現原因；`unknown` 不還原（可能已建交易，還原會孤兒化）改顯示「確認中、勿重複付款」；`accepted` 原樣回傳。
+- **訂閱首扣 meta 僅在明確受理時寫**：`YSCreditSubscription` 改以 `remote_outcome === 'accepted'` 為條件（不再用 `result==='success'`／`accepted!==false`，避免 rejected 的 success+redirect 或 unknown 誤寫綁卡 meta）；order-not-found 分支補三態。
+- **同末四碼自動選卡點錯風險**：卡片唯一性改依 **distinct SHOPLINE instrument ID**（`$token->get_token()`）而非 WC token 筆數；PHP 僅在唯一時送 `default_card_last4`。前端 `_tryAutoSelectDefaultCard` 再加一層：**只在 SDK 實際渲染出恰好一個 last4 相符 item 時才自動點選**（本地 token 不等於 SDK 渲染），撞號則不點、改手選。
+- **abandoned-paid 三分類＋backfill＋可結案**：`guard_abandoned_trade_paid` 依 `already_paid` 三分——`duplicate_paid`（現行已付款＝重複收款→退舊）／`abandoned_paid_current_exists`（棄用實收、現行另有交易，**其狀態未查證、要求人工核對，不宣稱待付款**，舊交易才是實收→勿盲退）／`paid_no_current_trade`（棄用唯一收款、未入帳）；冪等改「本筆已建 review data 才跳過」，使 v3.5.35 僅寫 paid-list 的舊事件（如 #11824）能 backfill 補上旗標；持久化 `_ys_shopline_manual_review` 後台可追蹤（訂單列表「SLP審核」欄🔴／✔＋編輯頁告警），「訂單動作→標記已結案」（`_ys_shopline_manual_review_resolved`）；一律不自動 `payment_complete`。
+- **覆核二輪 P0 加固**：① 成功回應**缺 `tradeOrderId`（契約必填）一律 unknown＋標記封鎖**（nextAction/CREATED 亦然），杜絕「無 marker、無 trade ID→下次遞增 reference 建第二筆」的繞過。② `query_session` 正向接管改**核對 session root（`referenceId`＋`amount`＋幣別）並只接管 paymentDetails 中「已收款」那筆**（不選第一筆，杜絕 `[FAILED old, SUCCEEDED new]` 選到 old_failed 後誤放行；paymentDetails 元素僅含 tradeOrderId/status/paymentMethod，reference/amount 在 root）。③ 移除「任何 `TRADE_ORDER_ID` 即清 marker」的泛化（舊失敗交易 meta 不再誤清；解除封鎖僅靠 is_paid 或 webhook exact convergence）。④ webhook 接管前的方式核對改比對 **marker 存的期望 SHOPLINE payment method vs webhook payload `payment.paymentMethod`**（非本地 WC gateway）。
+- **覆核三輪：接管全面 fail-closed（杜絕 fail-open 漏接管）**：① `query_session` 正向接管改為 **session root 必須完整且完全相符**（`referenceId`＋`amount`＋幣別任一缺失或不符即不接管，取代「有值才比、缺值放行」）；paid detail 必須 **`paymentMethod` 與期望 SHOPLINE method 相符**（官方列為必填，缺失視為不符）；依 **distinct tradeOrderId 去重後恰好一筆已收款才接管**，零筆或多筆（雙付款異常）一律維持封鎖。② webhook 接管：**payload 缺 `payment.paymentMethod` 視為 malformed → 拒絕**（不再僅憑 reference／金額／幣別就清 marker 入帳）。③ 抽出單一共用嚴格 selector `Utils\YSTradeStatus::select_representative_trade_id()`（唯一已收款 > 唯一顧客處理中 > 留空），**`YSSessionDTO::from_response` 狀態同步不再盲取 `paymentDetails[0]`**（同修 `[FAILED old, SUCCEEDED new]` 誤選舊失敗筆），resolver 與狀態同步共用同一規則、不再各行其是。
+- **覆核四輪：selector 納入在途/未知＋marker 保存實送 envelope**：① 共用 selector 改為 **忽略 terminal-safe、其餘可辨識狀態（已收款／顧客處理中／在途 `PROCESSING`·`AUTHORIZED`·`PENDING`）皆算 active、未知或空狀態一律 fail-closed 回空、去重後恰好一筆 active 才回**——修正原本只看「已收款／顧客處理中」而**忽略在途與未知交易**，導致每小時狀態同步（`YSSessionDTO`→`YSStatusManager`）誤寫較低風險或已付款交易、遮蔽另一筆仍可能收款的交易（後續重付或第二筆 capture 形成未告警的重複收款）。單筆在途會被回傳供狀態同步追蹤，接管入帳仍由 `is_paid()` 把關。② **indeterminate marker 改保存「實際送給 SHOPLINE 的 request envelope」** — `mark_indeterminate()` 接收 `$payment_data`，記錄實送 `referenceOrderId`／`amount.value`／`currency`／`confirm.paymentMethod`，不再用 Woo 訂單總額與 gateway method 重算。修正**零元訂閱回歸**：CardBind 實送 `amount=10100` 但 marker 記 `0`，導致 unknown 後 `query_session`／paid webhook 金額核對永遠失敗、訂單持續鎖定。
+- **覆核五輪：selector 對 malformed 明細 fail-closed＋DTO root 不得繞過**：① 共用 selector 對 **malformed 明細（非陣列／缺 `tradeOrderId`／缺 `status`）一律回空**，**唯一允許忽略（continue）的是「欄位完整且 terminal-safe」**——杜絕「另一筆無法識別但仍在途的交易」被靜默略過後、resolver 誤接管較低風險那筆並清 marker（`[SUCCEEDED paid-a, PROCESSING 缺 tradeOrderId]` 原會接管 paid-a）。② `YSSessionDTO::from_response` **一律經共用 selector 從 `paymentDetails` 產生交易 ID，root `tradeOrderId` 不再優先繞過安全判斷**——原本「root 有值就用、root 空才跑 selector」會讓多筆 active／malformed 時用 root 遮蔽 selector 的 fail-closed，把較低風險或錯的那筆寫進訂單 meta。
+- **排程續扣納入同一三態防雙扣契約**：`process_subscription_payment()` 不再把所有 `WP_Error` 當成可換卡重試；只有明確 `rejected` 才能從訂閱綁定卡 fallback 到使用者預設卡。timeout／空回應／解析失敗、成功樣回應缺 `tradeOrderId`、未知狀態一律保存實送 reference／金額／幣別／方式為 indeterminate，停止第二張卡與後續新 reference；`PROCESSING`／`PENDING`／`AUTHORIZED` 等在途狀態保留交易並轉 `on-hold`。官方明列的銀行拒絕與定期付款 `4900`～`4902` 納入明確 rejected，避免正常拒絕被誤鎖。
+- **續扣前次交易與跨期 meta 隔離**：每次排程扣款在建立新交易前先收斂 indeterminate 與本期既存 trade；已收款完成訂單、終態才放行重試、在途／未知／查詢失敗均阻擋。依 WooCommerce Subscriptions 的 opt-out 複製機制，新增 `wcs_renewal_order_meta_query` 排除交易 ID、reference、狀態、review、indeterminate 等 order-scoped meta，只保留 subscription-scoped customer／instrument；並以 `{renewal_order_id}_` reference 前綴辨識及清除既有跨期殘留。
+- **query_session 正向收斂完成入帳**：嚴格核對後確認唯一已收款交易時，除寫入 trade/status 與清 marker，也立即呼叫 `payment_complete()`；排程續扣不再依賴不存在的前端 redirect handler 才完成訂單。
+- **版控契約測試**：新增 standalone selector／DTO／API 三態／訂閱續扣整合測試，固定命令 `php tests/run.php`；測試涵蓋 timeout 與業務碼 `1001`／`4003` unknown 不 fallback、缺 trade ID 封鎖、`4450`／`4900` 明確拒絕才換卡、同卡不重試、`90011_` 不誤判為訂單 `9001_` reference 前綴、退款／空白／未知前次狀態、既存 in-flight/indeterminate pre-create guard、跨期 meta 排除。`tests/` 由 `.gitattributes export-ignore` 排除，不進 release zip。
 
 ### 3.5.35 - 2026-07-14
 

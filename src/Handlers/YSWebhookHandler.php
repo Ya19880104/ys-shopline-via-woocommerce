@@ -314,6 +314,10 @@ final class YSWebhookHandler {
             return;
         }
 
+        // v3.5.36 P0-A+：收斂 indeterminate（前次不明付款）——以 exact reference＋gateway＋金額幣別
+        // 核對後接管交易（設 TRADE_ORDER_ID、解除封鎖），後續由 get_order_by_trade_id 正常入帳。
+        $this->converge_indeterminate_paid( (string) $trade_order_id, $data );
+
         // v3.5.35 Review P1-2：命中已棄用交易 → 記重複收款警示、不覆寫現行交易 meta
         if ( $this->guard_abandoned_trade_paid( (string) $trade_order_id, $data ) ) {
             return;
@@ -396,6 +400,9 @@ final class YSWebhookHandler {
             return;
         }
 
+        // v3.5.36 P0-A+：對應 indeterminate 訂單失敗＝該不明交易未收款 → exact reference 解除鎖定、允許重試
+        $this->release_indeterminate_terminal( $data, 'FAILED' );
+
         $order = $this->get_order_by_trade_id( $trade_order_id );
 
         if ( ! $order || $order->is_paid() ) {
@@ -450,6 +457,9 @@ final class YSWebhookHandler {
         if ( ! $trade_order_id ) {
             return;
         }
+
+        // v3.5.36 P0-A+：收斂 indeterminate（前次不明付款）→ 接管交易，後續正常入帳。
+        $this->converge_indeterminate_paid( (string) $trade_order_id, $data );
 
         // v3.5.35 Review P1-2：命中已棄用交易 → 記重複收款警示、不覆寫現行交易 meta
         if ( $this->guard_abandoned_trade_paid( (string) $trade_order_id, $data ) ) {
@@ -534,6 +544,9 @@ final class YSWebhookHandler {
         if ( ! $trade_order_id ) {
             return;
         }
+
+        // v3.5.36 P0-A+：對應 indeterminate 訂單過期＝該不明交易未收款 → exact reference 解除鎖定、允許重試
+        $this->release_indeterminate_terminal( $data, 'EXPIRED' );
 
         $order = $this->get_order_by_trade_id( $trade_order_id );
 
@@ -933,8 +946,11 @@ final class YSWebhookHandler {
      *   - 舊 tradeOrderId 已非現行交易（TRADE_ORDER_ID 已清），get_order_by_trade_id 查無；
      *   - 非 ATM 會被 reference fallback 拒絕而「靜默丟棄」；
      *   - ATM 反而可能經 fallback 入帳 → 覆寫現行交易 meta / 重複標記已付款。
-     * 一律在此攔下：以 referenceOrderId 反推訂單、比對歸檔清單，命中則記
-     * 🔴 重複收款警示 note + ERROR log，**不觸發 payment_complete、不覆寫現行交易**。
+     * 一律在此攔下（v3.5.36 Review 強化）：以 referenceOrderId 反推訂單、比對歸檔清單，命中則：
+     *   - 冪等前置：重送同一筆 → 只記 INFO、不重複 note/告警/ERROR log；
+     *   - 區分「有現行交易(純重複→退舊)」vs「無現行交易(顧客付了但訂單無現行交易→更急)」；
+     *   - 持久化人工審核旗標（後台可追蹤/查詢）＋分流 note＋ERROR log；
+     *   - **不觸發 payment_complete、不覆寫現行交易**，保留人工入帳/退款判斷。
      *
      * @param string $trade_order_id 傳入交易 ID。
      * @param array  $data           Webhook payload。
@@ -946,33 +962,82 @@ final class YSWebhookHandler {
             return false;
         }
 
+        // 冪等/backfill 前置：只有「這筆棄用交易已建立過人工審核明細」才跳過。
+        // v3.5.35 只寫了 ABANDONED_TRADE_PAID_IDS 而無 MANUAL_REVIEW_DATA（例如 #11824），
+        // 那類「在 paid-list 但缺 review data」要補寫一次（backfill），不能提早 return。
+        $review_data = (array) $order->get_meta( YSOrderMeta::MANUAL_REVIEW_DATA );
+        foreach ( $review_data as $rd ) {
+            if ( is_array( $rd ) && isset( $rd['abandoned_trade'] ) && (string) $rd['abandoned_trade'] === $trade_order_id ) {
+                YSLogger::info( 'Webhook: abandoned-trade paid notice re-sent, already reviewed (idempotent skip)', array(
+                    'order_id'        => $order->get_id(),
+                    'abandoned_trade' => $trade_order_id,
+                ) );
+                return true;
+            }
+        }
+
         $current_trade = (string) $order->get_meta( YSOrderMeta::TRADE_ORDER_ID );
+        $has_current   = ( '' !== $current_trade && $current_trade !== $trade_order_id );
         $already_paid  = $order->is_paid();
 
-        YSLogger::error( 'Webhook: 收到已棄用交易的付款通知（重複收款風險）', array(
-            'order_id'           => $order->get_id(),
-            'abandoned_trade'    => $trade_order_id,
-            'current_trade'      => $current_trade,
-            'order_already_paid' => $already_paid ? 'yes' : 'no',
-        ) );
-
-        // 記錄「已棄用但事後收款」的交易，供後台/報表追蹤與去重
-        $paid_abandoned   = (array) $order->get_meta( YSOrderMeta::ABANDONED_TRADE_PAID_IDS );
-        if ( in_array( $trade_order_id, $paid_abandoned, true ) ) {
-            // 同一筆重送 → 已標記過，不重複寫 note
-            return true;
+        // v3.5.36 三分類（用 already_paid 區分，避免把「現行交易只是待付款」誤導成退舊交易）：
+        if ( $already_paid ) {
+            $review_type = 'duplicate_paid';               // 現行已付款＋棄用也收款＝重複收款
+        } elseif ( $has_current ) {
+            // v3.5.36 Review P1-4：僅知「訂單另有一筆交易」，其狀態（pending/failed/authorized…）未查證，
+            // 不可宣稱「現行待付款/未收款」以免誤導退款。中性分類，要求人工核對現行交易狀態。
+            $review_type = 'abandoned_paid_current_exists';
+        } else {
+            $review_type = 'paid_no_current_trade';          // 棄用是唯一收款、訂單未入帳
         }
+
+        // 持久化：已收款棄用清單（去重）＋人工審核旗標＋結構化明細（後台可追蹤/查詢）；新事件清 resolved
+        $paid_abandoned   = (array) $order->get_meta( YSOrderMeta::ABANDONED_TRADE_PAID_IDS );
         $paid_abandoned[] = $trade_order_id;
         $order->update_meta_data( YSOrderMeta::ABANDONED_TRADE_PAID_IDS, array_values( array_unique( array_filter( $paid_abandoned ) ) ) );
 
-        $order->add_order_note( sprintf(
-            /* translators: 1: abandoned trade id, 2: current trade id, 3: paid state */
-            __( '🔴 Shopline 金流：收到「已棄用交易」%1$s 的收款通知——此交易先前因顧客未完成而被棄用，顧客事後仍完成付款。現行交易＝%2$s、訂單付款狀態＝%3$s。**已阻擋自動入帳以免覆寫現行交易**；請人工確認是否重複收款並辦理退款。', 'ys-shopline-via-woocommerce' ),
-            $trade_order_id,
-            '' !== $current_trade ? $current_trade : '（無）',
-            $already_paid ? '已付款' : '未付款'
-        ) );
+        $review_data[] = array(
+            'type'            => $review_type,
+            'abandoned_trade' => $trade_order_id,
+            'current_trade'   => $current_trade,
+            'order_paid'      => $already_paid ? 'yes' : 'no',
+            'ts'              => time(),
+        );
+        $order->update_meta_data( YSOrderMeta::MANUAL_REVIEW_DATA, $review_data );
+        $order->update_meta_data( YSOrderMeta::MANUAL_REVIEW_FLAG, $review_type );
+        $order->delete_meta_data( YSOrderMeta::MANUAL_REVIEW_RESOLVED );
+
+        if ( 'duplicate_paid' === $review_type ) {
+            $note = sprintf(
+                /* translators: 1: abandoned trade id, 2: current trade id */
+                __( '🔴 Shopline 金流【需人工處理・重複收款】：現行交易 %2$s 已付款，棄用交易 %1$s 事後也完成收款＝重複收款。**已阻擋自動入帳**——請對「棄用交易 %1$s」辦理退款。', 'ys-shopline-via-woocommerce' ),
+                $trade_order_id,
+                $current_trade
+            );
+        } elseif ( 'abandoned_paid_current_exists' === $review_type ) {
+            $note = sprintf(
+                /* translators: 1: abandoned trade id, 2: current trade id */
+                __( '🔴 Shopline 金流【需人工處理・棄用實收/現行另有交易】：棄用交易 %1$s 已實際收款，訂單另有一筆現行交易 %2$s（**其狀態請人工至 SHOPLINE 後台核對**）。棄用交易才是已確認的實際收款——**請勿盲目退舊**；請核對現行交易 %2$s 實際狀態後，決定以哪一筆入帳、另一筆退款。', 'ys-shopline-via-woocommerce' ),
+                $trade_order_id,
+                $current_trade
+            );
+        } else {
+            $note = sprintf(
+                /* translators: %s: abandoned trade id */
+                __( '🔴 Shopline 金流【需人工處理・已付款未入帳】：訂單目前無現行有效交易，但棄用交易 %s 事後已完成收款。顧客實際已付款、訂單卻未入帳。**本外掛不自動 payment_complete**——請人工決定：確認入帳或辦理退款。', 'ys-shopline-via-woocommerce' ),
+                $trade_order_id
+            );
+        }
+        $order->add_order_note( $note );
         $order->save();
+
+        YSLogger::error( 'Webhook: abandoned trade paid, manual review required', array(
+            'order_id'           => $order->get_id(),
+            'abandoned_trade'    => $trade_order_id,
+            'current_trade'      => $current_trade,
+            'review_type'        => $review_type,
+            'order_already_paid' => $already_paid ? 'yes' : 'no',
+        ) );
 
         return true;
     }
@@ -1005,6 +1070,147 @@ final class YSWebhookHandler {
 
         $abandoned = (array) $order->get_meta( YSOrderMeta::ABANDONED_TRADE_IDS );
         return in_array( $trade_order_id, $abandoned, true ) ? $order : null;
+    }
+
+    /**
+     * v3.5.36 P0-A+：收斂 indeterminate（前次不明付款）訂單的收款 webhook（全金流，不限 ATM）。
+     *
+     * 以 exact referenceOrderId 命中 INDETERMINATE_REF，核對 gateway＋金額＋幣別後接管：
+     * 設 TRADE_ORDER_ID＝本次交易、清除封鎖標記；後續由 get_order_by_trade_id 正常入帳。
+     * 核對不符則不接管（fail-closed），避免張冠李戴。
+     *
+     * @param string $trade_order_id 交易 ID。
+     * @param array  $data           Webhook payload。
+     * @return void
+     */
+    private function converge_indeterminate_paid( string $trade_order_id, array $data ): void {
+        $order = $this->find_indeterminate_order( $data );
+        if ( ! $order ) {
+            return;
+        }
+        if ( ! $this->validate_indeterminate_match( $order, $data ) ) {
+            return;
+        }
+
+        $order->update_meta_data( YSOrderMeta::TRADE_ORDER_ID, $trade_order_id );
+        $order->delete_meta_data( YSOrderMeta::INDETERMINATE_REF );
+        $order->delete_meta_data( YSOrderMeta::INDETERMINATE_DATA );
+        if ( 'INDETERMINATE' === (string) $order->get_meta( YSOrderMeta::PAYMENT_STATUS ) ) {
+            $order->delete_meta_data( YSOrderMeta::PAYMENT_STATUS );
+        }
+        $order->add_order_note( sprintf(
+            /* translators: %s: adopted trade id */
+            __( 'Shopline 金流：webhook 確認前次不明付款已建立並收款（交易 %s），已接管入帳。', 'ys-shopline-via-woocommerce' ),
+            $trade_order_id
+        ) );
+        $order->save();
+        YSLogger::info( 'Webhook: converged indeterminate order via exact reference', array(
+            'order_id'       => $order->get_id(),
+            'trade_order_id' => $trade_order_id,
+        ) );
+    }
+
+    /**
+     * v3.5.36 P0-A+：indeterminate 訂單的對應交易終結（failed/expired）→ 解除封鎖、允許重試。
+     *
+     * @param array  $data  Webhook payload。
+     * @param string $event 終結事件（FAILED/EXPIRED）。
+     * @return void
+     */
+    private function release_indeterminate_terminal( array $data, string $event ): void {
+        $order = $this->find_indeterminate_order( $data );
+        if ( ! $order ) {
+            return;
+        }
+
+        $order->delete_meta_data( YSOrderMeta::INDETERMINATE_REF );
+        $order->delete_meta_data( YSOrderMeta::INDETERMINATE_DATA );
+        if ( 'INDETERMINATE' === (string) $order->get_meta( YSOrderMeta::PAYMENT_STATUS ) ) {
+            $order->delete_meta_data( YSOrderMeta::PAYMENT_STATUS );
+        }
+        $order->add_order_note( sprintf(
+            /* translators: %s: terminal event */
+            __( 'Shopline 金流：webhook 確認前次不明付款交易已 %s（未收款），已解除鎖定、可重新付款。', 'ys-shopline-via-woocommerce' ),
+            $event
+        ) );
+        $order->save();
+        YSLogger::info( 'Webhook: released indeterminate lock on terminal event', array(
+            'order_id' => $order->get_id(),
+            'event'    => $event,
+        ) );
+    }
+
+    /**
+     * v3.5.36 P0-A+：以 exact referenceOrderId 反查「處於 indeterminate 封鎖」的訂單。
+     *
+     * @param array $data Webhook payload。
+     * @return \WC_Order|null
+     */
+    private function find_indeterminate_order( array $data ): ?\WC_Order {
+        $reference = (string) ( $data['referenceOrderId'] ?? '' );
+        if ( '' === $reference ) {
+            return null;
+        }
+        $order_id = $this->extract_order_id_from_reference_order_id( $reference );
+        if ( ! $order_id ) {
+            return null;
+        }
+        $order = wc_get_order( $order_id );
+        if ( ! $order ) {
+            return null;
+        }
+        $marker = (string) $order->get_meta( YSOrderMeta::INDETERMINATE_REF );
+        return ( '' !== $marker && $marker === $reference ) ? $order : null;
+    }
+
+    /**
+     * v3.5.36 P0-A+：接管 indeterminate 交易前核對 gateway＋金額＋幣別（fail-closed）。
+     *
+     * @param \WC_Order $order 訂單。
+     * @param array     $data  Webhook payload。
+     * @return bool
+     */
+    private function validate_indeterminate_match( \WC_Order $order, array $data ): bool {
+        $meta       = (array) $order->get_meta( YSOrderMeta::INDETERMINATE_DATA );
+        $exp_method = isset( $meta['shopline_method'] ) ? (string) $meta['shopline_method'] : '';
+        $exp_amt    = isset( $meta['amount'] ) ? (int) $meta['amount'] : 0;
+        $exp_cur    = isset( $meta['currency'] ) ? (string) $meta['currency'] : '';
+
+        // v3.5.36 Review P2：核對「預期 SHOPLINE payment method」與 webhook payload 的 payment.paymentMethod
+        //（非訂單本地 WC gateway；兩者詞彙不同）。
+        $webhook_method = (string) ( $data['paymentMethod'] ?? ( $data['payment']['paymentMethod'] ?? '' ) );
+        // v3.5.36 Review P1：官方成功 webhook 必含 payment.paymentMethod；缺失視為 malformed → 拒絕，
+        // 不得僅憑 reference／金額／幣別就清 marker 並入帳。
+        if ( '' === $webhook_method ) {
+            YSLogger::warning( 'Indeterminate converge rejected: webhook missing paymentMethod (malformed)', array(
+                'order_id' => $order->get_id(),
+            ) );
+            return false;
+        }
+        if ( '' !== $exp_method && $exp_method !== $webhook_method ) {
+            YSLogger::warning( 'Indeterminate converge rejected: payment method mismatch', array(
+                'order_id'        => $order->get_id(),
+                'expected_method' => $exp_method,
+                'webhook_method'  => $webhook_method,
+            ) );
+            return false;
+        }
+
+        $amount_value = $data['payment']['paidAmount']['value'] ?? ( $data['order']['amount']['value'] ?? null );
+        $currency     = (string) ( $data['payment']['paidAmount']['currency'] ?? ( $data['order']['amount']['currency'] ?? '' ) );
+        if ( ! is_numeric( $amount_value ) || '' === $currency ) {
+            YSLogger::warning( 'Indeterminate converge rejected: missing amount/currency', array( 'order_id' => $order->get_id() ) );
+            return false;
+        }
+        if ( (int) $amount_value !== $exp_amt || $currency !== $exp_cur ) {
+            YSLogger::warning( 'Indeterminate converge rejected: amount/currency mismatch', array(
+                'order_id'  => $order->get_id(),
+                'expected'  => $exp_amt . $exp_cur,
+                'got'       => $amount_value . $currency,
+            ) );
+            return false;
+        }
+        return true;
     }
 
     private function get_order_for_paid_trade_webhook( array $data ): ?\WC_Order {

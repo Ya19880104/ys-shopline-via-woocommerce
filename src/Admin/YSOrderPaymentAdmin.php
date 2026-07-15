@@ -29,6 +29,196 @@ final class YSOrderPaymentAdmin {
 
 		add_action( 'add_meta_boxes', array( $instance, 'register_meta_boxes' ), 20, 2 );
 		add_action( 'admin_footer', array( $instance, 'render_subscription_binding_position_script' ) );
+		// v3.5.36: abandoned-paid 需人工處理告警（訂單編輯頁顯眼橫幅）＋結案動作
+		add_action( 'admin_notices', array( $instance, 'render_manual_review_notice' ) );
+		add_filter( 'woocommerce_order_actions', array( $instance, 'add_resolve_review_order_action' ), 10, 2 );
+		add_action( 'woocommerce_order_action_ys_shopline_resolve_review', array( $instance, 'handle_resolve_review_order_action' ) );
+		// v3.5.36 Review P2-6：訂單列表欄位（HPOS＋傳統）——全域一覽待人工處理訂單
+		add_filter( 'manage_woocommerce_page_wc-orders_columns', array( $instance, 'add_review_list_column' ) );
+		add_action( 'manage_woocommerce_page_wc-orders_custom_column', array( $instance, 'render_review_list_column_hpos' ), 10, 2 );
+		add_filter( 'manage_edit-shop_order_columns', array( $instance, 'add_review_list_column' ) );
+		add_action( 'manage_shop_order_posts_custom_column', array( $instance, 'render_review_list_column_legacy' ), 10, 2 );
+	}
+
+	/**
+	 * v3.5.36 P2-6：訂單列表加「SLP審核」欄。
+	 *
+	 * @param array $columns 現有欄位。
+	 * @return array
+	 */
+	public function add_review_list_column( $columns ) {
+		if ( is_array( $columns ) ) {
+			$columns['ys_shopline_review'] = __( 'SLP審核', 'ys-shopline-via-woocommerce' );
+		}
+		return $columns;
+	}
+
+	/**
+	 * HPOS 欄位渲染。
+	 *
+	 * @param string          $column 欄位鍵。
+	 * @param \WC_Order|mixed  $order  訂單。
+	 * @return void
+	 */
+	public function render_review_list_column_hpos( $column, $order ): void {
+		if ( 'ys_shopline_review' === $column && $order instanceof \WC_Order ) {
+			echo wp_kses_post( $this->review_cell_html( $order ) );
+		}
+	}
+
+	/**
+	 * 傳統（post）欄位渲染。
+	 *
+	 * @param string $column  欄位鍵。
+	 * @param int    $post_id 訂單 post ID。
+	 * @return void
+	 */
+	public function render_review_list_column_legacy( $column, $post_id ): void {
+		if ( 'ys_shopline_review' !== $column ) {
+			return;
+		}
+		$order = wc_get_order( $post_id );
+		if ( $order instanceof \WC_Order ) {
+			echo wp_kses_post( $this->review_cell_html( $order ) );
+		}
+	}
+
+	/**
+	 * 產生審核欄 HTML（🔴 待處理／✔ 已結案／空）。
+	 *
+	 * @param \WC_Order $order 訂單。
+	 * @return string
+	 */
+	private function review_cell_html( \WC_Order $order ): string {
+		$flag = (string) $order->get_meta( YSOrderMeta::MANUAL_REVIEW_FLAG );
+		if ( '' === $flag ) {
+			return '';
+		}
+		if ( (int) $order->get_meta( YSOrderMeta::MANUAL_REVIEW_RESOLVED ) > 0 ) {
+			return '<span title="' . esc_attr__( 'SHOPLINE 付款審核已結案', 'ys-shopline-via-woocommerce' ) . '">✔️</span>';
+		}
+		return '<span style="color:#d63638;font-weight:bold" title="' . esc_attr__( 'SHOPLINE 付款需人工處理', 'ys-shopline-via-woocommerce' ) . '">🔴</span>';
+	}
+
+	/**
+	 * v3.5.36 P2：在訂單「動作」下拉加入「標記 SHOPLINE 人工審核已結案」（僅在有待處理旗標且未結案時）。
+	 *
+	 * @param array           $actions 現有動作。
+	 * @param \WC_Order|mixed  $order   訂單（WC 版本差異，可能未傳）。
+	 * @return array
+	 */
+	public function add_resolve_review_order_action( $actions, $order = null ) {
+		if ( ! $order instanceof \WC_Order ) {
+			return $actions;
+		}
+		$flag     = (string) $order->get_meta( YSOrderMeta::MANUAL_REVIEW_FLAG );
+		$resolved = (int) $order->get_meta( YSOrderMeta::MANUAL_REVIEW_RESOLVED );
+		if ( '' !== $flag && $resolved <= 0 ) {
+			$actions['ys_shopline_resolve_review'] = __( '標記 SHOPLINE 付款審核已結案', 'ys-shopline-via-woocommerce' );
+		}
+		return $actions;
+	}
+
+	/**
+	 * v3.5.36 P2：執行「結案」——寫入結案時間戳，之後不再列入待處理、不再顯示告警橫幅。
+	 *
+	 * @param \WC_Order $order 訂單。
+	 * @return void
+	 */
+	public function handle_resolve_review_order_action( $order ): void {
+		if ( ! $order instanceof \WC_Order ) {
+			return;
+		}
+		$order->update_meta_data( YSOrderMeta::MANUAL_REVIEW_RESOLVED, time() );
+		$order->add_order_note( sprintf(
+			/* translators: %s: current user display name */
+			__( 'SHOPLINE 付款人工審核已由 %s 標記結案。', 'ys-shopline-via-woocommerce' ),
+			wp_get_current_user()->display_name ?: 'admin'
+		) );
+		$order->save();
+	}
+
+	/**
+	 * v3.5.36: 在訂單編輯頁顯示「需人工處理」告警（abandoned-trade 事後收款）。
+	 *
+	 * 旗標由 YSWebhookHandler::guard_abandoned_trade_paid 持久化於訂單 meta，
+	 * 後台亦可用 wc_get_orders( array( 'meta_key' => MANUAL_REVIEW_FLAG ) ) 追蹤全部待處理訂單。
+	 *
+	 * @return void
+	 */
+	public function render_manual_review_notice(): void {
+		$order = $this->resolve_current_screen_order();
+		if ( ! $order ) {
+			return;
+		}
+
+		$flag = (string) $order->get_meta( YSOrderMeta::MANUAL_REVIEW_FLAG );
+		if ( '' === $flag ) {
+			return;
+		}
+		// v3.5.36 P2：已結案 → 不再顯示告警橫幅
+		if ( (int) $order->get_meta( YSOrderMeta::MANUAL_REVIEW_RESOLVED ) > 0 ) {
+			return;
+		}
+
+		switch ( $flag ) {
+			case 'paid_no_current_trade':
+				$msg = __( '本訂單目前無現行有效交易，但有一筆「已棄用交易」事後完成收款——顧客實際已付款、訂單卻未入帳。系統不會自動入帳，請人工決定確認入帳或辦理退款。', 'ys-shopline-via-woocommerce' );
+				break;
+			case 'abandoned_paid_current_exists':
+				$msg = __( '本訂單有一筆「已棄用交易」已實際收款，且訂單另有一筆現行交易（其狀態請至 SHOPLINE 後台核對）。棄用交易才是已確認的實際收款，請勿盲目退舊；請核對現行交易狀態後決定以哪一筆入帳、另一筆退款。', 'ys-shopline-via-woocommerce' );
+				break;
+			case 'duplicate_paid':
+			default:
+				$msg = __( '本訂單現行交易已付款，但有一筆「已棄用交易」事後也完成收款——屬重複收款。請對「已棄用交易」辦理退款。', 'ys-shopline-via-woocommerce' );
+				break;
+		}
+		$msg .= __( '（詳見下方訂單備註；處理後可於「訂單動作」選「標記 SHOPLINE 付款審核已結案」。）', 'ys-shopline-via-woocommerce' );
+
+		printf(
+			'<div class="notice notice-error"><p><strong>%s</strong>%s</p></div>',
+			esc_html__( '🔴 SHOPLINE 付款需人工處理：', 'ys-shopline-via-woocommerce' ),
+			esc_html( $msg )
+		);
+	}
+
+	/**
+	 * v3.5.36: 解析目前訂單編輯畫面對應的訂單（相容 HPOS ?id= 與傳統 ?post=）。
+	 *
+	 * @return \WC_Order|null
+	 */
+	private function resolve_current_screen_order() {
+		if ( ! function_exists( 'get_current_screen' ) ) {
+			return null;
+		}
+		$screen = get_current_screen();
+		if ( ! $screen ) {
+			return null;
+		}
+
+		$is_order_screen = in_array( $screen->id, array( 'shop_order', 'woocommerce_page_wc-orders' ), true )
+			|| ( isset( $screen->post_type ) && 'shop_order' === $screen->post_type );
+		if ( ! $is_order_screen ) {
+			return null;
+		}
+
+		// 唯讀顯示閘門，僅據以決定是否顯示告警，不執行任何動作。
+		$order_id = 0;
+		// phpcs:ignore WordPress.Security.NonceVerification.Recommended
+		if ( isset( $_GET['id'] ) ) {
+			// phpcs:ignore WordPress.Security.NonceVerification.Recommended
+			$order_id = absint( wp_unslash( $_GET['id'] ) );
+			// phpcs:ignore WordPress.Security.NonceVerification.Recommended
+		} elseif ( isset( $_GET['post'] ) ) {
+			// phpcs:ignore WordPress.Security.NonceVerification.Recommended
+			$order_id = absint( wp_unslash( $_GET['post'] ) );
+		}
+		if ( ! $order_id ) {
+			return null;
+		}
+
+		$order = wc_get_order( $order_id );
+		return $order ? $order : null;
 	}
 
 	/**

@@ -3,7 +3,7 @@
  * Plugin Name: YS Shopline via WooCommerce
  * Plugin URI: https://yangsheep.com.tw
  * Description: Support Shopline Payments for WooCommerce, including HPOS and Subscriptions. Supports Credit Card, ATM, JKOPay, Apple Pay, LINE Pay, and Chailease BNPL.
- * Version:           3.5.35
+ * Version:           3.5.36
  * Author: YangSheep
  * Author URI: https://yangsheep.com.tw
  * Text Domain: ys-shopline-via-woocommerce
@@ -17,7 +17,7 @@
 defined( 'ABSPATH' ) || exit;
 
 // Define plugin constants
-define( 'YS_SHOPLINE_VERSION', '3.5.35' );
+define( 'YS_SHOPLINE_VERSION', '3.5.36' );
 // v3.5.14: 資料庫綱要版本（用於 plugins_loaded 一次性 migration），與 plugin 版本解耦。
 define( 'YS_SHOPLINE_DB_VERSION', '3.5.14' );
 define( 'YS_SHOPLINE_PLUGIN_FILE', __FILE__ );
@@ -133,6 +133,16 @@ final class YSShoplinePayment {
 
         // Register payment gateways
         add_filter( 'woocommerce_payment_gateways', array( $this, 'register_gateways' ) );
+
+        // WooCommerce Subscriptions copies custom meta into renewal orders on an
+        // opt-out basis. Register this before gateway instances are constructed so
+        // scheduled and manually-created renewals cannot inherit prior trade state.
+        add_filter(
+            'wcs_renewal_order_meta_query',
+            array( YSCreditSubscription::class, 'exclude_order_specific_meta_from_renewals' ),
+            10,
+            3
+        );
 
         // 允許 ATM 離線付款訂單進入 order-pay 變更付款方式。
         add_filter( 'woocommerce_valid_order_statuses_for_payment', array( $this, 'allow_offline_order_payment_change' ), 10, 2 );
@@ -905,40 +915,57 @@ final class YSShoplinePayment {
             $order->update_status( 'pending', __( '顧客變更付款方式，訂單回到待付款。', 'ys-shopline-via-woocommerce' ) );
         }
 
-        // v3.5.35: 付款方式延後提交＋失敗回復 — 只有付款成功建立才保留新方式
+        // v3.5.36 P0: 付款方式延後提交＋失敗回復 — 依 process_payment 明確回傳的 remote_outcome
+        //（accepted / rejected / unknown）完整 switch 分流，未知值一律 fail-closed（不還原、不重試建新）。
         $previous_method = $order->get_payment_method();
+        $previous_title  = $order->get_payment_method_title();
         $order->set_payment_method( $gateway );
         $order->save();
 
         // 執行付款
         $result = $gateway->process_payment( $order_id );
 
-        if ( ! is_array( $result ) || 'success' !== ( isset( $result['result'] ) ? $result['result'] : '' ) ) {
-            // 失敗回復：避免失敗嘗試污染訂單付款方式（P0 毒化源頭）
-            if ( '' !== $previous_method && $previous_method !== $payment_method ) {
-                $order_fresh = wc_get_order( $order_id );
-                if ( $order_fresh ) {
-                    $order_fresh->set_payment_method( $previous_method );
-                    $order_fresh->save();
+        $outcome = ( is_array( $result ) && isset( $result['remote_outcome'] ) ) ? (string) $result['remote_outcome'] : '';
+
+        if ( 'rejected' === $outcome ) {
+            // 確定未建立遠端交易 → 完整還原付款方式 ID＋title（含清空、含同 ID 不同 title），
+            // 避免失敗嘗試污染訂單；收攏原因以頁內 failure 呈現。
+            $order_fresh = wc_get_order( $order_id );
+            if ( $order_fresh ) {
+                $order_fresh->set_payment_method( (string) $previous_method );
+                $order_fresh->set_payment_method_title( (string) $previous_title );
+                $order_fresh->save();
+                if ( $previous_method !== $payment_method ) {
                     $order_fresh->add_order_note( sprintf(
-                        /* translators: 1: failed gateway id, 2: restored gateway id */
-                        __( 'Shopline 金流：以 %1$s 重新付款未成立，付款方式回復為 %2$s。', 'ys-shopline-via-woocommerce' ),
+                        /* translators: 1: rejected gateway id, 2: restored gateway id */
+                        __( 'Shopline 金流：以 %1$s 重新付款被金流拒絕（未建立交易），付款方式回復為 %2$s。', 'ys-shopline-via-woocommerce' ),
                         $payment_method,
-                        $previous_method
+                        '' !== (string) $previous_method ? $previous_method : '（無）'
                     ) );
                 }
             }
 
-            // v3.5.35: 把真實失敗原因帶回前端（process_payment 走 wc_add_notice，
-            // 本 AJAX 端點沒有 WC checkout 的 notices 轉運機制，需自行收攏）
-            $result = is_array( $result ) ? $result : array( 'result' => 'failure' );
-            if ( empty( $result['messages'] ) ) {
-                $notice_text = $this->drain_wc_error_notices();
-                if ( '' !== $notice_text ) {
-                    $result['messages'] = $notice_text;
-                }
+            $messages = ( is_array( $result ) && ! empty( $result['messages'] ) ) ? (string) $result['messages'] : '';
+            if ( '' === $messages ) {
+                $messages = $this->drain_wc_error_notices();
             }
+            $result = array(
+                'result'   => 'failure',
+                'messages' => '' !== $messages ? $messages : __( '付款被拒，請重試或改用其他付款方式。', 'ys-shopline-via-woocommerce' ),
+            );
+        } elseif ( 'accepted' !== $outcome ) {
+            // unknown 或未知值（fail-closed）：遠端可能已建立交易 → **不還原付款方式**（還原會孤兒化交易），
+            // 不視為可重試失敗；以「確認中」訊息呈現，後續由 webhook / query_session 收斂。
+            $messages = ( is_array( $result ) && ! empty( $result['messages'] ) ) ? (string) $result['messages'] : '';
+            if ( '' === $messages ) {
+                $messages = $this->drain_wc_error_notices();
+            }
+            $result = array(
+                'result'   => 'failure',
+                'messages' => '' !== $messages ? $messages : __( '付款結果確認中，請勿重複付款；若已扣款我們會自動更新訂單。', 'ys-shopline-via-woocommerce' ),
+            );
         }
+        // 'accepted'：原樣回傳 process_payment 結果（success / redirect / nextAction）。
 
         wp_send_json( $result );
     }

@@ -1,0 +1,6 @@
+# 版控但不隨 release 出貨（正式包由 release tag 執行 git archive）
+# 目錄形式剪除 tree、glob 形式讓每個檔都帶 export-ignore（可用 git check-attr 驗證）
+/tests            export-ignore
+/tests/**         export-ignore
+/.gitattributes   export-ignore
+/.gitignore       export-ignore
