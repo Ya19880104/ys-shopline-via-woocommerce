@@ -159,7 +159,7 @@ class YSVirtualAccount extends YSGatewayBase {
 
 		$order->save();
 
-		wc_reduce_stock_levels( $order->get_id() );
+		wc_maybe_reduce_stock_levels( $order->get_id() );
 		WC()->cart->empty_cart();
 
 		// 傳回 nextAction 給前端，讓 SDK 處理確認流程

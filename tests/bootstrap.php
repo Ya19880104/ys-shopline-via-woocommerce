@@ -102,6 +102,23 @@ if ( ! function_exists( 'wc_add_notice' ) ) {
 	}
 }
 
+$GLOBALS['ys_test_stock_calls'] = array(
+	'direct' => 0,
+	'maybe'  => 0,
+);
+
+if ( ! function_exists( 'wc_reduce_stock_levels' ) ) {
+	function wc_reduce_stock_levels( $order_id ): void {
+		$GLOBALS['ys_test_stock_calls']['direct']++;
+	}
+}
+
+if ( ! function_exists( 'wc_maybe_reduce_stock_levels' ) ) {
+	function wc_maybe_reduce_stock_levels( $order_id ): void {
+		$GLOBALS['ys_test_stock_calls']['maybe']++;
+	}
+}
+
 if ( ! class_exists( 'YS_Test_Cart' ) ) {
 	final class YS_Test_Cart {
 		public int $empty_calls = 0;
@@ -130,6 +147,7 @@ require_once $ys_src . '/Utils/YSOrderMeta.php';
 require_once $ys_src . '/DTOs/YSSessionDTO.php';
 require_once $ys_src . '/Gateways/YSGatewayBase.php';
 require_once $ys_src . '/Gateways/YSCreditSubscription.php';
+require_once $ys_src . '/Gateways/YSVirtualAccount.php';
 
 /**
  * 極簡斷言器：累計 pass/fail，逐筆輸出，最終以 exit code 回報。

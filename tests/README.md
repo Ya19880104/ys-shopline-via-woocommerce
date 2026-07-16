@@ -26,6 +26,8 @@ php tests/run.php
   - 一般付款 rejected／accepted／unknown 消費契約；在途轉 `on-hold`；已收款完成入帳；缺交易 ID 寫入 indeterminate marker。
 - **訂閱續扣**（[`YSSubscriptionRenewalContractTest.php`](YSSubscriptionRenewalContractTest.php)）
   - timeout 與 `1001`／`4003` unknown 不 fallback；`4450`／`4900` 明確拒絕才換卡；同卡不重試；既存交易 pre-create guard；`90011_` reference-prefix 反例；跨期 meta 排除。
+- **庫存扣減**（[`YSStockReductionContractTest.php`](YSStockReductionContractTest.php)）
+  - 信用卡 nextAction 與 ATM 必須使用 `wc_maybe_reduce_stock_levels()`，且不得直接呼叫 `wc_reduce_stock_levels()`，確保 WooCommerce 同步維護訂單層庫存旗標。
 
 ## 出貨排除
 

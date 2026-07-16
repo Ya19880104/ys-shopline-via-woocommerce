@@ -4,7 +4,7 @@
 
 ## 版本資訊
 
-- **目前版本**：3.5.36
+- **目前版本**：3.5.37
 - **PHP 需求**：>= 8.0
 - **WordPress 需求**：>= 6.0
 - **WooCommerce 需求**：7.0 - 9.0
@@ -65,6 +65,14 @@ https://your-domain.com/wp-json/ys-shopline/v1/webhook
 ---
 
 ## 變更紀錄
+
+### 3.5.37 - 2026-07-16
+
+**修正付款未完成時訂單庫存旗標缺失，導致失敗／取消訂單無法回補庫存。**
+
+- 信用卡 3DS／其他 nextAction 付款及 ATM 虛擬帳號改用 WooCommerce 標準 `wc_maybe_reduce_stock_levels()`，扣庫存時同步建立訂單層 `_order_stock_reduced` 旗標。
+- 付款失敗或取消時，WooCommerce／第三方結帳強化可依標準旗標執行 `wc_maybe_increase_stock_levels()`；既有 `on-hold` 與成功付款路徑維持冪等，不會重複扣庫存。
+- 新增版控契約測試，鎖定 SHOPLINE 兩條 nextAction 路徑不得再直接呼叫 `wc_reduce_stock_levels()`。
 
 ### 3.5.36 - 2026-07-15
 

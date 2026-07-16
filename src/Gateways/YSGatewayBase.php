@@ -2216,7 +2216,7 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
         $order->save();
 
         // Reduce stock
-        wc_reduce_stock_levels( $order->get_id() );
+        wc_maybe_reduce_stock_levels( $order->get_id() );
 
         // Empty the cart
         WC()->cart->empty_cart();

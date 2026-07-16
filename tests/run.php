@@ -18,11 +18,13 @@ require __DIR__ . '/YSApiErrorContractTest.php';
 require __DIR__ . '/YSGatewayOutcomeContractTest.php';
 require __DIR__ . '/YSSessionDTOContractTest.php';
 require __DIR__ . '/YSSubscriptionRenewalContractTest.php';
+require __DIR__ . '/YSStockReductionContractTest.php';
 
 ys_run_tradestatus_contract();
 ys_run_api_error_contract();
 ys_run_gateway_outcome_contract();
 ys_run_sessiondto_contract();
 ys_run_subscription_renewal_contract();
+ys_run_stock_reduction_contract();
 
 YS_Assert::summary_exit();
