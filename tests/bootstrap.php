@@ -42,7 +42,19 @@ if ( ! class_exists( 'WC_Payment_Gateway' ) ) {
 	class WC_Payment_Gateway {
 		/** @var string */
 		public $id = '';
+
+		/** 設定值 stub：測試子類以 $test_options 供值。 */
+		public array $test_options = array();
+
+		public function get_option( string $key, $default = '' ) {
+			return $this->test_options[ $key ] ?? $default;
+		}
 	}
+}
+
+if ( ! class_exists( 'WC_Order' ) ) {
+	// 型別 stub：YSStatusManager::handle_order_status_change 的 \WC_Order type hint 用。
+	class WC_Order {}
 }
 
 if ( ! class_exists( 'WC_Logger' ) ) {
@@ -96,6 +108,18 @@ if ( ! function_exists( 'wp_unslash' ) ) {
 	}
 }
 
+if ( ! function_exists( 'sanitize_text_field' ) ) {
+	function sanitize_text_field( $value ): string {
+		return trim( (string) $value );
+	}
+}
+
+if ( ! function_exists( 'sanitize_key' ) ) {
+	function sanitize_key( $value ): string {
+		return strtolower( preg_replace( '/[^a-z0-9_\-]/i', '', (string) $value ) );
+	}
+}
+
 if ( ! function_exists( 'wc_add_notice' ) ) {
 	function wc_add_notice( string $message, string $type = 'success' ): void {
 		$GLOBALS['ys_test_notices'][] = array( $type, $message );
@@ -103,8 +127,9 @@ if ( ! function_exists( 'wc_add_notice' ) ) {
 }
 
 $GLOBALS['ys_test_stock_calls'] = array(
-	'direct' => 0,
-	'maybe'  => 0,
+	'direct'   => 0,
+	'maybe'    => 0,
+	'increase' => 0,
 );
 
 if ( ! function_exists( 'wc_reduce_stock_levels' ) ) {
@@ -119,12 +144,72 @@ if ( ! function_exists( 'wc_maybe_reduce_stock_levels' ) ) {
 	}
 }
 
+if ( ! function_exists( 'wc_maybe_increase_stock_levels' ) ) {
+	function wc_maybe_increase_stock_levels( $order_id ): void {
+		$GLOBALS['ys_test_stock_calls']['increase']++;
+	}
+}
+
+// --- get_sdk_config 依賴 stubs（YSCreditInstallment SDK 契約用）---
+
+$GLOBALS['ys_test_user_id'] = 0;
+
+if ( ! function_exists( 'get_current_user_id' ) ) {
+	function get_current_user_id(): int {
+		return (int) $GLOBALS['ys_test_user_id'];
+	}
+}
+
+if ( ! function_exists( 'is_add_payment_method_page' ) ) {
+	function is_add_payment_method_page(): bool {
+		return false;
+	}
+}
+
+if ( ! function_exists( 'get_woocommerce_currency' ) ) {
+	function get_woocommerce_currency(): string {
+		return 'TWD';
+	}
+}
+
+if ( ! function_exists( 'apply_filters' ) ) {
+	function apply_filters( string $tag, $value, ...$args ) {
+		return $value;
+	}
+}
+
+if ( ! class_exists( 'YSShoplinePayment' ) ) {
+	final class YSShoplinePayment {
+		public static function get_sdk_amount( $raw ): int {
+			return (int) round( (float) $raw * 100 );
+		}
+		public static function get_formatted_amount( $raw, $currency = 'TWD' ): int {
+			return (int) round( (float) $raw * 100 );
+		}
+	}
+}
+
+if ( ! class_exists( 'YangSheep\ShoplinePayment\Api\YSShoplineRequester' ) ) {
+	final class YS_Test_Shopline_Requester {
+		public static function redact_sensitive( $value ) {
+			return $value;
+		}
+	}
+	class_alias( YS_Test_Shopline_Requester::class, 'YangSheep\ShoplinePayment\Api\YSShoplineRequester' );
+}
+
 if ( ! class_exists( 'YS_Test_Cart' ) ) {
 	final class YS_Test_Cart {
 		public int $empty_calls = 0;
+		/** @var float 供 get_sdk_config 金額來源 stub */
+		public float $total = 5000.0;
 
 		public function empty_cart(): void {
 			$this->empty_calls++;
+		}
+
+		public function get_total( string $context = 'view' ): float {
+			return $this->total;
 		}
 	}
 }
@@ -148,6 +233,8 @@ require_once $ys_src . '/DTOs/YSSessionDTO.php';
 require_once $ys_src . '/Gateways/YSGatewayBase.php';
 require_once $ys_src . '/Gateways/YSCreditSubscription.php';
 require_once $ys_src . '/Gateways/YSVirtualAccount.php';
+require_once $ys_src . '/Gateways/YSCreditInstallment.php';
+require_once $ys_src . '/Handlers/YSStatusManager.php';
 
 /**
  * 極簡斷言器：累計 pass/fail，逐筆輸出，最終以 exit code 回報。

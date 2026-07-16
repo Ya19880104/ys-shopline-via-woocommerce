@@ -66,6 +66,25 @@ https://your-domain.com/wp-json/ys-shopline/v1/webhook
 
 ## 變更紀錄
 
+### 3.5.38 - 2026-07-17
+
+**修正會員信用卡分期「新卡不儲存」必然失敗（User authorization verification failed）。**
+
+- 根因：分期 SDK 對登入會員啟用 `paymentInstrument.bindCard`，但顧客選「新卡不儲存」時後端送 `paymentBehavior=Regular` → SDK／API 不一致，SHOPLINE 拒絕（客戶站 #1933、#1934、#1936、#1937、#1938、#1942 六筆異常訂單共同條件）。此組合自 v3.5.13 起即存在。
+- 修正＝分期回歸 SHOPLINE 官方「一般付款」定位（官方規格：分期不顯示儲存卡片選項；會員既有卡列表僅需 `customerToken`）：
+  - **前端能力分離（覆核修正）**：`GATEWAY_CONFIG` 拆為 `supportsSavedCards`（可顯示既有卡）與 `supportsBindCard`（可綁新卡）——分期＝`supportsSavedCards:true`＋`supportsBindCard:false`。SDK options 組裝抽出為 `buildSdkOptions()` 並設**最終能力閘門**：只有 `supportsBindCard` 的 gateway 允許 `paymentInstrument.bindCard`；後端設定、前端預設重建及 `sdkOptions` deep merge 任一來源誤傳，皆於最終 options 剝除。`customerToken` 照常傳遞供既有卡列表。
+  - **既有卡偵測改依 `supportsSavedCards`**（不再依 bindCard 狀態）——分期會員選既有卡仍正確產生 `mode=saved` → QuickPayment；`isSaveCardRequested` 對不支援綁卡的 gateway 一律 false（分期永不產生 `new_save`）。移除已無消費者的 `isBindCardEnabled()` 與容器 `bind-card-enabled` 旗標。
+  - **後端**：分期 SDK 設定移除 `paymentInstrument.bindCard` 與 `forceSaveCard`、保留 `customerToken`；分期路由改為 **既有卡（saved）→ QuickPayment、其餘（new／new_save／未帶 mode）一律 Regular**。升級後須清除頁面/CDN/最佳化外掛的舊 JS 快取，確保瀏覽器載入 v3.5.38 能力分離版本。
+- 一般信用卡與訂閱**不變更**（一般信用卡顧客仍可自選是否儲存新卡、訂閱維持 CardBind 流程），僅納入回歸測試。
+- 新增版控契約測試：PHP（分期 SDK 設定於會員／訪客／bind-only 情境一律不含 `paymentInstrument`／`forceSaveCard`；直接執行真實 `prepare_payment_data()` 鎖定分期 `new`／`new_save`／缺 mode → Regular、`saved` → QuickPayment，並覆蓋主卡／訂閱回歸）＋ **Node 前端契約 `node tests/js/checkout-contract.test.js`**（載入真實前端檔驗證：最終 SDK options、前端實際產生的 mode——含 checkout 與 order-pay 共用呼叫點、主卡／訂閱回歸）。
+
+**修正獨立安裝（無第三方回補外掛）時，付款失敗訂單庫存永久卡住。**
+
+- WooCommerce core 只在 `cancelled`／`pending` 狀態轉換掛庫存回補（`wc_maybe_increase_stock_levels`），`failed` 不掛；但本外掛自身會把訂單轉為 `failed`（redirect 失敗、webhook `trade.failed`／`trade.expired`、每小時狀態同步、訂閱續扣失敗、後台手動）。v3.5.37 修正旗標後，獨立安裝下 failed 訂單的預扣庫存仍無人回補。
+- 於 `YSStatusManager::handle_order_status_change`（既有 `woocommerce_order_status_changed` 監聽、既有 `is_shopline_order()` 把關）新增：**未實收訂單轉入 `failed` 時呼叫 `wc_maybe_increase_stock_levels()`**。單一掛點統一涵蓋所有 failed 轉換路徑；**僅限 SHOPLINE 金流訂單，不全域掛 hook、不影響其他金流**；旗標把關維持冪等（未扣過＝no-op、第三方已回補＝no-op、失敗後重新付款會由標準入口重新扣庫存）。
+- **已付款 guard（覆核修正）**：已實收訂單（`date_paid` 非空，例如 processing 被後台手動轉 failed）**不回補**——款項仍在而庫存放出＝超賣風險，回補應由退款／取消流程決定（轉 `cancelled` 時仍由 WooCommerce core 標準回補）。判斷用 `date_paid` 而非 `is_paid()`（訂單已轉 failed 時後者恆為 false）。
+- 新增版控契約測試：未付款 failed（pending／on-hold／自訂狀態）觸發回補、**已付款 failed 不回補（不以 old_status 判斷）**、非 SHOPLINE／空 method／非 failed 不觸發。
+
 ### 3.5.37 - 2026-07-16
 
 **修正付款未完成時訂單庫存旗標缺失，導致失敗／取消訂單無法回補庫存。**

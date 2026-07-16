@@ -127,6 +127,21 @@ final class YSStatusManager {
         if ( 'cancelled' === $new_status && in_array( $old_status, [ 'pending', 'on-hold' ], true ) ) {
             $this->cancel_payment( $order );
         }
+
+        // v3.5.38: failed 回補庫存（僅限 SHOPLINE 訂單、僅限「未實收」訂單）。
+        // WooCommerce core 只在 cancelled／pending 掛 wc_maybe_increase_stock_levels，failed 不掛；
+        // 但本外掛自身會把訂單轉 failed（redirect 失敗、webhook trade.failed／trade.expired、
+        // 狀態同步、訂閱續扣失敗等）——獨立安裝（無第三方回補外掛）時，nextAction 預扣的庫存
+        // 會永久卡住。此處經 woocommerce_order_status_changed 統一涵蓋所有 failed 轉換點；
+        // wc_maybe_increase_stock_levels 以訂單層旗標把關（未扣過＝no-op、他方已回補＝no-op）；
+        // 不全域掛 hook，不影響其他金流。
+        //
+        // 已付款 guard（覆核修正）：已實收訂單（例如 processing 被後台手動轉 failed）不得釋放
+        // 庫存——款項仍在而庫存放出＝超賣風險；應由退款／取消流程決定回補。此處不能用
+        // is_paid()（訂單已轉 failed 時回 false），改以 date_paid 識別「曾實收」。
+        if ( 'failed' === $new_status && ! $order->get_date_paid() ) {
+            wc_maybe_increase_stock_levels( $order_id );
+        }
     }
 
     /**

@@ -19,6 +19,9 @@ require __DIR__ . '/YSGatewayOutcomeContractTest.php';
 require __DIR__ . '/YSSessionDTOContractTest.php';
 require __DIR__ . '/YSSubscriptionRenewalContractTest.php';
 require __DIR__ . '/YSStockReductionContractTest.php';
+require __DIR__ . '/YSFailedRestockContractTest.php';
+require __DIR__ . '/YSInstallmentSdkConfigContractTest.php';
+require __DIR__ . '/YSInstallmentRoutingContractTest.php';
 
 ys_run_tradestatus_contract();
 ys_run_api_error_contract();
@@ -26,5 +29,8 @@ ys_run_gateway_outcome_contract();
 ys_run_sessiondto_contract();
 ys_run_subscription_renewal_contract();
 ys_run_stock_reduction_contract();
+ys_run_failed_restock_contract();
+ys_run_installment_sdk_contract();
+ys_run_installment_routing_contract();
 
 YS_Assert::summary_exit();

@@ -25,24 +25,34 @@ jQuery(function ($) {
     /**
      * Gateway configurations mapping
      */
+    /**
+     * v3.5.38: 分離兩種能力（覆核修正）——
+     * - supportsSavedCards：SDK 可顯示會員既有卡列表（只需後端 customerToken，官方快捷付款規格）
+     * - supportsBindCard  ：SDK 允許「綁定新卡」（paymentInstrument.bindCard）
+     * 分期＝支援既有卡、**不支援綁新卡**（官方定位：分期為一般付款、不顯示儲存選項）；
+     * 舊版兩者混用導致分期 SDK bindCard on＋API Regular mismatch
+     * （User authorization verification failed，客戶站六筆異常訂單根因）。
+     */
     var GATEWAY_CONFIG = {
         'ys_shopline_credit': {
             paymentMethod: 'CreditCard',
             containerId: 'ys_shopline_credit_container',
             supportsBindCard: true,
+            supportsSavedCards: true,
             supportsInstallment: false
         },
         'ys_shopline_credit_installment': {
             paymentMethod: 'CreditCard',
             containerId: 'ys_shopline_credit_installment_container',
-            // Installment uses CreditCard SDK with installmentCounts; saved-card UI is required for QuickPayment.
-            supportsBindCard: true,
+            supportsBindCard: false,
+            supportsSavedCards: true,
             supportsInstallment: true
         },
         'ys_shopline_credit_subscription': {
             paymentMethod: 'CreditCard',
             containerId: 'ys_shopline_credit_subscription_container',
             supportsBindCard: true,
+            supportsSavedCards: true,
             forceSaveCard: true,
             supportsInstallment: false
         },
@@ -50,30 +60,35 @@ jQuery(function ($) {
             paymentMethod: 'VirtualAccount',
             containerId: 'ys_shopline_atm_container',
             supportsBindCard: false,
+            supportsSavedCards: false,
             supportsInstallment: false
         },
         'ys_shopline_jkopay': {
             paymentMethod: 'JKOPay',
             containerId: 'ys_shopline_jkopay_container',
             supportsBindCard: false,
+            supportsSavedCards: false,
             supportsInstallment: false
         },
         'ys_shopline_applepay': {
             paymentMethod: 'ApplePay',
             containerId: 'ys_shopline_applepay_container',
             supportsBindCard: false,
+            supportsSavedCards: false,
             supportsInstallment: false
         },
         'ys_shopline_linepay': {
             paymentMethod: 'LinePay',
             containerId: 'ys_shopline_linepay_container',
             supportsBindCard: false,
+            supportsSavedCards: false,
             supportsInstallment: false
         },
         'ys_shopline_bnpl': {
             paymentMethod: 'ChaileaseBNPL',
             containerId: 'ys_shopline_bnpl_container',
             supportsBindCard: false,
+            supportsSavedCards: false,
             supportsInstallment: true
         }
     };
@@ -507,6 +522,90 @@ jQuery(function ($) {
         },
 
         /**
+         * v3.5.38: 組出最終 SDK options（抽出供 Node 契約測試直接驗證）。
+         *
+         * bindCard 閘門：**只有 gatewayConfig.supportsBindCard 的 gateway 允許
+         * paymentInstrument.bindCard**——不論來源是後端 serverConfig 或前端預設重建；
+         * 分期（supportsBindCard:false）僅靠 customerToken 載入既有卡（官方快捷付款規格：
+         * 顯示既有卡只需 customerToken），杜絕「SDK bindCard on＋API Regular」mismatch
+         * （User authorization verification failed）。後端 PHP 已同步移除分期
+         * paymentInstrument，此處為前端同構閘門（雙向皆 fail-safe）。
+         *
+         * @param {Object} gatewayConfig GATEWAY_CONFIG entry
+         * @param {Object} serverConfig  後端 get_sdk_config 產出
+         * @return {Object} SDK options
+         */
+        buildSdkOptions: function (gatewayConfig, serverConfig) {
+            // bindOnlyMode: true 時（如 $0 訂閱試用），SDK 與 API 都拒絕 amount=0
+            // 後端會以 CardBind + amount=10000 處理（對齊官方 CardBind 範例，銀行只授權不請款）
+            var sdkAmount = serverConfig.amount || 0;
+            if (serverConfig.bindOnlyMode && sdkAmount <= 0) {
+                sdkAmount = 10100; // TWD $100 對齊官方 CardBind 範例（僅授權，不請款）
+            }
+            var options = {
+                clientKey: serverConfig.clientKey,
+                merchantId: serverConfig.merchantId,
+                paymentMethod: gatewayConfig.paymentMethod,
+                currency: serverConfig.currency || 'TWD',
+                amount: sdkAmount,
+                env: serverConfig.env || 'production'
+            };
+
+            if (gatewayConfig.containerId) {
+                options.element = '#' + gatewayConfig.containerId;
+            }
+
+            // customerToken：載入會員既有卡列表（與「是否允許綁新卡」無關）
+            if (serverConfig.customerToken) {
+                options.customerToken = serverConfig.customerToken;
+            }
+
+            // paymentInstrument.bindCard 僅允許出現在 supportsBindCard 的 gateway
+            if (gatewayConfig.supportsBindCard && serverConfig.paymentInstrument) {
+                // 使用後端傳來的配置（v3.5.2: 不 log raw object，避免暴露 protocol 細節）
+                options.paymentInstrument = serverConfig.paymentInstrument;
+            } else if (gatewayConfig.supportsBindCard && serverConfig.customerToken) {
+                // 如果後端沒傳但有 customerToken，使用預設配置
+                var forceSave = gatewayConfig.forceSaveCard || serverConfig.forceSaveCard || false;
+
+                options.paymentInstrument = {
+                    bindCard: {
+                        enable: true,
+                        protocol: {
+                            // 強制儲存時隱藏開關，否則顯示讓用戶選擇
+                            switchVisible: !forceSave,
+                            // 強制儲存時預設開啟，否則預設關閉
+                            defaultSwitchStatus: forceSave,
+                            // 不強制要求同意儲存，允許不勾選也能交易
+                            mustAccept: false
+                        }
+                    }
+                };
+            }
+            // 沒有 customerToken 或不支援綁卡時不設定 paymentInstrument
+
+            // Configure installment for supported gateways
+            // SDK 文件使用 installmentCounts 參數（可以是字串或數字陣列）
+            if (gatewayConfig.supportsInstallment && serverConfig.installmentCounts) {
+                options.installmentCounts = serverConfig.installmentCounts;
+            }
+
+            // Apply any additional server-side options
+            if (serverConfig.sdkOptions) {
+                options = $.extend(true, options, serverConfig.sdkOptions);
+            }
+
+            // Capability enforcement must run after sdkOptions merging as well.
+            // Third-party filters may add sdkOptions.paymentInstrument; installment and
+            // other non-binding gateways must never allow that to re-enable bindCard.
+            if (!gatewayConfig.supportsBindCard) {
+                delete options.paymentInstrument;
+            }
+
+            return options;
+        },
+
+        /**
          * Render payment SDK
          *
          * v3.5.0: 由 doMount 呼叫，不再直接由 initSDK 呼叫
@@ -538,68 +637,8 @@ jQuery(function ($) {
             $container.empty();
 
             try {
-                // Build SDK options
-                // Note: env 參數控制環境 (sandbox/production)
-                // bindOnlyMode: true 時（如 $0 訂閱試用），SDK 與 API 都拒絕 amount=0
-                // 後端會以 CardBind + amount=10000 處理（對齊官方 CardBind 範例，銀行只授權不請款）
-                var sdkAmount = serverConfig.amount || 0;
-                if (serverConfig.bindOnlyMode && sdkAmount <= 0) {
-                    sdkAmount = 10100; // TWD $100 對齊官方 CardBind 範例（僅授權，不請款）
-                }
-                var options = {
-                    clientKey: serverConfig.clientKey,
-                    merchantId: serverConfig.merchantId,
-                    paymentMethod: gatewayConfig.paymentMethod,
-                    currency: serverConfig.currency || 'TWD',
-                    amount: sdkAmount,
-                    element: '#' + gatewayConfig.containerId,
-                    env: serverConfig.env || 'production'
-                };
-
-                // Add customer token if available (for saved cards)
-                if (serverConfig.customerToken) {
-                    options.customerToken = serverConfig.customerToken;
-                }
-
-                // Configure card binding for credit card gateways
-                // 只有在有 customerToken 時才啟用儲存卡片功能
-                // 後端已經根據登入狀態決定是否傳 paymentInstrument
-                if (serverConfig.paymentInstrument) {
-                    // 使用後端傳來的配置（v3.5.2: 不 log raw object，避免暴露 protocol 細節）
-                    options.paymentInstrument = serverConfig.paymentInstrument;
-                } else if (gatewayConfig.supportsBindCard && serverConfig.customerToken) {
-                    // 如果後端沒傳但有 customerToken，使用預設配置
-                    var forceSave = gatewayConfig.forceSaveCard || serverConfig.forceSaveCard || false;
-
-                    options.paymentInstrument = {
-                        bindCard: {
-                            enable: true,
-                            protocol: {
-                                // 強制儲存時隱藏開關，否則顯示讓用戶選擇
-                                switchVisible: !forceSave,
-                                // 強制儲存時預設開啟，否則預設關閉
-                                defaultSwitchStatus: forceSave,
-                                // 不強制要求同意儲存，允許不勾選也能交易
-                                mustAccept: false
-                            }
-                        }
-                    };
-                }
-                // 沒有 customerToken 時不設定 paymentInstrument（訪客不能儲存卡片）
-
-                // Configure installment for supported gateways
-                // SDK 文件使用 installmentCounts 參數（可以是字串或數字陣列）
-                if (gatewayConfig.supportsInstallment && serverConfig.installmentCounts) {
-                    options.installmentCounts = serverConfig.installmentCounts;
-                }
-
-                // Apply any additional server-side options
-                if (serverConfig.sdkOptions) {
-                    options = $.extend(true, options, serverConfig.sdkOptions);
-                }
-
-                // 儲存是否啟用綁卡功能（供後續 isBindCardEnabled 使用）
-                $container.data('bind-card-enabled', !!options.paymentInstrument);
+                // v3.5.38: options 組裝抽至 buildSdkOptions（bindCard 雙向閘門＋Node 契約測試）
+                var options = self.buildSdkOptions(gatewayConfig, serverConfig);
 
                 // Debug: Log SDK options (without sensitive data)
                 console.log('Shopline SDK Init:', {
@@ -1700,49 +1739,6 @@ jQuery(function ($) {
             console.log('[YS Shopline] Client info collected:', clientInfo);
         },
 
-        /**
-         * Check if bind card is enabled for this gateway.
-         *
-         * 根據 SHOPLINE 文件，SDK createPayment() 返回的 paySession
-         * 已經包含了用戶的所有選擇，包括是否勾選儲存卡片。
-         *
-         * 後端只需要知道 SDK 是否啟用了綁卡功能：
-         * - 如果啟用，後端使用 CardBindPayment + savePaymentInstrument=true
-         * - 如果未啟用，後端使用 Regular
-         *
-         * API 會根據 paySession 中的用戶選擇來決定是否實際儲存卡片。
-         *
-         * @param {string} gatewayId Gateway ID
-         * @return {boolean} Whether bind card is enabled
-         */
-        isBindCardEnabled: function (gatewayId) {
-            var gatewayConfig = GATEWAY_CONFIG[gatewayId];
-
-            // 如果 gateway 不支援綁卡
-            if (!gatewayConfig || !gatewayConfig.supportsBindCard) {
-                console.log('[YS Shopline] isBindCardEnabled: supportsBindCard=false');
-                return false;
-            }
-
-            // 如果 gateway 強制儲存卡片（如訂閱）
-            if (gatewayConfig.forceSaveCard) {
-                console.log('[YS Shopline] isBindCardEnabled: forceSaveCard=true');
-                return true;
-            }
-
-            // 檢查 SDK 初始化時是否啟用了綁卡功能
-            // 這個值在 renderPayment 時根據 serverConfig 設定
-            var $container = $('#' + gatewayConfig.containerId);
-            if ($container.length) {
-                var bindCardEnabled = $container.data('bind-card-enabled');
-                console.log('[YS Shopline] isBindCardEnabled: from container data:', bindCardEnabled);
-                return !!bindCardEnabled;
-            }
-
-            console.log('[YS Shopline] isBindCardEnabled: container not found, default false');
-            return false;
-        },
-
         getPaymentInstrumentSelection: function (result, gatewayId) {
             var selection = {
                 mode: 'regular',
@@ -1756,11 +1752,14 @@ jQuery(function ($) {
                 return selection;
             }
 
-            if (!this.isBindCardEnabled(gatewayId)) {
+            // v3.5.38: 既有卡偵測依 supportsSavedCards（分期支援既有卡但不綁新卡）。
+            // 不再依 isBindCardEnabled——bindCard 已與既有卡解耦，沿用會讓分期會員
+            // 選既有卡時拿不到 mode=saved、退化成 Regular 而非 QuickPayment。
+            var config = GATEWAY_CONFIG[gatewayId] || {};
+            if (!config.supportsSavedCards) {
                 return selection;
             }
 
-            var config = GATEWAY_CONFIG[gatewayId] || {};
             var $container = config.containerId ? $('#' + config.containerId) : $();
             var activeText = this.getActivePaymentOptionText($container);
             var activeLast4 = this.extractSavedCardLast4(activeText);
@@ -1887,6 +1886,12 @@ jQuery(function ($) {
 
         isSaveCardRequested: function ($container, gatewayId) {
             var gatewayConfig = GATEWAY_CONFIG[gatewayId] || {};
+
+            // v3.5.38: 不支援綁新卡的 gateway（如分期）永不產生 new_save——
+            // 下方的 checkbox／文字偵測對分期可能誤判（既有卡列表文字含「儲存」等字樣）。
+            if (!gatewayConfig.supportsBindCard) {
+                return false;
+            }
 
             if (gatewayConfig.forceSaveCard) {
                 return true;
@@ -2596,4 +2601,13 @@ jQuery(function ($) {
 
     // Expose to global scope
     window.AddPaymentMethodHandler = AddPaymentMethodHandler;
+
+    // Node 契約測試掛鉤（tests/js）：載入前顯式設 window.__ysShoplineExposeForTests 才暴露，
+    // 瀏覽器正常執行不進此分支、不增任何全域面。
+    if (window.__ysShoplineExposeForTests) {
+        window.__ysShoplineTestable = {
+            GATEWAY_CONFIG: GATEWAY_CONFIG,
+            ShoplineCheckout: ShoplineCheckout
+        };
+    }
 });
