@@ -30,12 +30,12 @@ node tests/js/checkout-contract.test.js    # 前端契約（真實 JS 檔載入�
 - **庫存扣減**（[`YSStockReductionContractTest.php`](YSStockReductionContractTest.php)）
   - 信用卡 nextAction 與 ATM 必須使用 `wc_maybe_reduce_stock_levels()`，且不得直接呼叫 `wc_reduce_stock_levels()`，確保 WooCommerce 同步維護訂單層庫存旗標。
 - **分期 SDK config**（[`YSInstallmentSdkConfigContractTest.php`](YSInstallmentSdkConfigContractTest.php)）
-  - 分期 `get_sdk_config()` 產出**永不包含 `paymentInstrument`（bindCard）與 `forceSaveCard`**（會員／訪客／bind-only 情境皆然），僅保留 `customerToken` 供既有卡列表；`installmentCounts` 行為不受影響——鎖定「SDK bindCard on＋API Regular → User authorization verification failed」根因不復發。
+  - 會員分期 `get_sdk_config()` 啟用可選 bindCard（switch visible、default off）以相容現行 SHOPLINE SDK 的既有卡渲染；訪客不啟用、bind-only 防禦情境不留下強制綁卡設定；`installmentCounts` 行為不受影響。
 - **分期後端路由**（[`YSInstallmentRoutingContractTest.php`](YSInstallmentRoutingContractTest.php)）
-  - 直接執行真實 `YSGatewayBase::prepare_payment_data()`：分期 `new`／`new_save`／缺 mode 一律 `Regular` 且不得送 `savePaymentInstrument`；`saved` 維持 `QuickPayment`＋`paymentCustomerId`。另鎖定一般信用卡 `new_save`／`new` 與訂閱 `new_save` 行為不變。
+  - 直接執行真實 `YSGatewayBase::prepare_payment_data()`：分期 `new`／缺 mode → `Regular`、`new_save` → `CardBindPayment`＋`savePaymentInstrument`、`saved` → `QuickPayment`＋`paymentCustomerId`。另鎖定一般信用卡與訂閱路由不變。
 - **前端契約**（[`js/checkout-contract.test.js`](js/checkout-contract.test.js)，Node 直跑、零依賴，vm sandbox 載入**真實** `assets/js/ys-shopline-checkout.js`）
-  - `GATEWAY_CONFIG` 能力分離（`supportsSavedCards`／`supportsBindCard`）；**最終 SDK options**（`buildSdkOptions`）：分期永不含 `paymentInstrument.bindCard`——包含後端直接誤傳及 `sdkOptions` merge 後重注入；主卡／訂閱 bindCard 重建、passthrough 與 `sdkOptions` 回歸；bind-only amount 回歸。
-  - **前端實際產生的 mode**（`getPaymentInstrumentSelection`，checkout 與 order-pay 共用）：分期既有卡（DOM 偵測）→ `saved`、分期新卡即使容器有勾選樣態→ **永不 `new_save`**；主卡勾選→`new_save`／未勾→`new` 回歸；訂閱 forceSave 回歸；不支援既有卡 gateway → `regular`。
+  - `GATEWAY_CONFIG` 能力分離（`supportsSavedCards`／`supportsBindCard`）；**最終 SDK options**（`buildSdkOptions`）：分期會員啟用 optional bindCard 並保留 `customerToken`，訪客不啟用；主卡／訂閱與 bind-only amount 回歸。
+  - **前端實際產生的 mode**（`getPaymentInstrumentSelection`，checkout 與 order-pay 共用）：分期既有卡→`saved`、新卡 SDK 自製開關 off→`new`／active→`new_save`；`createPayment()` 前的 selection snapshot 可跨 SDK DOM 替換保留，明確 SDK instrument ID 可覆寫 snapshot；主卡／訂閱與非卡 gateway 回歸。
   - 呼叫點契約（原始碼斷言）：order-pay 走共用 selection、`renderPayment` 走 `buildSdkOptions`、舊 `bind-card-enabled`／`isBindCardEnabled` 已移除。
 - **failed 回補**（[`YSFailedRestockContractTest.php`](YSFailedRestockContractTest.php)）
   - **未實收** SHOPLINE 訂單轉入 `failed` 時必須呼叫 `wc_maybe_increase_stock_levels()`（pending／on-hold／自訂狀態起點、含 `ys_shopline_` 前綴 legacy gateway）；**已付款（`date_paid` 非空）訂單轉 failed 一律不得回補**（款在貨放＝超賣；不以 old_status 判斷）；**非 SHOPLINE 金流、空 payment method、非 failed 轉換一律不得觸發**。

@@ -1,15 +1,16 @@
 /**
- * 前端契約測試（v3.5.38 分期 bindCard mismatch 修正）——Node 直跑、零依賴。
+ * 前端契約測試（v3.5.39 分期三態與 SDK DOM snapshot）——Node 直跑、零依賴。
  *
  * 固定命令（外掛根目錄）：node tests/js/checkout-contract.test.js
  * exit 0＝全過；1＝有失敗。
  *
  * 驗證對象＝真實 assets/js/ys-shopline-checkout.js（vm sandbox 載入，非複製邏輯）：
  *   1. 最終 SDK options（ShoplineCheckout.buildSdkOptions）：
- *      分期永不含 paymentInstrument.bindCard（含後端誤傳時的前端閘門）、customerToken 保留；
+ *      分期會員 optional bindCard 預設關閉、customerToken 保留；訪客不啟用；
  *      主卡／訂閱 bindCard 行為不變。
  *   2. 前端實際產生的 mode（ShoplineCheckout.getPaymentInstrumentSelection，
- *      checkout 與 order-pay 共用同一函式）：分期既有卡→saved、新卡永不 new_save；
+ *      checkout 與 order-pay 共用同一函式）：分期既有卡→saved、SDK 自製開關
+ *      off→new／active→new_save；snapshot 跨 createPayment DOM 替換保留；
  *      主卡 new_save 回歸；不支援既有卡的 gateway→regular。
  *   3. 呼叫點契約（原始碼斷言）：order-pay 與 checkout 均走共用 selection；
  *      renderPayment 走 buildSdkOptions；舊 bind-card-enabled 容器旗標已移除。
@@ -194,8 +195,7 @@ const CFG = hooks.GATEWAY_CONFIG;
 
 // ---------- 1. 能力矩陣 ----------
 console.log('== GATEWAY_CONFIG capability split ==');
-eq('installment: supportsBindCard=false', false, CFG.ys_shopline_credit_installment.supportsBindCard);
-eq('installment: supportsSavedCards=true', true, CFG.ys_shopline_credit_installment.supportsSavedCards);
+eq('installment: bindCard+savedCards both true', true, CFG.ys_shopline_credit_installment.supportsBindCard && CFG.ys_shopline_credit_installment.supportsSavedCards);
 eq('credit: bindCard+savedCards both true', true, CFG.ys_shopline_credit.supportsBindCard && CFG.ys_shopline_credit.supportsSavedCards);
 eq('subscription: bindCard+savedCards+forceSave', true, CFG.ys_shopline_credit_subscription.supportsBindCard && CFG.ys_shopline_credit_subscription.supportsSavedCards && CFG.ys_shopline_credit_subscription.forceSaveCard);
 eq('ATM: no savedCards, no bindCard', true, !CFG.ys_shopline_atm.supportsBindCard && !CFG.ys_shopline_atm.supportsSavedCards);
@@ -207,17 +207,18 @@ const SRV = function (extra) {
 };
 
 let opt = SC.buildSdkOptions(CFG.ys_shopline_credit_installment, SRV({ customerToken: 'tok-1' }));
-eq('installment+token → NO paymentInstrument（P0 核心）', false, 'paymentInstrument' in opt);
+eq('installment+token → vendor SDK saved-card compatibility enabled', true, opt.paymentInstrument.bindCard.enable);
+eq('installment compatibility switch defaults off', false, opt.paymentInstrument.bindCard.protocol.defaultSwitchStatus);
 eq('installment+token → customerToken kept', 'tok-1', opt.customerToken);
 
-opt = SC.buildSdkOptions(CFG.ys_shopline_credit_installment, SRV({ customerToken: 'tok-1', paymentInstrument: { bindCard: { enable: true } } }));
-eq('installment＋後端誤傳 paymentInstrument → 前端閘門仍剝除', false, 'paymentInstrument' in opt);
+opt = SC.buildSdkOptions(CFG.ys_shopline_credit_installment, SRV({ customerToken: 'tok-1', paymentInstrument: { bindCard: { enable: true, protocol: { defaultSwitchStatus: true } } } }));
+eq('installment server paymentInstrument remains supported', true, opt.paymentInstrument.bindCard.protocol.defaultSwitchStatus);
 
 opt = SC.buildSdkOptions(CFG.ys_shopline_credit_installment, SRV({
 	customerToken: 'tok-1',
 	sdkOptions: { paymentInstrument: { bindCard: { enable: true } } }
 }));
-eq('installment sdkOptions cannot re-enable paymentInstrument', false, 'paymentInstrument' in opt);
+eq('installment sdkOptions paymentInstrument remains supported', true, opt.paymentInstrument.bindCard.enable);
 
 opt = SC.buildSdkOptions(CFG.ys_shopline_credit_installment, SRV({}));
 eq('installment guest → no token / no paymentInstrument', true, !('customerToken' in opt) && !('paymentInstrument' in opt));
@@ -275,6 +276,16 @@ function iframes(n) {
 	return arr;
 }
 function checkbox(checked) { return makeEl({ tagName: 'INPUT', checked: !!checked }); }
+function sdkSaveControl(active) {
+	const checkboxKids = {};
+	checkboxKids['[class*="active_"]'] = active ? [makeEl()] : [];
+	const wrapKids = {};
+	wrapKids['[class*="checkbox_"]'] = [makeEl({ __children: checkboxKids })];
+	return makeEl({
+		__text: '我同意記錄本次付款資訊，供後續交易使用。',
+		__children: wrapKids
+	});
+}
 
 // SDK 直接回 paymentInstrumentId（checkout 與 order-pay 皆此路徑）
 let sel = SC.getPaymentInstrumentSelection({ paymentInstrumentId: 'pi-9' }, 'ys_shopline_credit_installment');
@@ -296,9 +307,31 @@ kids.iframe = iframes(2);
 kids['input[type="checkbox"]'] = [checkbox(true)];
 registry['#ys_shopline_credit_installment_container'] = containerWith(kids, '記錄本次付款資訊 儲存');
 sel = SC.getPaymentInstrumentSelection(null, 'ys_shopline_credit_installment');
-eq('installment 新卡＋勾選儲存樣態 → mode=new（P0 核心：永不 new_save）', 'new', sel.mode);
+eq('installment 新卡＋勾選儲存樣態 → mode=new_save', 'new_save', sel.mode);
+
+kids['input[type="checkbox"]'] = [checkbox(false)];
+registry['#ys_shopline_credit_installment_container'] = containerWith(kids, '記錄本次付款資訊 儲存');
+sel = SC.getPaymentInstrumentSelection(null, 'ys_shopline_credit_installment');
+eq('installment 新卡未勾選 → mode=new', 'new', sel.mode);
+
+// SHOPLINE 現行 SDK 使用自製 checkbox，沒有 input[type=checkbox]：
+// off_* 必須是 new；只有 checkbox_* 內含 active_* 才是 new_save。
+kids = {};
+kids[ITEMS_SEL] = [];
+kids.iframe = iframes(2);
+kids['input[type="checkbox"]'] = [];
+kids['[class*="wrap_"]'] = [sdkSaveControl(false)];
+registry['#ys_shopline_credit_installment_container'] = containerWith(kids, '我同意記錄本次付款資訊，供後續交易使用。');
+sel = SC.getPaymentInstrumentSelection(null, 'ys_shopline_credit_installment');
+eq('installment SDK custom checkbox off → mode=new', 'new', sel.mode);
+
+kids['[class*="wrap_"]'] = [sdkSaveControl(true)];
+registry['#ys_shopline_credit_installment_container'] = containerWith(kids, '我同意記錄本次付款資訊，供後續交易使用。');
+sel = SC.getPaymentInstrumentSelection(null, 'ys_shopline_credit_installment');
+eq('installment SDK custom checkbox active → mode=new_save', 'new_save', sel.mode);
 
 // 主卡同樣 DOM（checkbox 勾選）→ new_save（回歸：主卡行為不變）
+kids['input[type="checkbox"]'] = [checkbox(true)];
 registry['#ys_shopline_credit_container'] = containerWith(kids, '');
 sel = SC.getPaymentInstrumentSelection(null, 'ys_shopline_credit');
 eq('credit 新卡＋勾選 → mode=new_save（回歸）', 'new_save', sel.mode);
@@ -329,6 +362,13 @@ kids['input[type="checkbox"]'] = [];
 registry['#ys_shopline_credit_installment_container'] = containerWith(kids, '**** 5678');
 sel = SC.getPaymentInstrumentSelection(null, 'ys_shopline_credit_installment');
 eq('installment 唯一既有卡 fallback → saved+last4', true, sel.mode === 'saved' && sel.last4 === '5678');
+
+// createPayment() may replace the selected-card DOM before the promise resolves.
+// A pre-submit snapshot must survive unless the SDK returns a stronger instrument ID.
+let resolved = SC.resolvePaymentInstrumentSelection(null, 'ys_shopline_credit_installment', { mode: 'saved', instrumentId: '', last4: '8405' });
+eq('pre-create saved selection survives SDK DOM replacement', true, resolved.mode === 'saved' && resolved.last4 === '8405');
+resolved = SC.resolvePaymentInstrumentSelection({ paymentInstrumentId: 'pi-77' }, 'ys_shopline_credit_installment', { mode: 'new', instrumentId: '', last4: '' });
+eq('SDK instrument ID overrides pre-create snapshot', true, resolved.mode === 'saved' && resolved.instrumentId === 'pi-77');
 
 // ---------- 4. 呼叫點契約（原始碼斷言）----------
 console.log('== call-site contracts (source assertions) ==');

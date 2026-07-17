@@ -929,15 +929,11 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
         // - CardBindPayment: 綁卡付款（輸入卡號並儲存）- SDK 啟用 bindCard 時使用
         // - QuickPayment: 快捷付款（使用已綁定的卡片，需要 paymentCustomerId；SDK paySession 可攜帶選卡結果）
         //
-        // 分期 gateway 使用 CreditCard SDK + installmentCounts：
-        // v3.5.38：分期回歸官方「一般付款」定位，**不提供新卡儲存**（SDK 端已移除 bindCard）：
-        // - saved：既有卡分期 → QuickPayment（僅憑 customerToken 渲染既有卡，官方快捷付款規格）。
-        // - 其餘（new／new_save／未帶 mode）一律 Regular——SDK 無 bindCard 時送 CardBindPayment
-        //   是反向 mismatch；即使第三方前端或直接請求送入 new_save，後端仍以此為權威閘門。
-        //   舊行為（new→Regular 但 SDK bindCard on）正是「User authorization verification failed」
-        //   六筆異常訂單（會員＋分期＋新卡不儲存）的根因。
+        // Installment uses the CreditCard SDK with three explicit modes:
+        // saved -> QuickPayment, new_save -> CardBindPayment, new/missing -> Regular.
+        // Frontend code captures the mode before createPayment() mutates the SDK DOM.
         if ( 'ys_shopline_credit_installment' === $this->id ) {
-            if ( 'saved' === $payment_instrument_mode ) {
+            if ( in_array( $payment_instrument_mode, array( 'saved', 'new_save' ), true ) ) {
                 $use_bind_card = $user_id && $customer_id;
             } else {
                 $use_bind_card = false;

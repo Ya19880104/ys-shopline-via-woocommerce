@@ -178,21 +178,30 @@ class YSCreditInstallment extends YSGatewayBase {
 	 *
 	 * Credit-card installments use SHOPLINE CreditCard SDK with installmentCounts.
 	 *
-	 * v3.5.38：分期回歸 SHOPLINE 官方「一般付款」定位——**分期不提供新卡儲存**。
-	 * 官方規格：顯示會員既有卡列表只需 `customerToken`，毋須啟用 `paymentInstrument.bindCard`；
-	 * 而 SDK 啟用 bindCard、後端卻送 `paymentBehavior=Regular` 會觸發
-	 * 「User authorization verification failed」（客戶站六筆異常訂單根因：
-	 * 會員＋分期＋新卡不儲存 → SDK bindCard on／API Regular mismatch）。
-	 * 故：保留 customerToken（既有卡 → QuickPayment）、移除 bindCard（新卡一律 Regular）。
+	 * The same SDK carries installment Regular, CardBindPayment and QuickPayment
+	 * flows. The save switch defaults off; frontend code snapshots the selected
+	 * mode before createPayment() replaces the SDK DOM.
 	 *
 	 * @return array
 	 */
 	public function get_sdk_config() {
 		$config = parent::get_sdk_config();
 
-		// 分期一律不綁卡：移除 parent 可能設定的 bindCard／forceSaveCard，
-		// customerToken 保留（官方快捷付款規格：僅憑 customerToken 即可渲染既有卡列表）。
-		unset( $config['paymentInstrument'], $config['forceSaveCard'] );
+		if ( ! empty( $config['customerToken'] ) ) {
+			$config['paymentInstrument'] = array(
+				'bindCard' => array(
+					'enable'   => true,
+					'protocol' => array(
+						'switchVisible'       => true,
+						'defaultSwitchStatus' => false,
+						'mustAccept'          => false,
+					),
+				),
+			);
+		} else {
+			unset( $config['paymentInstrument'] );
+		}
+		unset( $config['forceSaveCard'] );
 
 		// v3.5.11: installments 配置 — 用 codex 抽出的 get_installment_context_total() helper
 		// 該 helper 已涵蓋 AJAX order_id / URL pay_for_order / cart 三種來源

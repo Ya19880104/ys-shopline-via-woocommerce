@@ -127,12 +127,16 @@ function ys_prepare_routing_case( string $gateway_id, string $mode, bool $subscr
 function ys_run_installment_routing_contract(): void {
 	echo "== Installment backend routing: paymentBehavior authority ==\n";
 
-	foreach ( array( 'new', 'new_save', '' ) as $mode ) {
+	foreach ( array( 'new', '' ) as $mode ) {
 		$data = ys_prepare_routing_case( 'ys_shopline_credit_installment', $mode );
 		$label = '' === $mode ? 'missing mode' : $mode;
 		YS_Assert::eq( "installment {$label} -> Regular", 'Regular', $data['confirm']['paymentBehavior'] ?? null );
 		YS_Assert::eq( "installment {$label} has no savePaymentInstrument", false, isset( $data['confirm']['paymentInstrument']['savePaymentInstrument'] ) );
 	}
+
+	$data = ys_prepare_routing_case( 'ys_shopline_credit_installment', 'new_save' );
+	YS_Assert::eq( 'installment new_save -> CardBindPayment', 'CardBindPayment', $data['confirm']['paymentBehavior'] ?? null );
+	YS_Assert::eq( 'installment new_save keeps savePaymentInstrument', true, $data['confirm']['paymentInstrument']['savePaymentInstrument'] ?? false );
 
 	$data = ys_prepare_routing_case( 'ys_shopline_credit_installment', 'saved' );
 	YS_Assert::eq( 'installment saved -> QuickPayment', 'QuickPayment', $data['confirm']['paymentBehavior'] ?? null );

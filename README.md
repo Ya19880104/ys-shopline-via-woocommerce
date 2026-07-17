@@ -4,7 +4,7 @@
 
 ## 版本資訊
 
-- **目前版本**：3.5.37
+- **目前版本**：3.5.39
 - **PHP 需求**：>= 8.0
 - **WordPress 需求**：>= 6.0
 - **WooCommerce 需求**：7.0 - 9.0
@@ -65,6 +65,18 @@ https://your-domain.com/wp-json/ys-shopline/v1/webhook
 ---
 
 ## 變更紀錄
+
+### 3.5.39 - 2026-07-17
+
+**修正會員信用卡分期的新卡／存卡／既有卡三條付款路徑。**
+
+- v3.5.38 依文件假設 `customerToken` 足以讓分期 SDK 顯示既有卡；測試站現行 SHOPLINE SDK 實測不成立，必須同時提供 `paymentInstrument.bindCard.enable=true` 才會渲染既有卡列表。因此分期改為顯示可選的儲存開關，且 `defaultSwitchStatus=false`、`mustAccept=false`，新卡預設仍不儲存。
+- 前端在 `createPayment()` **之前**保存付款工具選擇，避免 SDK 建立 paySession 時替換 DOM，導致既有卡在 checkout／order-pay 被誤判成新卡。SDK 若明確回傳 `paymentInstrumentId`，仍以 SDK 回傳為最高優先。
+- SHOPLINE 現行儲存開關是 CSS-module 自製控制項，沒有原生 checkbox；移除「看到儲存文字就視為已勾選」的錯誤 fallback，改為僅認 `checkbox_*` 內的 `active_*` 狀態。未勾選不再誤送 `CardBindPayment`。
+- 分期後端三態固定為：`new → Regular`、`new_save → CardBindPayment`、`saved → QuickPayment`；一般信用卡與訂閱路由不變。
+- 新增／擴充 PHP 與 Node 契約，鎖定 SDK options、SDK 自製開關、DOM snapshot、checkout／order-pay 共用選卡與後端三態路由。
+
+測試站 sandbox 實機驗證：分期 `saved`／`new`／`new_save` 三路、主信用卡 saved、order-pay saved、零元試用初始訂閱與 `Recurring` renewal 均成功；另重跑 HPOS 庫存 failed 回補、冪等、已付款 guard 與非 SHOPLINE scope。
 
 ### 3.5.38 - 2026-07-17
 

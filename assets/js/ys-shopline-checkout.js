@@ -26,12 +26,10 @@ jQuery(function ($) {
      * Gateway configurations mapping
      */
     /**
-     * v3.5.38: 分離兩種能力（覆核修正）——
-     * - supportsSavedCards：SDK 可顯示會員既有卡列表（只需後端 customerToken，官方快捷付款規格）
-     * - supportsBindCard  ：SDK 允許「綁定新卡」（paymentInstrument.bindCard）
-     * 分期＝支援既有卡、**不支援綁新卡**（官方定位：分期為一般付款、不顯示儲存選項）；
-     * 舊版兩者混用導致分期 SDK bindCard on＋API Regular mismatch
-     * （User authorization verification failed，客戶站六筆異常訂單根因）。
+     * supportsSavedCards controls existing-card detection while supportsBindCard
+     * controls the optional new-card save flow. Installments support both: the
+     * pre-create selection snapshot keeps SDK and API behavior aligned after the
+     * SDK replaces its DOM during createPayment().
      */
     var GATEWAY_CONFIG = {
         'ys_shopline_credit': {
@@ -44,7 +42,7 @@ jQuery(function ($) {
         'ys_shopline_credit_installment': {
             paymentMethod: 'CreditCard',
             containerId: 'ys_shopline_credit_installment_container',
-            supportsBindCard: false,
+            supportsBindCard: true,
             supportsSavedCards: true,
             supportsInstallment: true
         },
@@ -1101,6 +1099,11 @@ jQuery(function ($) {
 
             console.log('Calling createPayment...');
 
+            // createPayment() can replace the selected-card DOM before its promise
+            // resolves. Capture the user's choice first and only let an explicit
+            // SDK paymentInstrumentId override it.
+            var preCreateInstrumentSelection = self.getPaymentInstrumentSelection(null, gatewayId);
+
             // Create payment via SDK
             // v3.5.2: 移除 raw paySession / result console log（Codex review F2）
             // paySession 是付款 session material，在 production devtools / support screenshot
@@ -1161,7 +1164,7 @@ jQuery(function ($) {
 
                 // Add selected payment instrument if applicable
                 // 驗證 SDK 是否真的帶 paymentInstrumentId（用戶選已綁卡時）
-                var instrumentSelection = self.getPaymentInstrumentSelection(result, gatewayId);
+                var instrumentSelection = self.resolvePaymentInstrumentSelection(result, gatewayId, preCreateInstrumentSelection);
                 if (instrumentSelection.instrumentId) {
                     console.log('[YS Shopline] selected paymentInstrumentId, last6=' + String(instrumentSelection.instrumentId).slice(-6));
                     $form.find('input[name="ys_shopline_payment_instrument_id"]').remove();
@@ -1787,6 +1790,22 @@ jQuery(function ($) {
             return selection;
         },
 
+        resolvePaymentInstrumentSelection: function (result, gatewayId, preCreateSelection) {
+            if (result && result.paymentInstrumentId) {
+                return this.getPaymentInstrumentSelection(result, gatewayId);
+            }
+
+            if (preCreateSelection && /^(regular|saved|new|new_save)$/.test(preCreateSelection.mode || '')) {
+                return {
+                    mode: preCreateSelection.mode,
+                    instrumentId: preCreateSelection.instrumentId || '',
+                    last4: preCreateSelection.last4 || ''
+                };
+            }
+
+            return this.getPaymentInstrumentSelection(result, gatewayId);
+        },
+
         getActivePaymentOptionText: function ($container) {
             if (!$container || !$container.length) {
                 return '';
@@ -1906,8 +1925,30 @@ jQuery(function ($) {
                 return $checkboxes.filter(':checked').length > 0;
             }
 
-            var text = ($container.text() || '').replace(/\s+/g, ' ');
-            return /記錄本次付款資訊|儲存|綁定|save card|bind card/i.test(text);
+            // SHOPLINE SDK currently renders its save-card switch as CSS-module spans,
+            // not an input. The consent text exists in both states, so text presence
+            // cannot indicate consent. Only an active marker inside that switch counts.
+            var customControlFound = false;
+            var customControlActive = false;
+
+            $container.find('[class*="wrap_"]').each(function () {
+                var $control = $(this);
+                var controlText = ($control.text() || '').replace(/\s+/g, ' ').trim();
+                if (!/記錄本次付款資訊|save card|bind card/i.test(controlText) || controlText.length > 220) {
+                    return;
+                }
+
+                var $customCheckbox = $control.find('[class*="checkbox_"]');
+                if (!$customCheckbox.length) {
+                    return;
+                }
+
+                customControlFound = true;
+                customControlActive = $customCheckbox.find('[class*="active_"]').length > 0;
+                return false;
+            });
+
+            return customControlFound ? customControlActive : false;
         },
 
         /**
@@ -2120,6 +2161,9 @@ jQuery(function ($) {
                 overlayCSS: { background: '#fff', opacity: 0.6 }
             });
 
+            // Capture the selected instrument before createPayment() mutates the SDK DOM.
+            var preCreateInstrumentSelection = ShoplineCheckout.getPaymentInstrumentSelection(null, gatewayId);
+
             // 呼叫 SDK 取得 paySession
             paymentInstance.createPayment().then(function (result) {
                 // v3.5.2: 不 log raw result（含 paySession 原文）
@@ -2146,7 +2190,7 @@ jQuery(function ($) {
                     ? JSON.stringify(result.paySession)
                     : result.paySession;
 
-                var instrumentSelection = ShoplineCheckout.getPaymentInstrumentSelection(result, gatewayId);
+                var instrumentSelection = ShoplineCheckout.resolvePaymentInstrumentSelection(result, gatewayId, preCreateInstrumentSelection);
                 var urlParams = new URLSearchParams(window.location.search);
                 var ajaxData = {
                     action: 'ys_shopline_pay_for_order',
