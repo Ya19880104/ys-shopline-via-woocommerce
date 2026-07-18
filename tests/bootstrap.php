@@ -19,7 +19,8 @@ if ( ! class_exists( 'WP_Error' ) ) {
 	final class WP_Error {
 		public function __construct(
 			private string $code,
-			private string $message = ''
+			private string $message = '',
+			private $data = null
 		) {}
 
 		public function get_error_code(): string {
@@ -28,6 +29,10 @@ if ( ! class_exists( 'WP_Error' ) ) {
 
 		public function get_error_message(): string {
 			return $this->message;
+		}
+
+		public function get_error_data() {
+			return $this->data;
 		}
 	}
 }
@@ -59,7 +64,9 @@ if ( ! class_exists( 'WC_Order' ) ) {
 
 if ( ! class_exists( 'WC_Logger' ) ) {
 	class WC_Logger {
-		public function log( string $level, string $message, array $context = array() ): void {}
+		public function log( string $level, string $message, array $context = array() ): void {
+			$GLOBALS['ys_test_logs'][] = compact( 'level', 'message', 'context' );
+		}
 	}
 }
 
@@ -132,6 +139,7 @@ $GLOBALS['ys_test_orders'] = array();
 $GLOBALS['ys_test_notices'] = array();
 $GLOBALS['ys_test_actions'] = array();
 $GLOBALS['ys_test_query_vars'] = array();
+$GLOBALS['ys_test_logs'] = array();
 
 if ( ! function_exists( 'add_action' ) ) {
 	function add_action( string $hook, $callback, int $priority = 10, int $accepted_args = 1 ): void {
@@ -388,10 +396,13 @@ if ( ! function_exists( 'WC' ) ) {
 }
 
 $ys_src = dirname( __DIR__ ) . '/src';
+require_once $ys_src . '/Api/YSApiException.php';
+require_once $ys_src . '/Api/YSApiPartialSuccessException.php';
 require_once $ys_src . '/Utils/YSTradeStatus.php';
 require_once $ys_src . '/Utils/YSConfirmationPolicy.php';
 require_once $ys_src . '/Utils/YSApiError.php';
 require_once $ys_src . '/Utils/YSLogger.php';
+require_once $ys_src . '/Api/YSApi.php';
 require_once $ys_src . '/Utils/YSOrderMeta.php';
 require_once $ys_src . '/DTOs/YSSessionDTO.php';
 require_once $ys_src . '/Handlers/YSRedirectHandler.php';

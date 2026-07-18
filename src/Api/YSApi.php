@@ -64,7 +64,11 @@ class YSApi {
             return $e->get_response_body();
         } catch ( YSApiException $e ) {
             // Requester 的結構化錯誤（攜帶精確 error code：http_request_failed / json_decode_error / empty_response / 1999 / …）
-            return new WP_Error( $e->get_api_code(), $e->getMessage() );
+            $context = $e->get_context();
+            if ( ! array_key_exists( 'http_status', $context ) ) {
+                $context['http_status'] = (int) $e->getCode();
+            }
+            return new WP_Error( $e->get_api_code(), $e->getMessage(), $context );
         } catch ( \Throwable $e ) {
             // 未預期的錯誤（TypeError 等）— 不對外洩漏內部訊息
             YSLogger::error( 'API 未預期錯誤: ' . $e->getMessage(), [

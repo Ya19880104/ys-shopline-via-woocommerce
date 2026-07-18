@@ -207,6 +207,8 @@ Order notes and confirmation metadata include reason, remote status, reference, 
 - The 24-hour BNPL boundary stops automatic polling and escalates to review; it never marks the payment failed or unlocks repayment. Runtime duration should be reviewed against real merchant data before making it configurable.
 - Existing `resolve_prior_trade()` behavior for Apple Pay/LINE Pay customer cancellation remains unchanged.
 - Existing indeterminate exact-reference webhook guards remain authoritative.
+- Confirmation convergence is attempt-scoped, not merely order-scoped. A delayed webhook for `X_1` must never unlock active attempt `X_2`, even when both belong to the same WooCommerce order. The stale event remains a no-op and is handled by its own paid/abandoned-history path, scheduled reconciliation, or manual review; safety takes precedence over cross-generation convenience.
+- Reopening `pending` after an exact `CUSTOMER_ACTION` does not bypass `resolve_prior_trade()`. If the adopted trade cannot be queried, the resolver keeps the trade and fails closed without creating a new reference.
 - Existing abandoned-trade paid guard remains authoritative.
 - ATM account reuse remains unchanged.
 - Subscription recurring charge behavior remains byte-for-byte unchanged unless shared confirmation metadata cleanup is required.

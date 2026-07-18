@@ -173,4 +173,81 @@ final class YSApiError {
 
 		return 'unknown';
 	}
+
+	/**
+	 * Normalize safe diagnostics for an indeterminate create-trade result.
+	 *
+	 * Raw response bodies and payment/session tokens are deliberately excluded.
+	 * The caller may log this context through YSLogger, which applies its own
+	 * recursive redaction as a second boundary.
+	 *
+	 * @param array|\WP_Error|mixed $response Create-trade response.
+	 * @return array<string, mixed>
+	 */
+	public static function diagnostic_context( $response ): array {
+		$context = array(
+			'http_status'           => null,
+			'request_id'            => '',
+			'error_code'            => '',
+			'error_message'         => '',
+			'status'                => '',
+			'response_keys'         => array(),
+			'has_trade_order_id'    => false,
+			'has_next_action'       => false,
+			'payment_error_code'    => '',
+			'payment_error_message' => '',
+			'transport_error'       => '',
+		);
+
+		if ( is_wp_error( $response ) ) {
+			$data = method_exists( $response, 'get_error_data' ) ? $response->get_error_data() : null;
+			$data = is_array( $data ) ? $data : array();
+			$context['http_status']           = isset( $data['http_status'] ) && is_numeric( $data['http_status'] ) ? (int) $data['http_status'] : null;
+			$context['request_id']            = trim( (string) ( $data['request_id'] ?? '' ) );
+			$context['error_code']            = (string) $response->get_error_code();
+			$context['error_message']         = (string) $response->get_error_message();
+			$context['response_keys']         = self::string_keys( $data['response_keys'] ?? array() );
+			$context['has_trade_order_id']    = ! empty( $data['has_trade_order_id'] );
+			$context['has_next_action']       = ! empty( $data['has_next_action'] );
+			$context['payment_error_code']    = (string) ( $data['payment_error_code'] ?? '' );
+			$context['payment_error_message'] = (string) ( $data['payment_error_message'] ?? '' );
+			$context['transport_error']       = (string) ( $data['transport_error'] ?? ( 'http_request_failed' === $context['error_code'] ? $context['error_message'] : '' ) );
+			return $context;
+		}
+
+		if ( ! is_array( $response ) ) {
+			return $context;
+		}
+
+		$payment_msg = isset( $response['paymentMsg'] ) && is_array( $response['paymentMsg'] )
+			? $response['paymentMsg']
+			: array();
+		$context['status']                = strtoupper( trim( (string) ( $response['status'] ?? '' ) ) );
+		$context['response_keys']         = self::string_keys( array_keys( $response ) );
+		$context['has_trade_order_id']    = ! empty( $response['tradeOrderId'] );
+		$context['has_next_action']       = array_key_exists( 'nextAction', $response ) && null !== $response['nextAction'];
+		$context['payment_error_code']    = (string) ( $payment_msg['code'] ?? $response['code'] ?? '' );
+		$context['payment_error_message'] = (string) ( $payment_msg['msg'] ?? $response['msg'] ?? $response['message'] ?? '' );
+
+		return $context;
+	}
+
+	/**
+	 * Normalize a list of response key names.
+	 *
+	 * @param mixed $keys Candidate key list.
+	 * @return string[]
+	 */
+	private static function string_keys( $keys ): array {
+		if ( ! is_array( $keys ) ) {
+			return array();
+		}
+
+		return array_values(
+			array_map(
+				static fn( $key ): string => (string) $key,
+				$keys
+			)
+		);
+	}
 }

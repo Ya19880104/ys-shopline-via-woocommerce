@@ -18,13 +18,18 @@ class YSApiException extends \Exception {
     /** @var string API 回傳的錯誤碼（如 '1999'、'api_error'） */
     private string $api_code;
 
+    /** @var array<string, mixed> Safe structural diagnostics for the failed response. */
+    private array $context;
+
     /**
      * @param string $api_code API 錯誤碼
      * @param string $message  錯誤訊息
-     * @param int    $http_code HTTP 狀態碼
+     * @param int                  $http_code HTTP 狀態碼，尚未收到 HTTP 回應時為 0。
+     * @param array<string, mixed> $context   不含敏感 payload 的結構化診斷資料。
      */
-    public function __construct( string $api_code, string $message, int $http_code = 400 ) {
+    public function __construct( string $api_code, string $message, int $http_code = 400, array $context = array() ) {
         $this->api_code = $api_code;
+        $this->context  = $context;
         parent::__construct( $message, $http_code );
     }
 
@@ -33,5 +38,14 @@ class YSApiException extends \Exception {
      */
     public function get_api_code(): string {
         return $this->api_code;
+    }
+
+    /**
+     * Return safe response diagnostics for propagation into WP_Error data.
+     *
+     * @return array<string, mixed>
+     */
+    public function get_context(): array {
+        return $this->context;
     }
 }

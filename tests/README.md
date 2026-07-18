@@ -24,9 +24,13 @@ node tests/js/checkout-contract.test.js    # 前端契約（真實 JS 檔載入�
   - `from_response` 一律經 selector 產生交易 ID；**root `tradeOrderId` 不得繞過**；root 與 selector 不一致時 selector 勝；無 `paymentDetails`／malformed → `null`；缺 `sessionId` 拋例外。
 - **`YSApiError`**（[`YSApiErrorContractTest.php`](YSApiErrorContractTest.php)）
   - 建立交易回應三態分類；明確 rejected allowlist 與 unknown 相鄰碼；缺 `tradeOrderId`、未知狀態及 malformed 回應皆 fail-closed。
+  - unknown 診斷只保留 request ID、HTTP status、錯誤碼／訊息、response key 名稱與 `tradeOrderId`／`nextAction` 存在性；`YSApiException → WP_Error → gateway log` 必須保留同一份安全 context，且不得記錄 token 或原始 response body。
 - **`YSGatewayBase`**（[`YSGatewayOutcomeContractTest.php`](YSGatewayOutcomeContractTest.php)）
   - 含 transport unknown 真實影片等價路徑：第一次只建立一筆交易、轉入中立確認頁；立即重送在 API 前 fail-closed，reference 不變。
+  - LINE Pay／Apple Pay unknown 後收到 exact `CUSTOMER_ACTION` webhook 時，能以 reference fallback 找回尚無本地 trade ID 的訂單、立即回到 prior-trade resolver；金額不符仍維持確認鎖。
+  - customer-pending 解鎖後，若 prior-trade 的重查失敗，resolver 必須保留 trade、執行 query-cancel-query 後 fail-closed、不得建立新交易，並回傳 checkout／order-pay 共用的「請稍候約 1 分鐘」中立訊息。
   - 一般付款 rejected／accepted／unknown 消費契約；在途轉 `on-hold`；已收款完成入帳；缺交易 ID 寫入 indeterminate marker。
+  - Apple Pay 建立交易不可用空的純 server paySession 模擬：`referenceMerchant.StoreWebsite` 由瀏覽器 SHOPLINE SDK paySession 提供；`'{}'` 必然被 SHOPLINE 拒絕，只能用真實瀏覽器／裝置覆蓋 create 段，不得把此測試限制誤判成產品回歸。
 - **訂閱續扣**（[`YSSubscriptionRenewalContractTest.php`](YSSubscriptionRenewalContractTest.php)）
   - timeout 與 `1001`／`4003` unknown 不 fallback；`4450`／`4900` 明確拒絕才換卡；同卡不重試；既存交易 pre-create guard；`90011_` reference-prefix 反例；跨期 meta 排除。
 - **庫存扣減**（[`YSStockReductionContractTest.php`](YSStockReductionContractTest.php)）

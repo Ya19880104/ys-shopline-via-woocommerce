@@ -35,6 +35,9 @@ function ys_run_regression_scan(): void {
 
 	$js           = $read( 'assets/js/ys-shopline-checkout.js' );
 	$gateway      = $read( 'src/Gateways/YSGatewayBase.php' );
+	$api          = $read( 'src/Api/YSApi.php' );
+	$requester    = $read( 'src/Api/YSShoplineRequester.php' );
+	$api_error    = $read( 'src/Utils/YSApiError.php' );
 	$installment  = $read( 'src/Gateways/YSCreditInstallment.php' );
 	$subscription = $read( 'src/Gateways/YSCreditSubscription.php' );
 	$atm          = $read( 'src/Gateways/YSVirtualAccount.php' );
@@ -59,6 +62,7 @@ function ys_run_regression_scan(): void {
 	YS_Assert::is_true( 'checkout and order-pay share instrument selection', $has( $js, 'getPaymentInstrumentSelection' ) );
 
 	YS_Assert::is_true( 'gateway responses retain tri-state outcome', $has( $gateway, "'remote_outcome'" ) );
+	YS_Assert::is_true( 'unknown create diagnostics remain structured end-to-end', $has( $requester, 'transport_error' ) && $has( $api, 'get_context' ) && $has( $api_error, 'diagnostic_context' ) && $has( $gateway, 'YSApiError::diagnostic_context' ) );
 	YS_Assert::is_true( 'prior trade resolver remains present', $has( $gateway, 'resolve_prior_trade' ) );
 	YS_Assert::is_true( 'pre-create confirmation guard remains present', $has( $gateway, 'YSPaymentConfirmation::get_active_attempt' ) && $has( $gateway, 'resolve_indeterminate' ) );
 	YS_Assert::is_true( 'exact request envelope remains persisted', $has( $gateway, 'PAYMENT_ATTEMPT_DATA' ) );
@@ -82,6 +86,7 @@ function ys_run_regression_scan(): void {
 	YS_Assert::is_true( 'confirmation custom status remains registered', $has( $confirmation, "public const STATUS_KEY  = 'ys-confirming'" ) );
 	YS_Assert::is_true( 'confirmation lock remains order-scoped', $has( $confirmation, 'with_confirmation_lock' ) && $has( $confirmation, 'GET_LOCK' ) );
 	YS_Assert::is_true( 'strict webhook attempt matching remains centralized', $has( $confirmation, 'matching_webhook_attempt' ) );
+	YS_Assert::is_true( 'customer-action webhook uses exact confirmation convergence', $has( $confirmation, 'handle_customer_pending_webhook' ) && $has( $webhook, 'YSPaymentConfirmation::handle_customer_pending_webhook' ) && $has( $webhook, 'get_order_by_reference_order_id' ) );
 	YS_Assert::is_true( 'paid-history convergence guard remains present', $has( $confirmation, 'has_paid_history' ) );
 	YS_Assert::is_true( 'terminal convergence retains neutral notification', $has( $confirmation, 'send_terminal_notification' ) );
 	YS_Assert::is_true( 'final stage retains durable review marker', $has( $confirmation, 'mark_for_review' ) && $has( $confirmation, 'CONFIRMATION_REVIEW' ) );

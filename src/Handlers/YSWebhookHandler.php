@@ -644,6 +644,20 @@ final class YSWebhookHandler {
 
         $order = $this->get_order_by_trade_id( $trade_order_id );
 
+        // An indeterminate create response may not have persisted the trade ID.
+        // Resolve by the exact reference only for the confirmation lifecycle;
+        // mismatched events remain locked and never fall through to legacy updates.
+        $confirmation_order = $order;
+        if ( ! $confirmation_order && ! empty( $data['referenceOrderId'] ) ) {
+            $confirmation_order = $this->get_order_by_reference_order_id( (string) $data['referenceOrderId'] );
+        }
+        if ( $confirmation_order
+            && ( YSPaymentConfirmation::STATUS_KEY === $confirmation_order->get_status()
+                || ! empty( YSPaymentConfirmation::get_active_attempt( $confirmation_order ) ) ) ) {
+            YSPaymentConfirmation::handle_customer_pending_webhook( $confirmation_order, $data, 'CUSTOMER_ACTION' );
+            return;
+        }
+
         if ( ! $order ) {
             YSLogger::info( '等待顧客付款確認（找不到訂單）', [ 'trade_order_id' => $trade_order_id ] );
             return;

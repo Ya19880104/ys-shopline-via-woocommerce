@@ -334,6 +334,51 @@ final class YSPaymentConfirmation {
     }
 
     /**
+     * Return an exact customer-action webhook to the prior-trade resolver.
+     *
+     * Wallet cancellation can arrive after create returned an indeterminate
+     * result, before a trade ID was stored locally. Exact envelope matching is
+     * required before the confirmation lock is released.
+     *
+     * @param \WC_Order            $order   Order object.
+     * @param array<string, mixed> $payload Webhook payload.
+     * @param string               $status  CREATED/CUSTOMER_ACTION status.
+     */
+    public static function handle_customer_pending_webhook( \WC_Order $order, array $payload, string $status ): bool {
+        if ( YSConfirmationPolicy::FAMILY_CUSTOMER_PENDING !== YSConfirmationPolicy::family( $status ) ) {
+            return false;
+        }
+
+        $attempt = self::matching_webhook_attempt( $order, $payload );
+        if ( null === $attempt ) {
+            return false;
+        }
+
+        return (bool) self::with_confirmation_lock(
+            $order,
+            static function ( \WC_Order $fresh ) use ( $payload, $status ): bool {
+                if ( self::has_paid_history( $fresh ) ) {
+                    self::restore_paid_history_order( $fresh );
+                    return true;
+                }
+                $fresh_attempt = self::matching_webhook_attempt( $fresh, $payload );
+                if ( null === $fresh_attempt ) {
+                    return true;
+                }
+                self::converge_customer_pending(
+                    $fresh,
+                    $fresh_attempt,
+                    (string) $payload['tradeOrderId'],
+                    strtoupper( $status ),
+                    $payload
+                );
+                return true;
+            },
+            true
+        );
+    }
+
+    /**
      * Route an exact payment-query DTO through the active lifecycle.
      *
      * @param \WC_Order $order  Order object.

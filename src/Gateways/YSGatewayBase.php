@@ -686,12 +686,16 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
             // v3.5.36 P0：分類 rejected（確定不會收款，可安全還原/重試）vs unknown（狀態不明，可能已建交易）
             $outcome      = YSApiError::classify( $response );
 
-            YSLogger::error( 'Payment API error after create_payment_trade', array(
-                'order_id'       => $order->get_id(),
-                'error_code'     => $error_code,
-                'raw_error'      => $raw_error,
-                'remote_outcome' => $outcome,
-            ) );
+            YSLogger::error(
+                'Payment API error after create_payment_trade',
+                array_merge(
+                    array(
+                        'order_id'       => $order->get_id(),
+                        'remote_outcome' => $outcome,
+                    ),
+                    YSApiError::diagnostic_context( $response )
+                )
+            );
 
             if ( 'unknown' === $outcome ) {
                 // 狀態不明（timeout/空回應/解析失敗/1001/4003/4458/1018…）：遠端可能已建立交易但
@@ -760,10 +764,13 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
         // CREATED / 其他狀態）都無法確定是否真的建立交易、也沒有交易 ID 可供後續比對 →
         // 一律標記 indeterminate 並封鎖後續再建交易，避免「下一次遞增 reference 再建第二筆」的雙扣。
         if ( empty( $response['tradeOrderId'] ) ) {
-            YSLogger::warning( 'process_payment: success-ish response missing tradeOrderId → indeterminate', array(
-                'order_id' => $order->get_id(),
-                'status'   => (string) ( $response['status'] ?? '' ),
-            ) );
+            YSLogger::warning(
+                'process_payment: success-ish response missing tradeOrderId → indeterminate',
+                array_merge(
+                    array( 'order_id' => $order->get_id() ),
+                    YSApiError::diagnostic_context( $response )
+                )
+            );
             $this->mark_indeterminate( $order, $pay_session, $idempotent_key, $payment_data );
             $order->update_meta_data( YSOrderMeta::PAYMENT_STATUS, 'INDETERMINATE' );
             $order->add_order_note( __( 'Shopline 金流：付款回應缺少交易編號（tradeOrderId），無法確認是否已建立交易，已鎖定訂單避免重複建立。系統將於 webhook/查詢確認後更新。', 'ys-shopline-via-woocommerce' ) );
@@ -871,10 +878,13 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
         }
 
         if ( 'unknown' === $outcome ) {
-            YSLogger::error( 'Payment returned unknown status with trade ID', array(
-                'order_id' => $order->get_id(),
-                'status'   => $status,
-            ) );
+            YSLogger::error(
+                'Payment returned unknown status with trade ID',
+                array_merge(
+                    array( 'order_id' => $order->get_id() ),
+                    YSApiError::diagnostic_context( $response )
+                )
+            );
             $order->add_order_note( sprintf(
                 /* translators: %s: payment status */
                 __( 'Shopline 付款回傳未知狀態：%s。交易編號已保留，確認狀態前不會建立新交易。', 'ys-shopline-via-woocommerce' ),

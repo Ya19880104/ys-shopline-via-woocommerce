@@ -4,7 +4,7 @@
 
 ## 版本資訊
 
-- **目前版本**：3.6.0
+- **目前版本**：3.6.1
 - **PHP 需求**：>= 8.0
 - **WordPress 需求**：>= 6.0
 - **WooCommerce 需求**：7.0 - 10.4
@@ -65,6 +65,17 @@ https://your-domain.com/wp-json/ys-shopline/v1/webhook
 ---
 
 ## 變更紀錄
+
+### 3.6.1 - 2026-07-19
+
+**強化 Apple Pay／LINE Pay 確認鎖的即時收斂，並補齊建立交易 unknown 診斷。**
+
+- 修補一個可確認的降害缺口：訂單已進入 indeterminate 確認鎖、但本地尚無 trade ID 時，v3.6.0 的 `trade.customer_action` webhook 只用 trade ID 找訂單，無法即時收斂，必須等待排程查詢。此缺口不是 ATM 專屬鎖；客戶案件最初如何進入 unknown 仍須以當時 SHOPLINE log 判定，不把尚未取得的證據寫成既定根因。
+- `trade.customer_action` 對確認中訂單新增 reference fallback，並交由付款確認服務做 exact-attempt 核對；`referenceOrderId`、trade ID、SHOPLINE payment method、金額與幣別完全相符時，立即清除確認鎖、保留 trade ID 並回到 `pending`，讓下一次付款進入既有 `resolve_prior_trade()` 的取消／重查／歸檔流程後安全切換 ATM。
+- 建立交易被分類為 unknown 時，單筆 WooCommerce ERROR log 現在包含 request ID、HTTP status、SHOPLINE error/payment message、response key 清單，以及有無 `tradeOrderId`／`nextAction`；只記結構與錯誤資訊，不記 paySession、token 或完整 response body。
+- 解鎖不等於無條件放行：prior-trade resolver 若查不到剛接管的交易，仍保留 trade 並 fail-closed，checkout 與 order-pay 顯示中立的稍後重試訊息，不建立第二筆交易。
+- mismatch、malformed、已有付款歷史或收斂鎖忙碌皆維持 fail-closed；沒有放寬 `AUTHORIZED`／`PROCESSING`／未知狀態的重付限制，也未修改 ATM、前端、訂閱或一般信用卡付款流程。
+- 新增可重跑契約，覆蓋 LINE Pay／Apple Pay exact `CUSTOMER_ACTION`、unknown 診斷資料、無本地 trade ID 的 reference fallback、金額不符維持確認鎖，以及解鎖後遠端重查失敗不得建立新交易。
 
 ### 3.6.0 - 2026-07-17
 

@@ -80,10 +80,24 @@ final class YS_Gateway_Test_Order extends WC_Order {
 final class YS_Gateway_Test_Api {
 	public $response;
 	public int $create_calls = 0;
+	public array $prior_responses = array();
+	public $cancel_response = true;
+	public int $query_calls = 0;
+	public int $cancel_calls = 0;
 
 	public function create_payment_trade( array $data, string $idempotent_key ) {
 		$this->create_calls++;
 		return $this->response;
+	}
+
+	public function get_payment_trade( string $trade_order_id ) {
+		$this->query_calls++;
+		return array_shift( $this->prior_responses );
+	}
+
+	public function cancel_payment_by_ids( string $trade_order_id, string $reference_order_id ) {
+		$this->cancel_calls++;
+		return $this->cancel_response;
 	}
 }
 
@@ -104,6 +118,19 @@ final class YS_Gateway_Test_Gateway extends YSGatewayBase {
 
 	public function get_create_calls(): int {
 		return $this->api->create_calls;
+	}
+
+	public function configure_prior_trade( array $responses, $cancel_response = true ): void {
+		$this->api->prior_responses = $responses;
+		$this->api->cancel_response = $cancel_response;
+	}
+
+	public function get_query_calls(): int {
+		return $this->api->query_calls;
+	}
+
+	public function get_cancel_calls(): int {
+		return $this->api->cancel_calls;
 	}
 
 	protected function prepare_payment_data( $order, $pay_session ) {
@@ -127,6 +154,7 @@ function ys_gateway_process_response( $response ): array {
 	$order = new YS_Gateway_Test_Order();
 	$GLOBALS['ys_test_order'] = $order;
 	$GLOBALS['ys_test_notices'] = array();
+	$GLOBALS['ys_test_logs'] = array();
 	$_POST['ys_shopline_pay_session'] = '{"sessionId":"s-1"}';
 
 	$gateway = new YS_Gateway_Test_Gateway( $response );
@@ -167,14 +195,33 @@ function ys_run_gateway_outcome_contract(): void {
 	YS_Assert::eq( 'paid array response -> accepted', 'accepted', $result['remote_outcome'] );
 	YS_Assert::eq( 'paid array response completes payment', 'paid-1', $order->transaction_id );
 
-	list( $result, $order ) = ys_gateway_process_response( array( 'status' => 'SUCCEEDED' ) );
+	list( $result, $order ) = ys_gateway_process_response(
+		array(
+			'status'      => 'SUCCEEDED',
+			'paymentMsg'  => array( 'code' => '4458', 'msg' => 'still processing' ),
+			'nextAction'  => array( 'type' => 'Redirect' ),
+		)
+	);
 	YS_Assert::eq( 'missing trade ID -> unknown', 'unknown', $result['remote_outcome'] );
 	YS_Assert::eq( 'missing trade ID writes indeterminate marker', '9101_1', $order->get_meta( YSOrderMeta::INDETERMINATE_REF ) );
 	YS_Assert::eq( 'missing trade ID enters payment confirmation', 'ys-confirming', $order->status );
+	$missing_id_logs = wp_json_encode( $GLOBALS['ys_test_logs'] );
+	YS_Assert::is_true( 'missing trade ID log records response keys', str_contains( $missing_id_logs, 'response_keys' ) && str_contains( $missing_id_logs, 'paymentMsg' ) );
+	YS_Assert::is_true( 'missing trade ID log records envelope flags', str_contains( $missing_id_logs, 'has_next_action' ) && str_contains( $missing_id_logs, 'has_trade_order_id' ) );
+	YS_Assert::is_true( 'missing trade ID log records payment error details', str_contains( $missing_id_logs, 'payment_error_code' ) && str_contains( $missing_id_logs, '4458' ) );
 
 	$empty_calls_before = WC()->cart->empty_calls;
 	list( $result, $order, $gateway ) = ys_gateway_process_response(
-		new WP_Error( 'http_request_failed', 'Connection timed out after the request was sent.' )
+		new WP_Error(
+			'http_request_failed',
+			'Connection timed out after the request was sent.',
+			array(
+				'http_status'    => 0,
+				'request_id'     => 'req-timeout-2',
+				'response_keys'  => array(),
+				'transport_error' => 'Connection timed out after the request was sent.',
+			)
+		)
 	);
 	YS_Assert::eq( 'transport unknown creates exactly one remote request', 1, $gateway->get_create_calls() );
 	YS_Assert::eq( 'transport unknown returns success for thank-you redirect', 'success', $result['result'] );
@@ -183,6 +230,9 @@ function ys_run_gateway_outcome_contract(): void {
 	YS_Assert::eq( 'transport unknown enters payment confirmation', 'ys-confirming', $order->status );
 	YS_Assert::eq( 'transport unknown preserves exact indeterminate reference', '9101_1', $order->get_meta( YSOrderMeta::INDETERMINATE_REF ) );
 	YS_Assert::eq( 'transport unknown empties cart after durable confirmation state', $empty_calls_before + 1, WC()->cart->empty_calls );
+	$transport_logs = wp_json_encode( $GLOBALS['ys_test_logs'] );
+	YS_Assert::is_true( 'transport unknown log records HTTP and request identity', str_contains( $transport_logs, 'http_status' ) && str_contains( $transport_logs, 'req-timeout-2' ) );
+	YS_Assert::is_true( 'transport unknown log records exact transport error', str_contains( $transport_logs, 'transport_error' ) && str_contains( $transport_logs, 'Connection timed out after the request was sent.' ) );
 
 	$retry_gateway = new YS_Gateway_Test_Gateway( array( 'tradeOrderId' => 'must-not-create', 'status' => 'SUCCEEDED' ) );
 	$retry_result  = $retry_gateway->process_payment( $order->get_id() );
@@ -190,4 +240,26 @@ function ys_run_gateway_outcome_contract(): void {
 	YS_Assert::eq( 'immediate retry remains fail-closed unknown', 'unknown', $retry_result['remote_outcome'] );
 	YS_Assert::eq( 'immediate retry redirects to existing confirmation page', 'https://example.test/thank-you', $retry_result['redirect'] ?? '' );
 	YS_Assert::eq( 'immediate retry does not replace indeterminate reference', '9101_1', $order->get_meta( YSOrderMeta::INDETERMINATE_REF ) );
+
+	echo "== YSGatewayBase: customer-pending re-query remains fail-closed ==\n";
+	$prior_order = new YS_Gateway_Test_Order();
+	$prior_order->update_meta_data( YSOrderMeta::TRADE_ORDER_ID, 'wallet-trade-1' );
+	$prior_order->update_meta_data( YSOrderMeta::REFERENCE_ORDER_ID, '9101_1' );
+	$GLOBALS['ys_test_order'] = $prior_order;
+	$GLOBALS['ys_test_notices'] = array();
+	$prior_gateway = new YS_Gateway_Test_Gateway( array( 'tradeOrderId' => 'must-not-create', 'status' => 'SUCCEEDED' ) );
+	$prior_gateway->configure_prior_trade(
+		array(
+			array( 'tradeOrderId' => 'wallet-trade-1', 'status' => 'CUSTOMER_ACTION', 'paymentMethod' => 'LinePay' ),
+			new WP_Error( 'http_request_failed', 'query timeout' ),
+		),
+		new WP_Error( 'cannot_cancel', 'can not cancel' )
+	);
+	$resolution = $prior_gateway->resolve_prior_trade( $prior_order );
+	YS_Assert::eq( 'customer-pending re-query error stays blocked', 'blocked', $resolution['action'] ?? '' );
+	YS_Assert::eq( 'customer-pending re-query error uses one-minute neutral notice', '暫時無法確認前次付款狀態，請稍候約 1 分鐘後再試。若持續發生請聯繫客服。', $resolution['message'] ?? '' );
+	YS_Assert::eq( 'customer-pending re-query error preserves prior trade', 'wallet-trade-1', $prior_order->get_meta( YSOrderMeta::TRADE_ORDER_ID ) );
+	YS_Assert::eq( 'customer-pending re-query error performs query-cancel-query', 2, $prior_gateway->get_query_calls() );
+	YS_Assert::eq( 'customer-pending re-query error attempts one cancellation', 1, $prior_gateway->get_cancel_calls() );
+	YS_Assert::eq( 'customer-pending re-query error never creates a new trade', 0, $prior_gateway->get_create_calls() );
 }

@@ -228,7 +228,12 @@ final class YSShoplineRequester {
         if ( is_wp_error( $response ) ) {
             $error_message = $response->get_error_message();
             YSLogger::error( "API 請求錯誤: {$error_message}", [ 'request_id' => $request_id ] );
-            throw new YSApiException( 'http_request_failed', "API 請求失敗: {$error_message}" );
+            throw new YSApiException(
+                'http_request_failed',
+                "API 請求失敗: {$error_message}",
+                0,
+                self::build_error_context( $request_id, 0, array(), $error_message )
+            );
         }
 
         $body = wp_remote_retrieve_body( $response );
@@ -251,13 +256,23 @@ final class YSShoplineRequester {
                 'request_id' => $request_id,
                 'http_code'  => $code,
             ] );
-            throw new YSApiException( 'empty_response', 'API 回應為空，請稍後重試。' );
+            throw new YSApiException(
+                'empty_response',
+                'API 回應為空，請稍後重試。',
+                $code,
+                self::build_error_context( $request_id, $code )
+            );
         }
 
         $decoded_body = json_decode( $body, true );
 
         if ( json_last_error() !== JSON_ERROR_NONE ) {
-            throw new YSApiException( 'json_decode_error', 'API 回應格式異常，請稍後重試。' );
+            throw new YSApiException(
+                'json_decode_error',
+                'API 回應格式異常，請稍後重試。',
+                $code,
+                self::build_error_context( $request_id, $code )
+            );
         }
 
         // 防護：確保解析結果為陣列
@@ -266,7 +281,12 @@ final class YSShoplineRequester {
                 'request_id' => $request_id,
                 'http_code'  => $code,
             ] );
-            throw new YSApiException( 'empty_response', 'API 回應為空，請稍後重試。' );
+            throw new YSApiException(
+                'empty_response',
+                'API 回應為空，請稍後重試。',
+                $code,
+                self::build_error_context( $request_id, $code )
+            );
         }
 
         // 處理 HTTP 錯誤狀態碼
@@ -305,10 +325,41 @@ final class YSShoplineRequester {
                 ] );
             }
 
-            throw new YSApiException( $error_code, $error_message, $code );
+            throw new YSApiException(
+                $error_code,
+                $error_message,
+                $code,
+                self::build_error_context( $request_id, $code, $decoded_body )
+            );
         }
 
         return $decoded_body;
+    }
+
+    /**
+     * Build diagnostics that identify the failed boundary without retaining raw payloads.
+     *
+     * @param string               $request_id      SHOPLINE request id.
+     * @param int                  $http_status     HTTP response status, or 0 before a response exists.
+     * @param array<string, mixed> $response_body   Decoded response body when available.
+     * @param string               $transport_error WordPress transport error when no HTTP response exists.
+     * @return array<string, mixed>
+     */
+    private static function build_error_context( string $request_id, int $http_status, array $response_body = array(), string $transport_error = '' ): array {
+        $payment_msg = isset( $response_body['paymentMsg'] ) && is_array( $response_body['paymentMsg'] )
+            ? $response_body['paymentMsg']
+            : array();
+
+        return array(
+            'request_id'            => $request_id,
+            'http_status'           => $http_status,
+            'response_keys'         => array_map( 'strval', array_keys( $response_body ) ),
+            'has_trade_order_id'     => ! empty( $response_body['tradeOrderId'] ),
+            'has_next_action'        => array_key_exists( 'nextAction', $response_body ) && null !== $response_body['nextAction'],
+            'payment_error_code'     => (string) ( $payment_msg['code'] ?? $response_body['code'] ?? '' ),
+            'payment_error_message'  => (string) ( $payment_msg['msg'] ?? $response_body['msg'] ?? $response_body['message'] ?? '' ),
+            'transport_error'        => $transport_error,
+        );
     }
 
     /**
