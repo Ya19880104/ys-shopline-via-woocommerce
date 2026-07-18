@@ -520,14 +520,12 @@ jQuery(function ($) {
         },
 
         /**
-         * v3.5.38: 組出最終 SDK options（抽出供 Node 契約測試直接驗證）。
+         * 組出最終 SDK options（抽出供 Node 契約測試直接驗證）。
          *
          * bindCard 閘門：**只有 gatewayConfig.supportsBindCard 的 gateway 允許
          * paymentInstrument.bindCard**——不論來源是後端 serverConfig 或前端預設重建；
-         * 分期（supportsBindCard:false）僅靠 customerToken 載入既有卡（官方快捷付款規格：
-         * 顯示既有卡只需 customerToken），杜絕「SDK bindCard on＋API Regular」mismatch
-         * （User authorization verification failed）。後端 PHP 已同步移除分期
-         * paymentInstrument，此處為前端同構閘門（雙向皆 fail-safe）。
+         * 信用卡與分期可同時顯示既有卡及選擇是否儲存新卡，其他金流即使後端
+         * 誤帶 paymentInstrument 也會由此能力閘門剝除。
          *
          * @param {Object} gatewayConfig GATEWAY_CONFIG entry
          * @param {Object} serverConfig  後端 get_sdk_config 產出
@@ -1755,9 +1753,8 @@ jQuery(function ($) {
                 return selection;
             }
 
-            // v3.5.38: 既有卡偵測依 supportsSavedCards（分期支援既有卡但不綁新卡）。
-            // 不再依 isBindCardEnabled——bindCard 已與既有卡解耦，沿用會讓分期會員
-            // 選既有卡時拿不到 mode=saved、退化成 Regular 而非 QuickPayment。
+            // 既有卡偵測依 supportsSavedCards，與是否強制儲存新卡分開判斷。
+            // 選到 SDK 既有卡時必須產生 mode=saved，後端才會走 QuickPayment。
             var config = GATEWAY_CONFIG[gatewayId] || {};
             if (!config.supportsSavedCards) {
                 return selection;
@@ -1906,8 +1903,8 @@ jQuery(function ($) {
         isSaveCardRequested: function ($container, gatewayId) {
             var gatewayConfig = GATEWAY_CONFIG[gatewayId] || {};
 
-            // v3.5.38: 不支援綁新卡的 gateway（如分期）永不產生 new_save——
-            // 下方的 checkbox／文字偵測對分期可能誤判（既有卡列表文字含「儲存」等字樣）。
+            // 不支援綁新卡的 gateway 永不產生 new_save；信用卡與分期則依 SDK
+            // 選項判斷，避免只靠容器文字誤認顧客的儲存選擇。
             if (!gatewayConfig.supportsBindCard) {
                 return false;
             }

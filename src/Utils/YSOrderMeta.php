@@ -106,6 +106,21 @@ final class YSOrderMeta {
     /** @var string 付款結果不明明細（v3.5.36：reference/session_id/gateway/amount/currency/ts，供收斂比對） */
     public const INDETERMINATE_DATA = '_ys_shopline_indeterminate_data';
 
+    /** @var string Active payment-confirmation attempt envelope. */
+    public const CONFIRMATION_DATA = '_ys_shopline_confirmation_data';
+
+    /** @var string Non-sensitive exact request envelope for the current payment attempt. */
+    public const PAYMENT_ATTEMPT_DATA = '_ys_shopline_payment_attempt_data';
+
+    /** @var string Append-only payment-confirmation transition history. */
+    public const CONFIRMATION_HISTORY = '_ys_shopline_confirmation_history';
+
+    /** @var string Attempt-scoped customer-notification map. */
+    public const CONFIRMATION_MAIL_SENT = '_ys_shopline_confirmation_mail_sent';
+
+    /** @var string Unresolved payment-confirmation review data. */
+    public const CONFIRMATION_REVIEW = '_ys_shopline_confirmation_review';
+
     /** @var string 信用卡分期期數 */
     public const INSTALLMENT = '_ys_shopline_installment';
 

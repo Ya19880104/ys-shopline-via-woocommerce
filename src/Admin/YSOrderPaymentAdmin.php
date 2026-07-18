@@ -91,13 +91,22 @@ final class YSOrderPaymentAdmin {
 	 */
 	private function review_cell_html( \WC_Order $order ): string {
 		$flag = (string) $order->get_meta( YSOrderMeta::MANUAL_REVIEW_FLAG );
-		if ( '' === $flag ) {
+		$confirmation_review = self::has_open_confirmation_review( $order );
+		if ( '' === $flag && ! $confirmation_review ) {
 			return '';
 		}
-		if ( (int) $order->get_meta( YSOrderMeta::MANUAL_REVIEW_RESOLVED ) > 0 ) {
+		if ( ! $confirmation_review && (int) $order->get_meta( YSOrderMeta::MANUAL_REVIEW_RESOLVED ) > 0 ) {
 			return '<span title="' . esc_attr__( 'SHOPLINE 付款審核已結案', 'ys-shopline-via-woocommerce' ) . '">✔️</span>';
 		}
 		return '<span style="color:#d63638;font-weight:bold" title="' . esc_attr__( 'SHOPLINE 付款需人工處理', 'ys-shopline-via-woocommerce' ) . '">🔴</span>';
+	}
+
+	/**
+	 * Confirmation timeouts stay open until an exact payment result converges.
+	 */
+	public static function has_open_confirmation_review( \WC_Order $order ): bool {
+		$review = $order->get_meta( YSOrderMeta::CONFIRMATION_REVIEW );
+		return is_array( $review ) && 'confirmation_timeout' === (string) ( $review['type'] ?? '' );
 	}
 
 	/**
@@ -152,28 +161,38 @@ final class YSOrderPaymentAdmin {
 			return;
 		}
 
-		$flag = (string) $order->get_meta( YSOrderMeta::MANUAL_REVIEW_FLAG );
-		if ( '' === $flag ) {
+		$flag                = (string) $order->get_meta( YSOrderMeta::MANUAL_REVIEW_FLAG );
+		$confirmation_review = self::has_open_confirmation_review( $order );
+		if ( '' === $flag && ! $confirmation_review ) {
 			return;
 		}
 		// v3.5.36 P2：已結案 → 不再顯示告警橫幅
-		if ( (int) $order->get_meta( YSOrderMeta::MANUAL_REVIEW_RESOLVED ) > 0 ) {
+		if ( ! $confirmation_review && (int) $order->get_meta( YSOrderMeta::MANUAL_REVIEW_RESOLVED ) > 0 ) {
 			return;
 		}
 
-		switch ( $flag ) {
+		$messages = array();
+		if ( $confirmation_review ) {
+			$messages[] = __( '本訂單的付款結果在自動查詢期間仍無法確認，系統已持續鎖定重新付款。請先至 SHOPLINE Payments 核對該筆 reference／交易狀態，再決定入帳、取消或重新開放付款；未確認前請勿要求顧客重付。確認結果收斂後，此待辦會自動清除。', 'ys-shopline-via-woocommerce' );
+		}
+
+		$manual_review_open = '' !== $flag && (int) $order->get_meta( YSOrderMeta::MANUAL_REVIEW_RESOLVED ) <= 0;
+		if ( $manual_review_open ) {
+			switch ( $flag ) {
 			case 'paid_no_current_trade':
-				$msg = __( '本訂單目前無現行有效交易，但有一筆「已棄用交易」事後完成收款——顧客實際已付款、訂單卻未入帳。系統不會自動入帳，請人工決定確認入帳或辦理退款。', 'ys-shopline-via-woocommerce' );
+				$messages[] = __( '本訂單目前無現行有效交易，但有一筆「已棄用交易」事後完成收款——顧客實際已付款、訂單卻未入帳。系統不會自動入帳，請人工決定確認入帳或辦理退款。', 'ys-shopline-via-woocommerce' );
 				break;
 			case 'abandoned_paid_current_exists':
-				$msg = __( '本訂單有一筆「已棄用交易」已實際收款，且訂單另有一筆現行交易（其狀態請至 SHOPLINE 後台核對）。棄用交易才是已確認的實際收款，請勿盲目退舊；請核對現行交易狀態後決定以哪一筆入帳、另一筆退款。', 'ys-shopline-via-woocommerce' );
+				$messages[] = __( '本訂單有一筆「已棄用交易」已實際收款，且訂單另有一筆現行交易（其狀態請至 SHOPLINE 後台核對）。棄用交易才是已確認的實際收款，請勿盲目退舊；請核對現行交易狀態後決定以哪一筆入帳、另一筆退款。', 'ys-shopline-via-woocommerce' );
 				break;
 			case 'duplicate_paid':
 			default:
-				$msg = __( '本訂單現行交易已付款，但有一筆「已棄用交易」事後也完成收款——屬重複收款。請對「已棄用交易」辦理退款。', 'ys-shopline-via-woocommerce' );
+				$messages[] = __( '本訂單現行交易已付款，但有一筆「已棄用交易」事後也完成收款——屬重複收款。請對「已棄用交易」辦理退款。', 'ys-shopline-via-woocommerce' );
 				break;
+			}
+			$messages[] = __( '處理棄用交易後，可於「訂單動作」選「標記 SHOPLINE 付款審核已結案」。', 'ys-shopline-via-woocommerce' );
 		}
-		$msg .= __( '（詳見下方訂單備註；處理後可於「訂單動作」選「標記 SHOPLINE 付款審核已結案」。）', 'ys-shopline-via-woocommerce' );
+		$msg = implode( ' ', $messages );
 
 		printf(
 			'<div class="notice notice-error"><p><strong>%s</strong>%s</p></div>',

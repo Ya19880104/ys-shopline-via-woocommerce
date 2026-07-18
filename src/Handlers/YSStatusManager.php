@@ -189,6 +189,16 @@ final class YSStatusManager {
      * @param \WC_Order $order Order object.
      */
     private function do_sync_payment_status( \WC_Order $order ): void {
+        $confirmation = YSPaymentConfirmation::get_active_attempt( $order );
+        if ( YSPaymentConfirmation::STATUS_KEY === $order->get_status() && ! empty( $confirmation ) ) {
+            YSPaymentConfirmation::reconcile(
+                $order->get_id(),
+                (string) ( $confirmation['reference'] ?? '' ),
+                (int) ( $confirmation['stage'] ?? 0 )
+            );
+            return;
+        }
+
         $trade_order_id = (string) $order->get_meta( YSOrderMeta::TRADE_ORDER_ID );
         $session_id     = (string) $order->get_meta( YSOrderMeta::SESSION_ID );
 
@@ -281,12 +291,12 @@ final class YSStatusManager {
     }
 
     /**
-     * Periodic sync for recent pending/on-hold orders.
+     * Periodic safety-net sync for recent pending/on-hold/confirming orders.
      */
     public function sync_pending_orders(): void {
         $orders = wc_get_orders( [
-            'status'         => [ 'pending', 'on-hold' ],
-            'date_created'   => '>' . gmdate( 'Y-m-d H:i:s', time() - DAY_IN_SECONDS ),
+            'status'         => [ 'pending', 'on-hold', YSPaymentConfirmation::STATUS_KEY ],
+            'date_created'   => '>' . gmdate( 'Y-m-d H:i:s', time() - ( 2 * DAY_IN_SECONDS ) ),
             'payment_method' => self::SHOPLINE_GATEWAY_IDS,
             'limit'          => 50,
         ] );
@@ -592,6 +602,35 @@ final class YSStatusManager {
      */
     private function update_order_from_payment( \WC_Order $order, YSPaymentDTO $payment_dto ): void {
         $status = $this->normalize_status( $payment_dto->status );
+
+        if ( YSPaymentConfirmation::handle_query_result( $order, $payment_dto ) ) {
+            return;
+        }
+
+        if ( YSTradeStatus::is_in_flight( $status )
+            && 'ys_shopline_atm' !== $order->get_payment_method()
+            && YSPaymentConfirmation::enter_from_order(
+                $order,
+                $status,
+                $payment_dto->to_array(),
+                'status_sync'
+            ) ) {
+            return;
+        }
+
+        if ( '' !== $status
+            && ! YSTradeStatus::is_paid( $status )
+            && ! YSTradeStatus::is_terminal_safe( $status )
+            && ! YSTradeStatus::is_customer_pending( $status )
+            && 'ys_shopline_atm' !== $order->get_payment_method()
+            && YSPaymentConfirmation::enter_from_order(
+                $order,
+                $status,
+                $payment_dto->to_array(),
+                'status_sync_unknown'
+            ) ) {
+            return;
+        }
 
         if ( ! empty( $payment_dto->payment_method ) ) {
             $order->update_meta_data( YSOrderMeta::PAYMENT_METHOD, $payment_dto->payment_method );

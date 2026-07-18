@@ -15,6 +15,7 @@ use YangSheep\ShoplinePayment\Utils\YSTradeStatus;
 use YangSheep\ShoplinePayment\Utils\YSApiError;
 use YangSheep\ShoplinePayment\Api\YSApi;
 use YangSheep\ShoplinePayment\Handlers\YSRedirectHandler;
+use YangSheep\ShoplinePayment\Handlers\YSPaymentConfirmation;
 use YangSheep\ShoplinePayment\Customer\YSCustomer;
 use WC_Payment_Gateway;
 use WC_Order;
@@ -547,6 +548,21 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
             return array( 'result' => 'failure', 'remote_outcome' => 'rejected' );
         }
 
+        $active_confirmation = YSPaymentConfirmation::get_active_attempt( $order );
+        if ( YSPaymentConfirmation::STATUS_KEY === $order->get_status() || ! empty( $active_confirmation ) ) {
+            if ( ! empty( $active_confirmation ) && YSPaymentConfirmation::STATUS_KEY !== $order->get_status() ) {
+                YSPaymentConfirmation::enter_confirmation( $order, $active_confirmation, 'pre_create_guard' );
+            }
+            $message = __( '付款結果確認中，為避免重複扣款，此訂單目前無法再次付款。', 'ys-shopline-via-woocommerce' );
+            wc_add_notice( $message, 'notice' );
+            return array(
+                'result'         => 'success',
+                'redirect'       => $this->get_return_url( $order ),
+                'remote_outcome' => 'unknown',
+                'messages'       => $message,
+            );
+        }
+
         // v3.5.1: 進入 process_payment 就立刻寫 note，確保訂單永遠有 audit trail
         $order->add_order_note( sprintf(
             /* translators: %s: gateway id */
@@ -657,6 +673,7 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
 
         // Prepare payment data
         $payment_data = $this->prepare_payment_data( $order, $pay_session );
+        $this->store_payment_attempt_data( $order, $payment_data, is_array( $decoded ) ? $decoded : array() );
 
         // Create payment trade（帶冪等鍵，同一次 attempt 重送不會重複扣款）
         $idempotent_key = (string) $order->get_meta( YSOrderMeta::REFERENCE_ORDER_ID );
@@ -692,6 +709,24 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
 
                 $msg = __( '付款結果確認中，請勿重複付款；若已扣款我們會自動更新訂單，若未扣款請稍後再試。', 'ys-shopline-via-woocommerce' );
                 wc_add_notice( $msg, 'notice' );
+                if ( YSPaymentConfirmation::enter_from_order(
+                    $order,
+                    'INDETERMINATE',
+                    array(),
+                    'gateway_create_unknown',
+                    array(
+                        'gateway'         => $this->id,
+                        'shopline_method' => $this->get_payment_method(),
+                    )
+                ) ) {
+                    WC()->cart->empty_cart();
+                    return array(
+                        'result'         => 'success',
+                        'redirect'       => $this->get_return_url( $order ),
+                        'remote_outcome' => 'unknown',
+                        'messages'       => $msg,
+                    );
+                }
                 return array(
                     'result'         => 'failure',
                     'remote_outcome' => 'unknown',
@@ -733,6 +768,22 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
             $order->update_meta_data( YSOrderMeta::PAYMENT_STATUS, 'INDETERMINATE' );
             $order->add_order_note( __( 'Shopline 金流：付款回應缺少交易編號（tradeOrderId），無法確認是否已建立交易，已鎖定訂單避免重複建立。系統將於 webhook/查詢確認後更新。', 'ys-shopline-via-woocommerce' ) );
             $order->save();
+            if ( YSPaymentConfirmation::enter_from_order(
+                $order,
+                'INDETERMINATE',
+                $response,
+                'gateway_missing_trade_id',
+                array(
+                    'gateway'         => $this->id,
+                    'shopline_method' => $this->get_payment_method(),
+                )
+            ) ) {
+                WC()->cart->empty_cart();
+                $blocked = $this->indeterminate_blocked_response();
+                $blocked['result']   = 'success';
+                $blocked['redirect'] = $this->get_return_url( $order );
+                return $blocked;
+            }
             return $this->indeterminate_blocked_response();
         }
 
@@ -768,6 +819,40 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
         }
 
         if ( 'accepted' === $outcome && ! YSTradeStatus::is_paid( $status ) ) {
+            if ( YSTradeStatus::is_customer_pending( $status ) ) {
+                if ( 'pending' !== $order->get_status() ) {
+                    $order->update_status( 'pending' );
+                }
+                $order->update_meta_data( YSOrderMeta::PAYMENT_STATUS, $status );
+                $order->save();
+                WC()->cart->empty_cart();
+                return array(
+                    'result'         => 'success',
+                    'redirect'       => $this->get_return_url( $order ),
+                    'remote_outcome' => 'accepted',
+                );
+            }
+
+            if ( 'ys_shopline_atm' !== $this->id
+                && YSTradeStatus::is_in_flight( $status )
+                && YSPaymentConfirmation::enter_from_order(
+                    $order,
+                    $status,
+                    $response,
+                    'gateway_create_response',
+                    array(
+                        'gateway'         => $this->id,
+                        'shopline_method' => $this->get_payment_method(),
+                    )
+                ) ) {
+                WC()->cart->empty_cart();
+                return array(
+                    'result'         => 'success',
+                    'redirect'       => $this->get_return_url( $order ),
+                    'remote_outcome' => 'accepted',
+                );
+            }
+
             $order->update_status( 'on-hold', sprintf(
                 /* translators: %s: payment status */
                 __( 'Shopline 付款處理中，狀態：%s，等待 webhook 確認。', 'ys-shopline-via-woocommerce' ),
@@ -799,6 +884,23 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
             $order->save();
 
             wc_add_notice( __( '付款結果確認中，請勿重複付款。', 'ys-shopline-via-woocommerce' ), 'notice' );
+            if ( YSPaymentConfirmation::enter_from_order(
+                $order,
+                $status ?: 'UNKNOWN',
+                $response,
+                'gateway_unknown_status',
+                array(
+                    'gateway'         => $this->id,
+                    'shopline_method' => $this->get_payment_method(),
+                )
+            ) ) {
+                WC()->cart->empty_cart();
+                return array(
+                    'result'         => 'success',
+                    'redirect'       => $this->get_return_url( $order ),
+                    'remote_outcome' => 'unknown',
+                );
+            }
             return array(
                 'result'         => 'success',
                 'redirect'       => $order->get_checkout_payment_url(),
@@ -1609,9 +1711,50 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
         $order->delete_meta_data( YSOrderMeta::PAYMENT_STATUS );
         $order->delete_meta_data( YSOrderMeta::PAYMENT_DETAIL );
         $order->delete_meta_data( YSOrderMeta::NEXT_ACTION );
+        $order->delete_meta_data( YSOrderMeta::PAYMENT_ATTEMPT_DATA );
         $order->delete_meta_data( YSOrderMeta::VA_ACCOUNT );
         $order->delete_meta_data( YSOrderMeta::VA_BANK_CODE );
         $order->delete_meta_data( YSOrderMeta::VA_EXPIRE );
+        $order->save();
+    }
+
+    /**
+     * Store the exact non-sensitive request envelope before creating a trade.
+     *
+     * The raw paySession is intentionally excluded. This preserves filtered
+     * amounts, including zero-value subscription bind charges, for later
+     * redirect/webhook/query verification.
+     *
+     * @param WC_Order $order        Order object.
+     * @param array    $payment_data Exact create-trade request.
+     * @param array    $pay_session  Decoded paySession metadata.
+     */
+    protected function store_payment_attempt_data( $order, array $payment_data, array $pay_session ): void {
+        $reference = trim( (string) ( $payment_data['referenceOrderId'] ?? '' ) );
+        $method    = trim( (string) ( $payment_data['confirm']['paymentMethod'] ?? '' ) );
+        $amount    = isset( $payment_data['amount']['value'] ) ? (int) $payment_data['amount']['value'] : -1;
+        $currency  = strtoupper( trim( (string) ( $payment_data['amount']['currency'] ?? '' ) ) );
+        if ( '' === $reference || '' === $method || $amount < 0 || '' === $currency ) {
+            return;
+        }
+
+        $session_id = trim( (string) ( $pay_session['sessionId'] ?? '' ) );
+        $order->update_meta_data(
+            YSOrderMeta::PAYMENT_ATTEMPT_DATA,
+            array(
+                'reference'       => $reference,
+                'session_id'      => $session_id,
+                'gateway'         => $this->id,
+                'shopline_method' => $method,
+                'amount'          => $amount,
+                'currency'        => $currency,
+                'started_at'      => time(),
+            )
+        );
+        if ( '' !== $session_id ) {
+            $order->update_meta_data( YSOrderMeta::SESSION_ID, $session_id );
+        }
+        $order->update_meta_data( YSOrderMeta::PAYMENT_METHOD, $method );
         $order->save();
     }
 

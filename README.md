@@ -4,10 +4,10 @@
 
 ## 版本資訊
 
-- **目前版本**：3.5.39
+- **目前版本**：3.6.0
 - **PHP 需求**：>= 8.0
 - **WordPress 需求**：>= 6.0
-- **WooCommerce 需求**：7.0 - 9.0
+- **WooCommerce 需求**：7.0 - 10.4
 
 ## 支援的付款方式
 
@@ -65,6 +65,21 @@ https://your-domain.com/wp-json/ys-shopline/v1/webhook
 ---
 
 ## 變更紀錄
+
+### 3.6.0 - 2026-07-17
+
+**新增付款結果確認生命週期，將「尚未確認」與一般待付款／保留狀態明確分離。**
+
+- 新增 WooCommerce 自訂狀態 `wc-ys-confirming`（後台／客戶顯示「付款確認中」）。信用卡、分期、Apple Pay、LINE Pay、街口與中租遇到 `AUTHORIZED`／`PROCESSING`／`PENDING`，或 create/query 回應不明時，會進入此狀態並鎖定重新付款；不視為已付款、不觸發出貨。
+- 付款 attempt 以精確 `referenceOrderId`、trade/session ID、SHOPLINE payment method、實送金額與幣別識別。排程查詢、每小時 safety-net、redirect 與 webhook 共用同一套嚴格收斂規則；mismatch、malformed、多筆 active 或未知狀態一律 fail-closed。
+- 信用卡／錢包於約 2m、5m、15m、30m、1h、3h、6h查詢；中租於約 5m、15m、1h、6h、24h查詢。時間經過只會觸發查詢，**不會單憑逾時宣告失敗**；最終仍不明則保留鎖定並進入後台「SLP審核」待辦。
+- 自動查詢達上限時，除後台紅色待辦、訂單 note 與 log 外，會依 reference 冪等寄送一封「需立即核對」管理員通知；只通知商店管理員，不向顧客宣告成功或失敗。
+- 明確已付款結果在訂單級 MySQL named lock 內執行一次 `payment_complete()`；明確 FAILED／EXPIRED／CANCELLED 才退回 `pending`、依 WooCommerce 標準旗標釋放庫存並重新開放付款。客戶與商店管理員各收一封中立通知，依 reference 冪等，不宣稱「未扣款」。
+- 終態退回後，感謝頁、我的訂單與 `order-pay` 付款表單均顯示「付款確認未完成」中立提示；`order-pay` 直接使用原生付款按鈕，不重複插入第二個付款命令。
+- unknown 後若查得 `CREATED`／`CUSTOMER_ACTION`，會回到既有 prior-trade resolver：保留 trade ID，下一次付款先取消／重查／棄用，維持 Apple Pay／LINE Pay 關閉後換方式的安全流程；ATM 已取得虛擬帳號的離線待繳流程不變。
+- 已有 `date_paid` 的訂單不會被晚到 AUTHORIZED／PROCESSING／CUSTOMER_ACTION／FAILED／CANCELLED／EXPIRED webhook 改回未付款或釋放庫存；若競態造成已付款訂單停在確認中，會清除不一致鎖並恢復 paid 狀態，不重跑付款完成 hook。
+- WooCommerce Subscriptions 續扣維持 v3.5.36 的獨立 fail-closed 流程；新增 attempt／confirmation meta 全數排除 renewal 複製，避免上一期鎖定資料污染下一期。
+- 新增 RD、實作計畫與版控測試：狀態分類、排程、HPOS CRUD、strict session/webhook、customer-pending 收斂、通知冪等、paid-history、convergence lock、續扣 meta 隔離、後台人工審核可見性及付款關鍵機制靜態回歸哨兵。
 
 ### 3.5.39 - 2026-07-17
 

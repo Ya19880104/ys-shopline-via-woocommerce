@@ -331,6 +331,11 @@ final class YSWebhookHandler {
             return;
         }
 
+        if ( YSPaymentConfirmation::STATUS_KEY === $order->get_status() ) {
+            YSPaymentConfirmation::handle_paid_webhook( $order, $data, 'SUCCEEDED' );
+            return;
+        }
+
         // 檢查是否已付款
         if ( $order->is_paid() ) {
             YSLogger::info( 'Webhook: 訂單已付款，跳過處理', array( 'order_id' => $order->get_id() ) );
@@ -405,7 +410,20 @@ final class YSWebhookHandler {
 
         $order = $this->get_order_by_trade_id( $trade_order_id );
 
+        if ( ! $order && ! empty( $data['referenceOrderId'] ) ) {
+            $order = $this->get_order_by_reference_order_id( (string) $data['referenceOrderId'] );
+        }
+
+        if ( $order && YSPaymentConfirmation::STATUS_KEY === $order->get_status() ) {
+            YSPaymentConfirmation::handle_terminal_webhook( $order, $data, 'FAILED' );
+            return;
+        }
+
         if ( ! $order || $order->is_paid() ) {
+            return;
+        }
+        if ( $this->has_paid_history( $order ) ) {
+            $this->note_late_non_paid_event_for_paid_order( $order, 'FAILED' );
             return;
         }
 
@@ -434,6 +452,21 @@ final class YSWebhookHandler {
         $order = $this->get_order_by_trade_id( $trade_order_id );
 
         if ( ! $order ) {
+            return;
+        }
+
+        if ( $this->has_paid_history( $order ) ) {
+            $this->note_late_non_paid_event_for_paid_order( $order, 'AUTHORIZED' );
+            return;
+        }
+
+        if ( 'ys_shopline_atm' !== $order->get_payment_method()
+            && YSPaymentConfirmation::enter_from_order(
+                $order,
+                'AUTHORIZED',
+                $data,
+                'webhook_authorized'
+            ) ) {
             return;
         }
 
@@ -469,6 +502,11 @@ final class YSWebhookHandler {
         $order = $this->get_order_for_paid_trade_webhook( $data );
 
         if ( ! $order ) {
+            return;
+        }
+
+        if ( YSPaymentConfirmation::STATUS_KEY === $order->get_status() ) {
+            YSPaymentConfirmation::handle_paid_webhook( $order, $data, 'CAPTURED' );
             return;
         }
 
@@ -508,7 +546,21 @@ final class YSWebhookHandler {
 
         $order = $this->get_order_by_trade_id( $trade_order_id );
 
+        if ( ! $order && ! empty( $data['referenceOrderId'] ) ) {
+            $order = $this->get_order_by_reference_order_id( (string) $data['referenceOrderId'] );
+        }
+
         if ( ! $order ) {
+            return;
+        }
+
+        if ( YSPaymentConfirmation::STATUS_KEY === $order->get_status() ) {
+            YSPaymentConfirmation::handle_terminal_webhook( $order, $data, 'CANCELLED' );
+            return;
+        }
+
+        if ( $this->has_paid_history( $order ) ) {
+            $this->note_late_non_paid_event_for_paid_order( $order, 'CANCELLED' );
             return;
         }
 
@@ -550,7 +602,25 @@ final class YSWebhookHandler {
 
         $order = $this->get_order_by_trade_id( $trade_order_id );
 
-        if ( ! $order || ! in_array( $order->get_status(), [ 'pending', 'on-hold' ], true ) ) {
+        if ( ! $order && ! empty( $data['referenceOrderId'] ) ) {
+            $order = $this->get_order_by_reference_order_id( (string) $data['referenceOrderId'] );
+        }
+
+        if ( $order && YSPaymentConfirmation::STATUS_KEY === $order->get_status() ) {
+            YSPaymentConfirmation::handle_terminal_webhook( $order, $data, 'EXPIRED' );
+            return;
+        }
+
+        if ( ! $order ) {
+            return;
+        }
+
+        if ( $this->has_paid_history( $order ) ) {
+            $this->note_late_non_paid_event_for_paid_order( $order, 'EXPIRED' );
+            return;
+        }
+
+        if ( ! in_array( $order->get_status(), [ 'pending', 'on-hold' ], true ) ) {
             return;
         }
 
@@ -579,6 +649,11 @@ final class YSWebhookHandler {
             return;
         }
 
+        if ( $this->has_paid_history( $order ) ) {
+            $this->note_late_non_paid_event_for_paid_order( $order, 'CUSTOMER_ACTION' );
+            return;
+        }
+
         // 嘗試儲存 ATM 虛擬帳號資訊
         $this->maybe_store_virtual_account_info( $order, $data );
 
@@ -603,11 +678,35 @@ final class YSWebhookHandler {
 
         $order = $this->get_order_by_trade_id( $trade_order_id );
 
-        if ( ! $order || 'pending' !== $order->get_status() ) {
+        if ( ! $order ) {
+            return;
+        }
+
+        if ( $this->has_paid_history( $order ) ) {
+            $this->note_late_non_paid_event_for_paid_order( $order, 'PROCESSING' );
             return;
         }
 
         $sub_status = strtoupper( (string) ( $data['subStatus'] ?? '' ) );
+
+        if ( 'ys_shopline_atm' !== $order->get_payment_method()
+            && YSPaymentConfirmation::enter_from_order(
+                $order,
+                'PROCESSING',
+                $data,
+                'webhook_processing',
+                array(
+                    'reason' => in_array( $sub_status, array( 'AUTHORIZED', 'CAPTURING' ), true )
+                        ? 'authorized'
+                        : 'in_flight',
+                )
+            ) ) {
+            return;
+        }
+
+        if ( 'pending' !== $order->get_status() ) {
+            return;
+        }
 
         if ( in_array( $sub_status, array( 'AUTHORIZED', 'CAPTURING' ), true ) ) {
             $order->update_status( 'on-hold', __( 'SHOPLINE 付款已授權，等待金流回傳確認。', 'ys-shopline-via-woocommerce' ) );
@@ -1122,6 +1221,9 @@ final class YSWebhookHandler {
         if ( ! $order ) {
             return;
         }
+        if ( ! $this->validate_indeterminate_match( $order, $data ) ) {
+            return;
+        }
 
         $order->delete_meta_data( YSOrderMeta::INDETERMINATE_REF );
         $order->delete_meta_data( YSOrderMeta::INDETERMINATE_DATA );
@@ -1130,7 +1232,7 @@ final class YSWebhookHandler {
         }
         $order->add_order_note( sprintf(
             /* translators: %s: terminal event */
-            __( 'Shopline 金流：webhook 確認前次不明付款交易已 %s（未收款），已解除鎖定、可重新付款。', 'ys-shopline-via-woocommerce' ),
+            __( 'Shopline 金流：webhook 確認前次不明付款交易已終結（%s），已解除系統鎖定；若銀行仍顯示保留款，請先人工核對。', 'ys-shopline-via-woocommerce' ),
             $event
         ) );
         $order->save();
@@ -1355,6 +1457,32 @@ final class YSWebhookHandler {
         }
 
         return (int) $matches[1];
+    }
+
+    /**
+     * A paid date survives later manual status changes, unlike is_paid().
+     */
+    private function has_paid_history( \WC_Order $order ): bool {
+        return (bool) $order->get_date_paid();
+    }
+
+    /**
+     * Keep late terminal events visible without reopening or restocking a paid order.
+     */
+    private function note_late_non_paid_event_for_paid_order( \WC_Order $order, string $status ): void {
+        $order->add_order_note(
+            sprintf(
+                /* translators: %s: SHOPLINE terminal payment status. */
+                __( 'SHOPLINE returned a late %s event after this order had already been paid. The order status, payment metadata, and stock were left unchanged; please verify the payment in SHOPLINE.', 'ys-shopline-via-woocommerce' ),
+                $status
+            )
+        );
+        $order->save();
+
+        YSLogger::warning( 'Webhook: ignored late non-paid event for paid order', [
+            'order_id' => $order->get_id(),
+            'status'   => $status,
+        ] );
     }
 
     /**

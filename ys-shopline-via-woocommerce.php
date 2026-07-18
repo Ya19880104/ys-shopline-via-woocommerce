@@ -3,7 +3,7 @@
  * Plugin Name: YS Shopline via WooCommerce
  * Plugin URI: https://yangsheep.com.tw
  * Description: Support Shopline Payments for WooCommerce, including HPOS and Subscriptions. Supports Credit Card, ATM, JKOPay, Apple Pay, LINE Pay, and Chailease BNPL.
- * Version:           3.5.39
+ * Version:           3.6.0
  * Author: YangSheep
  * Author URI: https://yangsheep.com.tw
  * Text Domain: ys-shopline-via-woocommerce
@@ -11,13 +11,13 @@
  * Requires at least: 6.0
  * Requires PHP: 8.0
  * WC requires at least: 7.0
- * WC tested up to: 9.0
+ * WC tested up to: 10.4
  */
 
 defined( 'ABSPATH' ) || exit;
 
 // Define plugin constants
-define( 'YS_SHOPLINE_VERSION', '3.5.39' );
+define( 'YS_SHOPLINE_VERSION', '3.6.0' );
 // v3.5.14: 資料庫綱要版本（用於 plugins_loaded 一次性 migration），與 plugin 版本解耦。
 define( 'YS_SHOPLINE_DB_VERSION', '3.5.14' );
 define( 'YS_SHOPLINE_PLUGIN_FILE', __FILE__ );
@@ -48,6 +48,10 @@ spl_autoload_register( function ( $class ) {
 register_deactivation_hook( __FILE__, function () {
     wp_clear_scheduled_hook( 'ys_shopline_sync_pending_orders' );
     wp_clear_scheduled_hook( 'ys_shopline_bindcard_log_cleanup' ); // 舊版遺留
+    wp_clear_scheduled_hook( 'ys_shopline_confirm_payment' );
+    if ( function_exists( 'as_unschedule_all_actions' ) ) {
+        as_unschedule_all_actions( 'ys_shopline_confirm_payment', array(), 'ys-shopline-payment-confirmation' );
+    }
 } );
 
 use YangSheep\ShoplinePayment\Utils\YSLogger;
@@ -72,6 +76,7 @@ use YangSheep\ShoplinePayment\Handlers\YSRedirectHandler;
 use YangSheep\ShoplinePayment\Handlers\YSAddPaymentMethodHandler;
 use YangSheep\ShoplinePayment\Handlers\YSWebhookHandler;
 use YangSheep\ShoplinePayment\Handlers\YSStatusManager;
+use YangSheep\ShoplinePayment\Handlers\YSPaymentConfirmation;
 // v3.5.2: YSBlocksSupport 已停用（見 init()），保留類別但不 use/init
 // use YangSheep\ShoplinePayment\Blocks\YSBlocksSupport;
 
@@ -357,6 +362,9 @@ final class YSShoplinePayment {
 
         // Initialize order display enhancements (付款狀態顯示)
         YSOrderDisplay::instance();
+
+        // Initialize the attempt-aware payment-confirmation lifecycle.
+        YSPaymentConfirmation::init();
 
         // Initialize redirect handler (付款完成後的跳轉查詢)
         YSRedirectHandler::init();
@@ -825,10 +833,10 @@ final class YSShoplinePayment {
 
         $order = wc_get_order( $order_id );
 
-        if ( ! $order || ! $order->needs_payment() ) {
+        if ( ! $order ) {
             wp_send_json( array(
                 'result'   => 'failure',
-                'messages' => __( '訂單不存在或不需要付款。', 'ys-shopline-via-woocommerce' ),
+                'messages' => __( '訂單不存在。', 'ys-shopline-via-woocommerce' ),
             ) );
             return;
         }
@@ -844,6 +852,23 @@ final class YSShoplinePayment {
             wp_send_json( array(
                 'result'   => 'failure',
                 'messages' => __( '無權存取此訂單。', 'ys-shopline-via-woocommerce' ),
+            ) );
+            return;
+        }
+
+        if ( YSPaymentConfirmation::STATUS_KEY === $order->get_status()
+            || ! empty( YSPaymentConfirmation::get_active_attempt( $order ) ) ) {
+            wp_send_json( array(
+                'result'   => 'failure',
+                'messages' => YSPaymentConfirmation::confirmation_message(),
+            ) );
+            return;
+        }
+
+        if ( ! $order->needs_payment() ) {
+            wp_send_json( array(
+                'result'   => 'failure',
+                'messages' => __( '訂單不需要付款。', 'ys-shopline-via-woocommerce' ),
             ) );
             return;
         }
@@ -926,6 +951,7 @@ final class YSShoplinePayment {
         $result = $gateway->process_payment( $order_id );
 
         $outcome = ( is_array( $result ) && isset( $result['remote_outcome'] ) ) ? (string) $result['remote_outcome'] : '';
+        $order_after_payment = wc_get_order( $order_id );
 
         if ( 'rejected' === $outcome ) {
             // 確定未建立遠端交易 → 完整還原付款方式 ID＋title（含清空、含同 ID 不同 title），
@@ -953,6 +979,16 @@ final class YSShoplinePayment {
                 'result'   => 'failure',
                 'messages' => '' !== $messages ? $messages : __( '付款被拒，請重試或改用其他付款方式。', 'ys-shopline-via-woocommerce' ),
             );
+        } elseif ( 'unknown' === $outcome
+            && is_array( $result )
+            && 'success' === ( $result['result'] ?? '' )
+            && ! empty( $result['redirect'] )
+            && $order_after_payment instanceof \WC_Order
+            && ( $order_after_payment->is_paid()
+                || YSPaymentConfirmation::STATUS_KEY === $order_after_payment->get_status()
+                || ! empty( YSPaymentConfirmation::get_active_attempt( $order_after_payment ) ) ) ) {
+            // The remote result is unknown, but the order is durably locked in
+            // payment confirmation. Preserve the neutral status-page redirect.
         } elseif ( 'accepted' !== $outcome ) {
             // unknown 或未知值（fail-closed）：遠端可能已建立交易 → **不還原付款方式**（還原會孤兒化交易），
             // 不視為可重試失敗；以「確認中」訊息呈現，後續由 webhook / query_session 收斂。

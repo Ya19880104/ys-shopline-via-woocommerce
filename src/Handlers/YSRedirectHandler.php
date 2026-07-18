@@ -19,6 +19,8 @@ defined( 'ABSPATH' ) || exit;
 
 use YangSheep\ShoplinePayment\Utils\YSLogger;
 use YangSheep\ShoplinePayment\Utils\YSOrderMeta;
+use YangSheep\ShoplinePayment\Utils\YSTradeStatus;
+use YangSheep\ShoplinePayment\DTOs\YSPaymentDTO;
 use YangSheep\ShoplinePayment\Customer\YSCustomer;
 use WC_Payment_Tokens;
 use WC_Payment_Token_CC;
@@ -129,6 +131,13 @@ class YSRedirectHandler {
             YSLogger::error( 'Redirect handler: API query failed', array(
                 'error' => $response->get_error_message(),
             ) );
+            YSPaymentConfirmation::enter_from_order(
+                $order,
+                'QUERY_ERROR',
+                array(),
+                'redirect_query_error',
+                array( 'trade_order_id' => (string) $trade_order_id )
+            );
             return;
         }
 
@@ -142,15 +151,31 @@ class YSRedirectHandler {
             'paymentMethod'       => $response['paymentMethod'] ?? ( $response['payment']['paymentMethod'] ?? 'unknown' ),
         ) );
 
-        $status     = isset( $response['status'] ) ? $response['status'] : '';
+        $status     = isset( $response['status'] ) ? strtoupper( (string) $response['status'] ) : '';
         // v3.5.11: SHOPLINE 中間態須讀 subStatus（hitrust 3DS 後常見：PROCESSING + AUTHORIZED）
         $sub_status = isset( $response['subStatus'] ) ? $response['subStatus'] : '';
 
         if ( self::is_transient_payment_status( $status ) ) {
             $response   = self::poll_processing_status( $api, $trade_order_id, $response );
-            $status     = isset( $response['status'] ) ? $response['status'] : $status;
+            $status     = isset( $response['status'] ) ? strtoupper( (string) $response['status'] ) : $status;
             // v3.5.11: polling 後 sub_status 也要重新取（hitrust 3DS 中間態判斷需要）
             $sub_status = isset( $response['subStatus'] ) ? $response['subStatus'] : $sub_status;
+        }
+
+        if ( YSPaymentConfirmation::STATUS_KEY === $order->get_status() ) {
+            try {
+                $dto = YSPaymentDTO::from_response( $response );
+                YSPaymentConfirmation::handle_query_result( $order, $dto );
+            } catch ( \Throwable $e ) {
+                YSPaymentConfirmation::enter_from_order(
+                    $order,
+                    '' !== $status ? $status : 'UNKNOWN',
+                    $response,
+                    'redirect_malformed_query'
+                );
+            }
+            self::clear_next_action( $order );
+            return;
         }
 
         // 根據狀態更新訂單
@@ -269,35 +294,37 @@ class YSRedirectHandler {
                     'status'   => $status,
                 ) );
             }
-        } elseif ( 'AUTHORIZED' === $status
-            || ( 'PROCESSING' === $status && in_array( $sub_status, array( 'AUTHORIZED', 'CAPTURING' ), true ) ) ) {
-            // v3.5.11: 兩種已授權待 capture 情境
-            //   1. status=AUTHORIZED：手動請款模式
-            //   2. status=PROCESSING + subStatus=AUTHORIZED：hitrust 3DS 後 SHOPLINE 進中間態
-            //      （高額信用卡 / 分期一定會經過此中間態）
-            //
-            // 不能讓使用者看到「付款尚未完成」，要顯示「已授權等待金流回傳確認」綠標
-            // 訂單狀態設 on-hold，meta PAYMENT_AUTHORIZED_PENDING=yes 給 OrderDisplay 用
-            if ( ! $order->is_paid() && 'on-hold' !== $order->get_status() ) {
-                $order->update_status( 'on-hold', __( 'SHOPLINE 付款已授權，等待金流回傳確認。', 'ys-shopline-via-woocommerce' ) );
-                $order->add_order_note( sprintf(
-                    /* translators: 1: status, 2: subStatus, 3: trade order id */
-                    __( 'Shopline 金流：交易已授權（%1$s/%2$s），等待 SHOPLINE webhook 完成 capture（trade=%3$s）。', 'ys-shopline-via-woocommerce' ),
-                    $status,
-                    $sub_status ?: '-',
-                    $trade_order_id
-                ) );
+        } elseif ( YSTradeStatus::is_in_flight( $status ) && 'ys_shopline_atm' !== $order->get_payment_method() ) {
+            YSPaymentConfirmation::enter_from_order(
+                $order,
+                $status,
+                $response,
+                'redirect_query',
+                array(
+                    'reason' => ( 'AUTHORIZED' === $status
+                        || ( 'PROCESSING' === $status && in_array( strtoupper( (string) $sub_status ), array( 'AUTHORIZED', 'CAPTURING' ), true ) ) )
+                        ? 'authorized'
+                        : null,
+                )
+            );
+        } elseif ( YSTradeStatus::is_terminal_safe( $status ) ) {
+            if ( method_exists( $order, 'get_date_paid' ) && $order->get_date_paid() ) {
+                $order->add_order_note(
+                    sprintf(
+                        /* translators: %s: late terminal payment status */
+                        __( 'SHOPLINE 回傳晚到的終態 %s；此訂單已有付款日期，系統未重新開放付款，請人工核對。', 'ys-shopline-via-woocommerce' ),
+                        $status
+                    )
+                );
+                $order->save();
+                return;
             }
-            $order->update_meta_data( YSOrderMeta::PAYMENT_STATUS, 'AUTHORIZED' );
-            $order->update_meta_data( YSOrderMeta::PAYMENT_AUTHORIZED_PENDING, 'yes' );
-            $order->save();
-        } elseif ( 'FAILED' === $status ) {
             // 付款失敗：保留原始訊息供管理員除錯，顯示友善訊息給客戶
             $raw_msg      = isset( $response['paymentMsg']['msg'] ) ? $response['paymentMsg']['msg'] : '';
             $friendly_msg = self::humanize_error_message( $raw_msg );
 
             $order->update_status( 'failed', $raw_msg ?: __( '付款失敗', 'ys-shopline-via-woocommerce' ) );
-            $order->update_meta_data( YSOrderMeta::PAYMENT_STATUS, 'FAILED' );
+            $order->update_meta_data( YSOrderMeta::PAYMENT_STATUS, $status );
             $order->update_meta_data( YSOrderMeta::ERROR_CODE, $response['paymentMsg']['code'] ?? '' );
             $order->update_meta_data( YSOrderMeta::ERROR_MESSAGE, $friendly_msg );
             $order->save();
@@ -313,6 +340,15 @@ class YSRedirectHandler {
             wc_add_notice( $friendly_msg, 'error' );
             wp_safe_redirect( $order->get_checkout_payment_url() );
             exit;
+        } elseif ( ! YSTradeStatus::is_customer_pending( $status ) && 'ys_shopline_atm' !== $order->get_payment_method() ) {
+            // Unknown future states remain locked until a strict scheduled query
+            // or exact webhook proves paid or terminal.
+            YSPaymentConfirmation::enter_from_order(
+                $order,
+                '' !== $status ? $status : 'UNKNOWN',
+                $response,
+                'redirect_unknown'
+            );
         }
         // 其他狀態（CREATED, PROCESSING）暫不處理，等待 Webhook 或用戶重試
 

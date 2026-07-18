@@ -8,6 +8,7 @@
 
 ```sh
 php tests/run.php                          # PHP 契約（後端）
+php tests/regression-scan.php              # 付款關鍵機制靜態哨兵（亦已納入 run.php）
 node tests/js/checkout-contract.test.js    # 前端契約（真實 JS 檔載入驗證）
 ```
 
@@ -24,6 +25,7 @@ node tests/js/checkout-contract.test.js    # 前端契約（真實 JS 檔載入�
 - **`YSApiError`**（[`YSApiErrorContractTest.php`](YSApiErrorContractTest.php)）
   - 建立交易回應三態分類；明確 rejected allowlist 與 unknown 相鄰碼；缺 `tradeOrderId`、未知狀態及 malformed 回應皆 fail-closed。
 - **`YSGatewayBase`**（[`YSGatewayOutcomeContractTest.php`](YSGatewayOutcomeContractTest.php)）
+  - 含 transport unknown 真實影片等價路徑：第一次只建立一筆交易、轉入中立確認頁；立即重送在 API 前 fail-closed，reference 不變。
   - 一般付款 rejected／accepted／unknown 消費契約；在途轉 `on-hold`；已收款完成入帳；缺交易 ID 寫入 indeterminate marker。
 - **訂閱續扣**（[`YSSubscriptionRenewalContractTest.php`](YSSubscriptionRenewalContractTest.php)）
   - timeout 與 `1001`／`4003` unknown 不 fallback；`4450`／`4900` 明確拒絕才換卡；同卡不重試；既存交易 pre-create guard；`90011_` reference-prefix 反例；跨期 meta 排除。
@@ -39,7 +41,17 @@ node tests/js/checkout-contract.test.js    # 前端契約（真實 JS 檔載入�
   - 呼叫點契約（原始碼斷言）：order-pay 走共用 selection、`renderPayment` 走 `buildSdkOptions`、舊 `bind-card-enabled`／`isBindCardEnabled` 已移除。
 - **failed 回補**（[`YSFailedRestockContractTest.php`](YSFailedRestockContractTest.php)）
   - **未實收** SHOPLINE 訂單轉入 `failed` 時必須呼叫 `wc_maybe_increase_stock_levels()`（pending／on-hold／自訂狀態起點、含 `ys_shopline_` 前綴 legacy gateway）；**已付款（`date_paid` 非空）訂單轉 failed 一律不得回補**（款在貨放＝超賣；不以 old_status 判斷）；**非 SHOPLINE 金流、空 payment method、非 failed 轉換一律不得觸發**。
+- **付款確認政策**（[`YSConfirmationPolicyContractTest.php`](YSConfirmationPolicyContractTest.php)）
+  - paid／customer-pending／in-flight／terminal／unknown 分類；信用卡／錢包與中租的累積查詢階段；時間經過永不單獨構成 terminal。
+- **付款確認生命週期**（[`YSPaymentConfirmationContractTest.php`](YSPaymentConfirmationContractTest.php)）
+  - `wc-ys-confirming` 註冊與 order-pay 鎖、精確 attempt envelope、Action Scheduler、strict trade/session 查詢、paid／terminal／customer-pending 三種收斂、stale/malformed/mismatch fail-closed、MySQL convergence lock、paid-history 恢復、客戶＋管理員通知冪等、最終人工審核及每小時 safety-net。
+- **晚到 webhook paid-history 防護**（[`YSWebhookPaidHistoryContractTest.php`](YSWebhookPaidHistoryContractTest.php)）
+  - 訂單已有 `date_paid` 時，晚到 AUTHORIZED／PROCESSING／CUSTOMER_ACTION／FAILED／CANCELLED／EXPIRED 不得覆寫訂單狀態或已付款 meta。
+- **order-pay 中立提示**（[`YSOrderPayNoticeContractTest.php`](YSOrderPayNoticeContractTest.php)）
+  - 精確 terminal confirmation history 才在 WooCommerce 標準付款表單顯示「付款確認未完成」；一般 pending 不顯示，且不得重複輸出付款按鈕。
+- **Production 回歸哨兵**（[`regression-scan.php`](regression-scan.php)）
+  - 鎖定 mount health、存卡能力、tri-state、prior-trade、indeterminate、庫存、分期／訂閱、strict selector、paid-history、confirmation lock、safety-net、order-pay 與通知等付款關鍵機制；亦檢查 pre-create guard 仍位於 reference 生成之前，並阻止已撤回的 v3.5.38 註解回流。
 
 ## 出貨排除
 
-測試僅版控、**不隨 release 出貨**：`.gitattributes` 將 `tests/`、`.gitattributes` 與 `.gitignore` 標記為 `export-ignore`；正式包必須由 release tag 執行 `git archive`，並在上傳前檢查 zip 不含上述項目。
+測試與內部 RD 僅版控、**不隨 release 出貨**：`.gitattributes` 將 `tests/`、`docs/`、`.gitattributes` 與 `.gitignore` 標記為 `export-ignore`；正式包必須由 release tag 執行 `git archive`，並在上傳前檢查 zip 不含上述項目。

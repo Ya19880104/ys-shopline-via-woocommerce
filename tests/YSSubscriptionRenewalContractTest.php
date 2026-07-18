@@ -280,5 +280,10 @@ function ys_run_subscription_renewal_contract(): void {
 	YS_Assert::is_true( 'renewal copy excludes trade ID', str_contains( $sql, YSOrderMeta::TRADE_ORDER_ID ) );
 	YS_Assert::is_true( 'renewal copy excludes reference ID', str_contains( $sql, YSOrderMeta::REFERENCE_ORDER_ID ) );
 	YS_Assert::is_true( 'renewal copy excludes indeterminate marker', str_contains( $sql, YSOrderMeta::INDETERMINATE_REF ) );
+	YS_Assert::is_true( 'renewal copy excludes exact payment attempt envelope', str_contains( $sql, YSOrderMeta::PAYMENT_ATTEMPT_DATA ) );
+	YS_Assert::is_true( 'renewal copy excludes active confirmation lock', str_contains( $sql, YSOrderMeta::CONFIRMATION_DATA ) );
+	YS_Assert::is_true( 'renewal copy excludes confirmation history', str_contains( $sql, YSOrderMeta::CONFIRMATION_HISTORY ) );
+	YS_Assert::is_true( 'renewal copy excludes confirmation mail map', str_contains( $sql, YSOrderMeta::CONFIRMATION_MAIL_SENT ) );
+	YS_Assert::is_true( 'renewal copy excludes confirmation review marker', str_contains( $sql, YSOrderMeta::CONFIRMATION_REVIEW ) );
 	YS_Assert::eq( 'renewal copy keeps subscription instrument ID', false, str_contains( $sql, YSOrderMeta::PAYMENT_INSTRUMENT_ID ) );
 }

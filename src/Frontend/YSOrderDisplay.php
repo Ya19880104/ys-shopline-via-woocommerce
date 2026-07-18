@@ -12,6 +12,8 @@ namespace YangSheep\ShoplinePayment\Frontend;
 defined( 'ABSPATH' ) || exit;
 
 use YangSheep\ShoplinePayment\Utils\YSOrderMeta;
+use YangSheep\ShoplinePayment\Utils\YSTradeStatus;
+use YangSheep\ShoplinePayment\Handlers\YSPaymentConfirmation;
 
 /**
  * YSOrderDisplay Class.
@@ -58,8 +60,30 @@ class YSOrderDisplay {
 		// 訂單詳情頁面（我的帳戶）顯示付款狀態
 		add_action( 'woocommerce_view_order', array( $this, 'display_payment_status_notice' ), 5 );
 
+		// 在實際重新付款表單上顯示前次確認結果。
+		add_action( 'woocommerce_pay_order_before_payment', array( $this, 'display_order_pay_confirmation_notice' ), 5 );
+
 		// 輸出樣式
 		add_action( 'wp_head', array( $this, 'output_styles' ) );
+	}
+
+	/**
+	 * Render the neutral terminal result immediately above order-pay methods.
+	 *
+	 * WooCommerce has validated the order key before this template hook. The
+	 * form supplies the payment command, so this notice adds no second button.
+	 */
+	public function display_order_pay_confirmation_notice() {
+		$order_id = absint( get_query_var( 'order-pay' ) );
+		$order    = $order_id > 0 ? wc_get_order( $order_id ) : false;
+		if ( ! $order instanceof \WC_Order
+			|| 0 !== strpos( (string) $order->get_payment_method(), 'ys_shopline' )
+			|| 'pending' !== $order->get_status()
+			|| ! $this->was_returned_from_confirmation( $order ) ) {
+			return;
+		}
+
+		$this->render_confirmation_terminal_notice( $order, false );
 	}
 
 	/**
@@ -100,6 +124,16 @@ class YSOrderDisplay {
 			return;
 		}
 
+		if ( YSPaymentConfirmation::STATUS_KEY === $status ) {
+			$this->render_confirmation_notice( $order );
+			return;
+		}
+
+		if ( 'pending' === $status && $this->was_returned_from_confirmation( $order ) ) {
+			$this->render_confirmation_terminal_notice( $order );
+			return;
+		}
+
 		// v3.5.11: 信用卡 / 分期 hitrust 3DS 中間態 — 已授權待 capture
 		// 顯示綠色標章「已授權等待金流回傳確認」，避免使用者誤以為「付款尚未完成」
 		if ( 'on-hold' === $status && 'yes' === $order->get_meta( YSOrderMeta::PAYMENT_AUTHORIZED_PENDING ) ) {
@@ -112,6 +146,76 @@ class YSOrderDisplay {
 			$this->render_pending_or_failed_notice( $order );
 			return;
 		}
+	}
+
+	/**
+	 * Render the neutral locked confirmation state.
+	 *
+	 * @param \WC_Order $order Order object.
+	 */
+	private function render_confirmation_notice( $order ) {
+		$trade_order_id = (string) $order->get_meta( YSOrderMeta::TRADE_ORDER_ID );
+		?>
+		<div class="ys-shopline-notice ys-shopline-notice-warning">
+			<div class="ys-shopline-notice-icon">i</div>
+			<div class="ys-shopline-notice-content">
+				<h3><?php echo esc_html( YSPaymentConfirmation::confirmation_title() ); ?></h3>
+				<p><?php echo esc_html( YSPaymentConfirmation::confirmation_message() ); ?></p>
+				<?php if ( '' !== $trade_order_id ) : ?>
+					<ul class="ys-shopline-payment-info">
+						<li>
+							<strong><?php esc_html_e( '交易編號：', 'ys-shopline-via-woocommerce' ); ?></strong>
+							<?php echo esc_html( $trade_order_id ); ?>
+						</li>
+					</ul>
+				<?php endif; ?>
+			</div>
+		</div>
+		<?php
+	}
+
+	/**
+	 * Render a terminal confirmation result with a safe repayment action.
+	 *
+	 * @param \WC_Order $order Order object.
+	 */
+	private function render_confirmation_terminal_notice( $order, $show_actions = true ) {
+		?>
+		<div class="ys-shopline-notice ys-shopline-notice-warning">
+			<div class="ys-shopline-notice-icon">!</div>
+			<div class="ys-shopline-notice-content">
+				<h3><?php echo esc_html( YSPaymentConfirmation::terminal_title() ); ?></h3>
+				<p><?php echo esc_html( YSPaymentConfirmation::terminal_message() ); ?></p>
+				<?php if ( $show_actions ) : ?>
+					<div class="ys-shopline-notice-actions">
+						<a href="<?php echo esc_url( $order->get_checkout_payment_url() ); ?>" class="button ys-shopline-pay-button">
+							<?php esc_html_e( '重新付款', 'ys-shopline-via-woocommerce' ); ?>
+						</a>
+						<a href="<?php echo esc_url( wc_get_account_endpoint_url( 'orders' ) ); ?>" class="button button-secondary">
+							<?php esc_html_e( '前往我的訂單', 'ys-shopline-via-woocommerce' ); ?>
+						</a>
+					</div>
+				<?php endif; ?>
+			</div>
+		</div>
+		<?php
+	}
+
+	/**
+	 * Determine whether the active reference last left confirmation terminally.
+	 *
+	 * @param \WC_Order $order Order object.
+	 */
+	private function was_returned_from_confirmation( $order ) {
+		$history = $order->get_meta( YSOrderMeta::CONFIRMATION_HISTORY );
+		if ( ! is_array( $history ) || empty( $history ) ) {
+			return false;
+		}
+
+		$last = end( $history );
+		return is_array( $last )
+			&& (string) ( $last['reference'] ?? '' ) === (string) $order->get_meta( YSOrderMeta::REFERENCE_ORDER_ID )
+			&& YSTradeStatus::is_terminal_safe( (string) ( $last['remote_status'] ?? '' ) );
 	}
 
 	/**
