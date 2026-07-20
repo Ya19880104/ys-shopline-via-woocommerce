@@ -408,6 +408,44 @@ final class YSPaymentConfirmation {
     }
 
     /**
+     * Complete an order at most once across webhook, redirect, and status sync.
+     *
+     * WooCommerce fires woocommerce_pre_payment_complete before it checks the
+     * current status. Serializing and reloading here prevents two stale order
+     * objects from replaying payment hooks when webhook and query overlap.
+     *
+     * @return array{order:?\WC_Order,completed:bool,busy:bool}
+     */
+    public static function complete_payment_once( \WC_Order $order, string $trade_order_id ): array {
+        $busy = array(
+            'order'     => null,
+            'completed' => false,
+            'busy'      => true,
+        );
+
+        return (array) self::with_confirmation_lock(
+            $order,
+            static function ( \WC_Order $fresh ) use ( $trade_order_id ): array {
+                if ( self::has_paid_history( $fresh ) ) {
+                    return array(
+                        'order'     => $fresh,
+                        'completed' => false,
+                        'busy'      => false,
+                    );
+                }
+
+                $fresh->payment_complete( $trade_order_id );
+                return array(
+                    'order'     => $fresh,
+                    'completed' => true,
+                    'busy'      => false,
+                );
+            },
+            $busy
+        );
+    }
+
+    /**
      * Clear stale confirmation locks after any authoritative WC payment completion.
      */
     public static function clear_after_payment_complete( int $order_id ): void {
@@ -1150,7 +1188,8 @@ final class YSPaymentConfirmation {
      * Detect orders that were paid even if their current status is unpaid.
      */
     private static function has_paid_history( \WC_Order $order ): bool {
-        return method_exists( $order, 'get_date_paid' ) && (bool) $order->get_date_paid();
+        return $order->is_paid()
+            || ( method_exists( $order, 'get_date_paid' ) && (bool) $order->get_date_paid() );
     }
 
     /**

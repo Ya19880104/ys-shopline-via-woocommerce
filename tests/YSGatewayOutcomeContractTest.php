@@ -16,6 +16,8 @@ final class YS_Gateway_Test_Order extends WC_Order {
 	public string $status = 'pending';
 	public bool $paid = false;
 	public string $transaction_id = '';
+	public string $payment_method = 'ys_shopline_credit';
+	public $date_paid = null;
 
 	public function get_id(): int {
 		return 9101;
@@ -26,7 +28,11 @@ final class YS_Gateway_Test_Order extends WC_Order {
 	}
 
 	public function get_payment_method(): string {
-		return 'ys_shopline_credit';
+		return $this->payment_method;
+	}
+
+	public function get_user_id(): int {
+		return 77;
 	}
 
 	public function get_meta( string $key ) {
@@ -56,8 +62,13 @@ final class YS_Gateway_Test_Order extends WC_Order {
 		return $this->paid;
 	}
 
+	public function get_date_paid() {
+		return $this->date_paid;
+	}
+
 	public function payment_complete( string $transaction_id = '' ): void {
 		$this->paid = true;
+		$this->date_paid = '2026-07-20 10:53:00';
 		$this->status = 'processing';
 		$this->transaction_id = $transaction_id;
 	}
@@ -102,14 +113,17 @@ final class YS_Gateway_Test_Api {
 }
 
 final class YS_Gateway_Test_Gateway extends YSGatewayBase {
-	public function __construct( $response ) {
-		$this->id = 'ys_shopline_credit';
+	private string $test_payment_method;
+
+	public function __construct( $response, string $gateway_id = 'ys_shopline_credit', string $payment_method = 'CreditCard' ) {
+		$this->id = $gateway_id;
+		$this->test_payment_method = $payment_method;
 		$this->api = new YS_Gateway_Test_Api();
 		$this->api->response = $response;
 	}
 
 	public function get_payment_method() {
-		return 'CreditCard';
+		return $this->test_payment_method;
 	}
 
 	public function get_return_url( $order = null ) {
@@ -135,11 +149,15 @@ final class YS_Gateway_Test_Gateway extends YSGatewayBase {
 
 	protected function prepare_payment_data( $order, $pay_session ) {
 		$order->update_meta_data( YSOrderMeta::REFERENCE_ORDER_ID, '9101_1' );
+		$customer_id = (string) get_user_meta( $order->get_user_id(), YSOrderMeta::CUSTOMER_ID, true );
 		return array(
 			'paySession'       => $pay_session,
 			'referenceOrderId' => '9101_1',
 			'amount'           => array( 'value' => 1000, 'currency' => 'TWD' ),
-			'confirm'          => array( 'paymentMethod' => 'CreditCard' ),
+			'confirm'          => array(
+				'paymentMethod'     => 'CreditCard',
+				'paymentCustomerId' => $customer_id,
+			),
 		);
 	}
 }
@@ -262,4 +280,81 @@ function ys_run_gateway_outcome_contract(): void {
 	YS_Assert::eq( 'customer-pending re-query error performs query-cancel-query', 2, $prior_gateway->get_query_calls() );
 	YS_Assert::eq( 'customer-pending re-query error attempts one cancellation', 1, $prior_gateway->get_cancel_calls() );
 	YS_Assert::eq( 'customer-pending re-query error never creates a new trade', 0, $prior_gateway->get_create_calls() );
+
+	echo "== YSGatewayBase: stale customer rejection recovery ==\n";
+	$GLOBALS['ys_test_user_meta'][77] = array(
+		YSOrderMeta::CUSTOMER_ID      => 'stale-customer-77',
+		YSOrderMeta::INSTRUMENTS_CACHE => array( 'cached' => true ),
+	);
+	list( $result, $stale_order, $stale_gateway ) = ys_gateway_process_response(
+		new WP_Error(
+			'1005',
+			'Enable Customer not found,customerId=stale-customer-77',
+			array( 'http_status' => 400, 'payment_error_message' => 'Enable Customer not found,customerId=stale-customer-77' )
+		)
+	);
+	YS_Assert::eq( 'stale customer rejection stays retryable rejected', 'rejected', $result['remote_outcome'] ?? '' );
+	YS_Assert::eq( 'stale customer rejection creates only one trade request', 1, $stale_gateway->get_create_calls() );
+	YS_Assert::eq( 'stale customer rejection clears exact customer mapping', '', get_user_meta( 77, YSOrderMeta::CUSTOMER_ID, true ) );
+	YS_Assert::eq( 'stale customer rejection clears instruments cache', '', get_user_meta( 77, YSOrderMeta::INSTRUMENTS_CACHE, true ) );
+
+	$GLOBALS['ys_test_user_meta'][77] = array(
+		YSOrderMeta::CUSTOMER_ID      => 'keep-customer-77',
+		YSOrderMeta::INSTRUMENTS_CACHE => array( 'cached' => true ),
+	);
+	ys_gateway_process_response( new WP_Error( '1005', 'Other validation check failed' ) );
+	YS_Assert::eq( 'unrelated 1005 keeps customer mapping', 'keep-customer-77', get_user_meta( 77, YSOrderMeta::CUSTOMER_ID, true ) );
+	YS_Assert::eq( 'unrelated 1005 keeps instruments cache', array( 'cached' => true ), get_user_meta( 77, YSOrderMeta::INSTRUMENTS_CACHE, true ) );
+
+	echo "== YSGatewayBase: active confirmation blocks every replacement gateway ==\n";
+	$replacement_gateways = array(
+		'ys_shopline_credit'              => 'CreditCard',
+		'ys_shopline_credit_installment'  => 'CreditCard',
+		'ys_shopline_credit_subscription' => 'CreditCard',
+		'ys_shopline_atm'                 => 'VirtualAccount',
+		'ys_shopline_jkopay'              => 'JKOPay',
+		'ys_shopline_applepay'            => 'ApplePay',
+		'ys_shopline_linepay'             => 'LinePay',
+		'ys_shopline_bnpl'                => 'ChaileaseBNPL',
+	);
+	foreach ( $replacement_gateways as $gateway_id => $shopline_method ) {
+		$locked = new YS_Gateway_Test_Order();
+		$locked->status = 'ys-confirming';
+		$locked->payment_method = $gateway_id;
+		$locked->meta[ YSOrderMeta::CONFIRMATION_DATA ] = array(
+			'reference'       => '9101_wallet_1',
+			'trade_order_id'  => 'wallet-possibly-paid',
+			'session_id'      => 'wallet-session',
+			'gateway'         => 'ys_shopline_linepay',
+			'shopline_method' => 'LinePay',
+			'amount'          => 1000,
+			'currency'        => 'TWD',
+			'reason'          => 'indeterminate',
+			'remote_status'   => 'CUSTOMER_ACTION',
+			'started_at'      => time(),
+			'stage'           => 0,
+		);
+		$GLOBALS['ys_test_order'] = $locked;
+		$GLOBALS['ys_test_notices'] = array();
+		$replacement = new YS_Gateway_Test_Gateway(
+			array( 'tradeOrderId' => 'must-not-create', 'status' => 'SUCCEEDED' ),
+			$gateway_id,
+			$shopline_method
+		);
+		$blocked = $replacement->process_payment( $locked->get_id() );
+		YS_Assert::eq( "{$gateway_id}: active wallet attempt blocks replacement create", 0, $replacement->get_create_calls() );
+		YS_Assert::eq( "{$gateway_id}: replacement remains fail-closed", 'unknown', $blocked['remote_outcome'] ?? '' );
+		YS_Assert::eq( "{$gateway_id}: active wallet attempt remains confirming", 'ys-confirming', $locked->status );
+	}
+
+	$custom_paid = new YS_Gateway_Test_Order();
+	$custom_paid->status = 'shipped';
+	$custom_paid->paid = false;
+	$custom_paid->date_paid = '2026-07-20 10:53:00';
+	$GLOBALS['ys_test_order'] = $custom_paid;
+	$paid_retry = new YS_Gateway_Test_Gateway( array( 'tradeOrderId' => 'must-not-create', 'status' => 'SUCCEEDED' ) );
+	$paid_retry_result = $paid_retry->process_payment( $custom_paid->get_id() );
+	YS_Assert::eq( 'date-paid custom status blocks a new create before API', 0, $paid_retry->get_create_calls() );
+	YS_Assert::eq( 'date-paid custom status returns accepted existing payment', 'accepted', $paid_retry_result['remote_outcome'] ?? '' );
+	YS_Assert::eq( 'date-paid custom status is retained by pre-create guard', 'shipped', $custom_paid->status );
 }

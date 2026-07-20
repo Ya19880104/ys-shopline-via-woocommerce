@@ -51,6 +51,31 @@ function ys_run_webhook_paid_history_contract(): void {
 		YS_Assert::eq( "late {$remote_status} keeps paid metadata", 'SUCCEEDED', $order->get_meta( YSOrderMeta::PAYMENT_STATUS ) );
 	}
 
+	echo "== Webhook: paid events remain idempotent for custom paid statuses ==\n";
+	foreach ( array( 'handle_trade_succeeded' => 'SUCCEEDED', 'handle_trade_captured' => 'CAPTURED' ) as $method => $remote_status ) {
+		$order = new YS_Confirmation_Test_Order();
+		$order->date_paid = '2026-07-20 10:53:00';
+		$order->paid = false;
+		$order->status = 'shipped';
+		$order->meta[ YSOrderMeta::TRADE_ORDER_ID ] = 'trade-confirm-1';
+		$order->meta[ YSOrderMeta::PAYMENT_STATUS ] = 'SUCCEEDED';
+		$GLOBALS['ys_test_order'] = $order;
+		$GLOBALS['ys_test_orders'] = array( $order );
+		ys_invoke_webhook_handler(
+			$handler,
+			$method,
+			array(
+				'tradeOrderId'     => 'trade-confirm-1',
+				'referenceOrderId' => '9601_1',
+				'status'           => $remote_status,
+				'paymentMethod'    => 'CreditCard',
+				'amount'           => array( 'value' => 10000, 'currency' => 'TWD' ),
+			)
+		);
+		YS_Assert::eq( "{$remote_status} webhook never replays payment_complete after date_paid", 0, $order->payment_complete_count );
+		YS_Assert::eq( "{$remote_status} webhook retains custom paid status", 'shipped', $order->status );
+	}
+
 	echo "== Webhook: customer-action convergence after unknown wallet result ==\n";
 
 	$customer_action = new YS_Confirmation_Test_Order();

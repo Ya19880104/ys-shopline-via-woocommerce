@@ -172,6 +172,47 @@ class YSCustomer {
 	}
 
 	/**
+	 * Invalidate one exact stale SHOPLINE customer mapping.
+	 *
+	 * The expected-ID comparison prevents a late failing request from deleting a
+	 * customer ID that another concurrent request has already rebuilt.
+	 * WooCommerce card tokens and subscription metadata are deliberately retained
+	 * as audit evidence; the new customer token controls what SHOPLINE can render.
+	 *
+	 * @param int    $user_id             WordPress user ID.
+	 * @param string $expected_customer_id Customer ID used by the failed request.
+	 * @param string $source               Diagnostic source label.
+	 */
+	public static function invalidate_stale_identity( $user_id, $expected_customer_id, $source = '' ) {
+		$user_id              = (int) $user_id;
+		$expected_customer_id = trim( (string) $expected_customer_id );
+		if ( $user_id <= 0 || '' === $expected_customer_id ) {
+			return false;
+		}
+
+		$current = (string) get_user_meta( $user_id, self::META_CUSTOMER_ID, true );
+		if ( $current !== $expected_customer_id ) {
+			return false;
+		}
+
+		if ( ! delete_user_meta( $user_id, self::META_CUSTOMER_ID, $expected_customer_id ) ) {
+			return false;
+		}
+
+		delete_user_meta( $user_id, self::META_INSTRUMENTS_CACHE );
+		YSLogger::warning(
+			'Stale SHOPLINE customer identity invalidated',
+			array(
+				'user_id'          => $user_id,
+				'customer_id_tail' => substr( $expected_customer_id, -6 ),
+				'source'           => (string) $source,
+			)
+		);
+
+		return true;
+	}
+
+	/**
 	 * 取得用戶的付款工具（帶快取）
 	 *
 	 * @param int  $user_id     WordPress 用戶 ID

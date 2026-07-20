@@ -53,6 +53,11 @@ function ys_run_confirmation_policy_contract(): void {
 		YSConfirmationPolicy::query_delays( 'ys_shopline_applepay' )
 	);
 	YS_Assert::eq(
+		'LINE Pay first recheck remains two minutes to cover delayed paid visibility',
+		120,
+		YSConfirmationPolicy::delay_for_stage( 'ys_shopline_linepay', 0 )
+	);
+	YS_Assert::eq(
 		'BNPL query schedule extends to 24 hours',
 		array( 300, 900, 3600, 21600, 86400 ),
 		YSConfirmationPolicy::query_delays( 'ys_shopline_bnpl' )

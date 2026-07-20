@@ -10,11 +10,13 @@ declare(strict_types=1);
 use YangSheep\ShoplinePayment\Gateways\YSCreditSubscription;
 use YangSheep\ShoplinePayment\Utils\YSOrderMeta;
 
-final class YS_Subscription_Test_Order {
+final class YS_Subscription_Test_Order extends WC_Order {
 	public array $meta = array();
 	public array $notes = array();
 	public string $status = 'pending';
 	public bool $paid = false;
+	public string $date_paid = '';
+	public int $payment_complete_count = 0;
 
 	public function get_id(): int {
 		return 9001;
@@ -53,6 +55,18 @@ final class YS_Subscription_Test_Order {
 
 	public function is_paid(): bool {
 		return $this->paid;
+	}
+
+	public function get_date_paid(): string {
+		return $this->date_paid;
+	}
+
+	public function payment_complete( string $trade_order_id = '' ): bool {
+		$this->payment_complete_count++;
+		$this->paid      = true;
+		$this->date_paid = '2026-07-20 12:00:00';
+		$this->status    = 'processing';
+		return true;
 	}
 
 	public function save(): void {}
@@ -123,6 +137,18 @@ final class YS_Subscription_Test_Gateway extends YSCreditSubscription {
 
 	protected function handle_recurring_unknown( $order, array $attempt, $instrument_id ) {
 		$this->unknown[] = $instrument_id;
+	}
+
+	protected function log( $message, $level = 'info' ) {}
+}
+
+final class YS_Subscription_Response_Gateway extends YSCreditSubscription {
+	public function __construct() {
+		$this->id = 'ys_shopline_credit_subscription';
+	}
+
+	public function handle_for_test( YS_Subscription_Test_Order $order, array $response ): void {
+		$this->handle_recurring_response( $order, $response );
 	}
 
 	protected function log( $message, $level = 'info' ) {}
@@ -286,4 +312,23 @@ function ys_run_subscription_renewal_contract(): void {
 	YS_Assert::is_true( 'renewal copy excludes confirmation mail map', str_contains( $sql, YSOrderMeta::CONFIRMATION_MAIL_SENT ) );
 	YS_Assert::is_true( 'renewal copy excludes confirmation review marker', str_contains( $sql, YSOrderMeta::CONFIRMATION_REVIEW ) );
 	YS_Assert::eq( 'renewal copy keeps subscription instrument ID', false, str_contains( $sql, YSOrderMeta::PAYMENT_INSTRUMENT_ID ) );
+
+	echo "== Subscription renewal: payment completion convergence ==\n";
+	$GLOBALS['wpdb'] = null;
+	$completion_order = new YS_Subscription_Test_Order();
+	$GLOBALS['ys_test_order'] = $completion_order;
+	$response_gateway = new YS_Subscription_Response_Gateway();
+	$paid_response = array( 'tradeOrderId' => 'renewal-paid-1', 'status' => 'SUCCEEDED' );
+	$response_gateway->handle_for_test( $completion_order, $paid_response );
+	$response_gateway->handle_for_test( $completion_order, $paid_response );
+	YS_Assert::eq( 'recurring response completes payment only once', 1, $completion_order->payment_complete_count );
+	YS_Assert::eq( 'recurring response writes one completion note', 1, count( $completion_order->notes ) );
+
+	$custom_paid = new YS_Subscription_Test_Order();
+	$custom_paid->status = 'custom-paid';
+	$custom_paid->date_paid = '2026-07-20 12:00:00';
+	$GLOBALS['ys_test_order'] = $custom_paid;
+	$response_gateway->handle_for_test( $custom_paid, $paid_response );
+	YS_Assert::eq( 'recurring response respects custom paid history', 0, $custom_paid->payment_complete_count );
+	YS_Assert::eq( 'custom paid renewal retains its status', 'custom-paid', $custom_paid->status );
 }

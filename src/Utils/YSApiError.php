@@ -136,6 +136,35 @@ final class YSApiError {
 	}
 
 	/**
+	 * Detect the narrow SHOPLINE stale-customer failure used for safe local repair.
+	 *
+	 * Error 1005 is a generic validation code, so the code alone is insufficient.
+	 * Only the explicit "Customer not found" response proves that the locally
+	 * cached SHOPLINE customer ID is no longer valid for the active merchant.
+	 *
+	 * @param mixed $error Candidate API error.
+	 */
+	public static function is_customer_not_found( $error ): bool {
+		if ( ! is_wp_error( $error ) || '1005' !== (string) $error->get_error_code() ) {
+			return false;
+		}
+
+		$messages = array( (string) $error->get_error_message() );
+		$data     = method_exists( $error, 'get_error_data' ) ? $error->get_error_data() : null;
+		if ( is_array( $data ) ) {
+			$messages[] = (string) ( $data['payment_error_message'] ?? '' );
+		}
+
+		foreach ( $messages as $message ) {
+			if ( false !== stripos( $message, 'customer not found' ) ) {
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	/**
 	 * Classify the complete create-trade result.
 	 *
 	 * Accepted requires both a recognized active/paid status and a non-empty trade ID.

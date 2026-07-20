@@ -386,7 +386,7 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
         // 已登入用戶：取得 customerToken 用於儲存卡片功能
         // 訪客：不傳 customerToken（不支援儲存卡片）
         $user_id = get_current_user_id();
-        if ( $user_id ) {
+        if ( $user_id && $this->supports_customer_bound_cards() ) {
             $customer_token = $this->get_customer_token( $user_id );
             if ( $customer_token ) {
                 $config['customerToken'] = $customer_token;
@@ -456,6 +456,15 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
         // 呼叫 /customer/token 取得 customerToken
         $response = $this->api->get_customer_token( $customer_id );
 
+        if ( is_wp_error( $response ) && YSApiError::is_customer_not_found( $response )
+            && YSCustomer::invalidate_stale_identity( $user_id, $customer_id, 'customer_token' ) ) {
+            $rebuilt_customer_id = $this->get_shopline_customer_id( $user_id );
+            if ( $rebuilt_customer_id ) {
+                $customer_id = $rebuilt_customer_id;
+                $response    = $this->api->get_customer_token( $customer_id );
+            }
+        }
+
         if ( is_wp_error( $response ) ) {
             YSLogger::error( 'Failed to get customer token', array(
                 'error'       => $response->get_error_message(),
@@ -473,6 +482,25 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
         }
 
         return false;
+    }
+
+    /**
+     * Whether this gateway legitimately uses SHOPLINE customer/card identity.
+     *
+     * Wallets, virtual accounts and BNPL are ordinary-payment flows. They must
+     * not inherit credit-card customerToken/paymentCustomerId merely because a
+     * WooCommerce user also has locally saved credit-card tokens.
+     */
+    protected function supports_customer_bound_cards() {
+        return in_array(
+            $this->id,
+            array(
+                'ys_shopline_credit',
+                'ys_shopline_credit_installment',
+                'ys_shopline_credit_subscription',
+            ),
+            true
+        );
     }
 
     /**
@@ -546,6 +574,18 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
             YSLogger::error( 'process_payment: order not found', array( 'order_id' => $order_id ) );
             wc_add_notice( __( 'Order not found.', 'ys-shopline-via-woocommerce' ), 'error' );
             return array( 'result' => 'failure', 'remote_outcome' => 'rejected' );
+        }
+
+        if ( $this->has_paid_history( $order ) ) {
+            YSLogger::warning( 'Duplicate payment attempt blocked by paid history', array(
+                'order_id' => $order_id,
+                'status'   => $order->get_status(),
+            ) );
+            return array(
+                'result'         => 'success',
+                'redirect'       => $this->get_return_url( $order ),
+                'remote_outcome' => 'accepted',
+            );
         }
 
         $active_confirmation = YSPaymentConfirmation::get_active_attempt( $order );
@@ -685,6 +725,17 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
             $friendly_msg = YSRedirectHandler::humanize_error_message( $raw_error );
             // v3.5.36 P0：分類 rejected（確定不會收款，可安全還原/重試）vs unknown（狀態不明，可能已建交易）
             $outcome      = YSApiError::classify( $response );
+
+            if ( YSApiError::is_customer_not_found( $response ) ) {
+                $request_customer_id = (string) ( $payment_data['confirm']['paymentCustomerId'] ?? '' );
+                if ( $order->get_user_id() && YSCustomer::invalidate_stale_identity(
+                    $order->get_user_id(),
+                    $request_customer_id,
+                    'create_payment_trade'
+                ) ) {
+                    $friendly_msg = __( '會員付款資料已重新整理，請重新選擇付款方式後再試。', 'ys-shopline-via-woocommerce' );
+                }
+            }
 
             YSLogger::error(
                 'Payment API error after create_payment_trade',
@@ -918,14 +969,28 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
             );
         }
 
-        // Payment completed immediately (confirmed SUCCEEDED/CAPTURED)
-        $order->payment_complete( isset( $response['tradeOrderId'] ) ? $response['tradeOrderId'] : '' );
-        // 套用商家自訂的付款成功訂單狀態
-        $custom_paid_status = get_option( 'ys_shopline_order_status_paid', '' );
-        if ( $custom_paid_status && $custom_paid_status !== $order->get_status() ) {
-            $order->update_status( $custom_paid_status, __( '依商家設定更新訂單狀態。', 'ys-shopline-via-woocommerce' ) );
+        // Payment completed immediately (confirmed SUCCEEDED/CAPTURED).
+        // The shared lock also covers a webhook that arrives before this
+        // create-payment response finishes processing.
+        $completion = YSPaymentConfirmation::complete_payment_once(
+            $order,
+            isset( $response['tradeOrderId'] ) ? (string) $response['tradeOrderId'] : ''
+        );
+        if ( empty( $completion['busy'] ) && $completion['order'] instanceof \WC_Order ) {
+            $order = $completion['order'];
+            if ( ! empty( $completion['completed'] ) ) {
+                // 套用商家自訂的付款成功訂單狀態
+                $custom_paid_status = get_option( 'ys_shopline_order_status_paid', '' );
+                if ( $custom_paid_status && $custom_paid_status !== $order->get_status() ) {
+                    $order->update_status( $custom_paid_status, __( '依商家設定更新訂單狀態。', 'ys-shopline-via-woocommerce' ) );
+                }
+                $order->add_order_note( __( 'Shopline payment completed.', 'ys-shopline-via-woocommerce' ) );
+            }
+        } else {
+            YSLogger::warning( 'Immediate payment completion deferred because the order lock is busy', array(
+                'order_id' => $order->get_id(),
+            ) );
         }
-        $order->add_order_note( __( 'Shopline payment completed.', 'ys-shopline-via-woocommerce' ) );
 
         // Empty the cart
         WC()->cart->empty_cart();
@@ -963,10 +1028,13 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
             $saved_card_last4 = '';
         }
 
-        $user_id     = $order->get_user_id();
-        $customer_id = $user_id ? $this->get_shopline_customer_id( $user_id ) : false;
+        $supports_customer_cards = $this->supports_customer_bound_cards();
+        $user_id                 = $order->get_user_id();
+        $customer_id             = $supports_customer_cards && $user_id
+            ? $this->get_shopline_customer_id( $user_id )
+            : false;
 
-        if ( '' === $payment_instrument_id && 'saved' === $payment_instrument_mode && $user_id ) {
+        if ( $supports_customer_cards && '' === $payment_instrument_id && 'saved' === $payment_instrument_mode && $user_id ) {
             $payment_instrument_id = $this->resolve_payment_instrument_id_by_last4( $user_id, $saved_card_last4 );
             if ( '' === $payment_instrument_id ) {
                 YSLogger::warning( 'Saved card selected but WC token could not be resolved, falling back without savePaymentInstrument', array(
@@ -979,7 +1047,7 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
 
         // IDOR 防護：驗證此 instrument_id 屬於當前訂單的使用者
         // 避免攻擊者攔截 POST 把 instrument_id 改為他人的（雖然 SHOPLINE 會驗 paymentCustomerId↔instrument 綁定，但不依賴遠端防線）
-        if ( '' !== $payment_instrument_id && $order->get_user_id() ) {
+        if ( $supports_customer_cards && '' !== $payment_instrument_id && $order->get_user_id() ) {
             $owned = false;
             $user_tokens = \WC_Payment_Tokens::get_customer_tokens( $order->get_user_id(), YSOrderMeta::CREDIT_GATEWAY_ID );
             foreach ( $user_tokens as $user_token ) {
@@ -996,7 +1064,7 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
                 ) );
                 $payment_instrument_id = '';
             }
-        } elseif ( '' !== $payment_instrument_id && ! $order->get_user_id() ) {
+        } elseif ( $supports_customer_cards && '' !== $payment_instrument_id && ! $order->get_user_id() ) {
             // 訪客訂單不應該有 instrument_id（訪客沒 WC Token）
             YSLogger::warning( 'Guest order should not carry instrument_id, ignoring', array(
                 'order_id' => $order->get_id(),
@@ -1020,12 +1088,10 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
         // 1. 訂閱訂單：強制使用 CardBindPayment
         // 2. 已登入用戶且有 SHOPLINE customerId：使用 CardBindPayment
         // 3. 訪客：使用 Regular
-        $user_id     = $order->get_user_id();
-        $customer_id = $user_id ? $this->get_shopline_customer_id( $user_id ) : false;
-
         // 判斷是否啟用綁卡
         // 只有已登入用戶且有 customerId 時才啟用（與 SDK 端邏輯一致）
-        $use_bind_card = $is_subscription || ( $user_id && $customer_id );
+        $use_bind_card = $supports_customer_cards
+            && ( $is_subscription || ( $user_id && $customer_id ) );
 
         // Frontend sends this only when the customer explicitly chose "new card + save".
         // This prevents saved-card installment payments from being mis-sent as CardBindPayment.
@@ -1076,7 +1142,7 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
         // 重要：當 SDK 啟用 bindCard 時，paySession 已包含用戶是否勾選儲存卡片的資訊
         // 後端使用 CardBindPayment + savePaymentInstrument=true，
         // API 會根據 paySession 中的用戶選擇來決定是否實際儲存卡片
-        if ( 'saved' === $payment_instrument_mode && $user_id && $customer_id ) {
+        if ( 'saved' === $payment_instrument_mode && $use_bind_card && $user_id && $customer_id ) {
             $payment_behavior = 'QuickPayment';
         } elseif ( ! empty( $payment_instrument_id ) && $use_bind_card ) {
             // 使用已綁定的卡片（僅在啟用 bindCard 的 gateway 上有效）
@@ -1206,7 +1272,7 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
         // 記錄付款資料（用於除錯）
         // When the SDK has customer-bound card UI but the request remains Regular, keep the
         // customer context so SHOPLINE can resolve the selected paySession correctly.
-        if ( 'Regular' === $payment_behavior && $user_id && $customer_id
+        if ( 'Regular' === $payment_behavior && $supports_customer_cards && $user_id && $customer_id
             && class_exists( 'WC_Payment_Tokens' )
             && ! empty( WC_Payment_Tokens::get_customer_tokens( $user_id, 'ys_shopline_credit' ) ) ) {
             $data['confirm']['paymentCustomerId'] = $customer_id;
@@ -1246,7 +1312,17 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
             'referenceOrderId'    => $data['referenceOrderId'],
         ) );
 
-        return apply_filters( 'ys_shopline_payment_data', $data, $order, $this );
+        $data = apply_filters( 'ys_shopline_payment_data', $data, $order, $this );
+
+        // Gateway capability is authoritative after third-party filters as well.
+        // Keep unrelated extensions, but prevent ordinary payment methods from
+        // being upgraded into customer-bound card flows by a stale callback.
+        if ( ! $supports_customer_cards && is_array( $data ) && isset( $data['confirm'] ) && is_array( $data['confirm'] ) ) {
+            $data['confirm']['paymentBehavior'] = 'Regular';
+            unset( $data['confirm']['paymentCustomerId'], $data['confirm']['paymentInstrument'] );
+        }
+
+        return $data;
     }
 
     /**
@@ -1829,6 +1905,16 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
     }
 
     /**
+     * Detect an established payment even after a custom status change.
+     *
+     * @param WC_Order $order Order.
+     */
+    protected function has_paid_history( $order ) {
+        return $order->is_paid()
+            || ( method_exists( $order, 'get_date_paid' ) && (bool) $order->get_date_paid() );
+    }
+
+    /**
      * v3.5.36 P0：嘗試收斂 indeterminate 狀態。
      *
      * 回傳：
@@ -1847,7 +1933,7 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
 
         // 1) 訂單已真正付款（webhook exact convergence 會自行清 marker；此處僅作 is_paid 保底）→ 放行。
         //    v3.5.36 Review P1-3：**不**以「有任何 TRADE_ORDER_ID」泛化清 marker——舊失敗交易 meta 可能誤清。
-        if ( $order->is_paid() ) {
+        if ( $this->has_paid_history( $order ) ) {
             $this->clear_indeterminate( $order );
             return 'resolved';
         }
@@ -1924,8 +2010,6 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
 
         $order->update_meta_data( YSOrderMeta::TRADE_ORDER_ID, $paid_trade );
         $order->update_meta_data( YSOrderMeta::PAYMENT_STATUS, $paid_status );
-        $order->delete_meta_data( YSOrderMeta::INDETERMINATE_REF );
-        $order->delete_meta_data( YSOrderMeta::INDETERMINATE_DATA );
         $order->add_order_note( sprintf(
             /* translators: %s: adopted trade order id */
             __( 'Shopline 金流：Session 查詢確認前次不明付款已完成收款（交易 %s，經 referenceId／金額／幣別／付款方式核對且唯一），已接管入帳。', 'ys-shopline-via-woocommerce' ),
@@ -1936,14 +2020,21 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
         // Query-session positive convergence must complete the order itself. Browser
         // checkout can fall through to another status query, but scheduled renewals
         // have no redirect handler and would otherwise remain unpaid or retry later.
-        if ( ! $order->is_paid() ) {
-            $order->payment_complete( $paid_trade );
-
+        $completion = YSPaymentConfirmation::complete_payment_once( $order, $paid_trade );
+        if ( ! empty( $completion['busy'] ) || ! ( $completion['order'] instanceof \WC_Order ) ) {
+            return 'blocked';
+        }
+        $order = $completion['order'];
+        if ( ! empty( $completion['completed'] ) ) {
             $custom_paid_status = get_option( 'ys_shopline_order_status_paid', '' );
             if ( $custom_paid_status && $custom_paid_status !== $order->get_status() ) {
                 $order->update_status( $custom_paid_status, __( '依商家設定更新訂單狀態。', 'ys-shopline-via-woocommerce' ) );
             }
         }
+
+        $order->delete_meta_data( YSOrderMeta::INDETERMINATE_REF );
+        $order->delete_meta_data( YSOrderMeta::INDETERMINATE_DATA );
+        $order->save();
 
         return 'resolved';
     }
@@ -2586,8 +2677,15 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
 
         if ( 'SUCCEEDED' === $status || 'SUCCESS' === $status || 'CAPTURED' === $status ) {
             // 付款成功
-            if ( ! $order->is_paid() ) {
-                $order->payment_complete( $trade_order_id );
+            if ( ! $this->has_paid_history( $order ) ) {
+                $completion = YSPaymentConfirmation::complete_payment_once( $order, (string) $trade_order_id );
+                if ( ! empty( $completion['busy'] ) || ! ( $completion['order'] instanceof \WC_Order ) ) {
+                    return;
+                }
+                $order = $completion['order'];
+                if ( empty( $completion['completed'] ) ) {
+                    return;
+                }
                 $order->add_order_note(
                     sprintf(
                         /* translators: %s: Trade order ID */

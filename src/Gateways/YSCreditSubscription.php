@@ -13,6 +13,7 @@ use YangSheep\ShoplinePayment\Utils\YSLogger;
 use YangSheep\ShoplinePayment\Utils\YSOrderMeta;
 use YangSheep\ShoplinePayment\Utils\YSApiError;
 use YangSheep\ShoplinePayment\Utils\YSTradeStatus;
+use YangSheep\ShoplinePayment\Handlers\YSPaymentConfirmation;
 
 /**
  * YSCreditSubscription Class.
@@ -573,7 +574,17 @@ class YSCreditSubscription extends YSGatewayBase {
 
         if ( YSTradeStatus::is_paid( $status ) ) {
             $order->save();
-            $order->payment_complete( $trade_order_id );
+            $completion = YSPaymentConfirmation::complete_payment_once( $order, $trade_order_id );
+            if ( ! empty( $completion['busy'] ) || ! ( $completion['order'] instanceof \WC_Order ) ) {
+                $this->log( 'Subscription payment completion deferred because the order lock is busy: #' . $order->get_id(), 'warning' );
+                return;
+            }
+            if ( empty( $completion['completed'] ) ) {
+                $this->log( 'Subscription payment was already completed by another converger: #' . $order->get_id() );
+                return;
+            }
+
+            $order = $completion['order'];
             $order->add_order_note(
                 sprintf(
                     __( 'Subscription payment completed. Trade ID: %s', 'ys-shopline-via-woocommerce' ),

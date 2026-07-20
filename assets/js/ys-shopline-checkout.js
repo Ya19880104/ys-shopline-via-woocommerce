@@ -551,8 +551,10 @@ jQuery(function ($) {
                 options.element = '#' + gatewayConfig.containerId;
             }
 
-            // customerToken：載入會員既有卡列表（與「是否允許綁新卡」無關）
-            if (serverConfig.customerToken) {
+            // customerToken only belongs to gateways that can render saved cards.
+            // This also protects stale page caches or third-party filters from
+            // leaking credit-customer identity into wallet/ATM/BNPL SDK sessions.
+            if (gatewayConfig.supportsSavedCards && serverConfig.customerToken) {
                 options.customerToken = serverConfig.customerToken;
             }
 
@@ -596,6 +598,9 @@ jQuery(function ($) {
             // other non-binding gateways must never allow that to re-enable bindCard.
             if (!gatewayConfig.supportsBindCard) {
                 delete options.paymentInstrument;
+            }
+            if (!gatewayConfig.supportsSavedCards) {
+                delete options.customerToken;
             }
 
             return options;

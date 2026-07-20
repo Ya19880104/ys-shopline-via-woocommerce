@@ -26,6 +26,9 @@ require __DIR__ . '/YSConfirmationPolicyContractTest.php';
 require __DIR__ . '/YSPaymentConfirmationContractTest.php';
 require __DIR__ . '/YSWebhookPaidHistoryContractTest.php';
 require __DIR__ . '/YSOrderPayNoticeContractTest.php';
+require __DIR__ . '/YSRedirectReturnContractTest.php';
+require __DIR__ . '/YSCustomerIdentityContractTest.php';
+require __DIR__ . '/YSStatusSyncPaidHistoryContractTest.php';
 require __DIR__ . '/regression-scan.php';
 
 ys_run_tradestatus_contract();
@@ -41,6 +44,9 @@ ys_run_confirmation_policy_contract();
 ys_run_payment_confirmation_contract();
 ys_run_webhook_paid_history_contract();
 ys_run_order_pay_notice_contract();
+ys_run_redirect_return_contract();
+ys_run_customer_identity_contract();
+ys_run_status_sync_paid_history_contract();
 ys_run_regression_scan();
 
 YS_Assert::summary_exit();

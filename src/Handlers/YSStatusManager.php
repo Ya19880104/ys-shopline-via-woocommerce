@@ -607,6 +607,52 @@ final class YSStatusManager {
             return;
         }
 
+        // Payment is an irreversible local boundary for ordinary status sync.
+        // A webhook and a browser/admin query may observe different SHOPLINE
+        // states briefly; once WooCommerce has a paid date, a later CREATED,
+        // PROCESSING, FAILED, or other stale non-paid result must not downgrade
+        // the order or replace its paid metadata. Full refund remains the one
+        // authoritative post-payment transition handled here.
+        if ( $this->has_paid_history( $order ) ) {
+            $this->sync_order_with_paid_history( $order, $payment_dto, $status );
+            return;
+        }
+
+        if ( YSTradeStatus::is_paid( $status ) ) {
+            $completion = YSPaymentConfirmation::complete_payment_once( $order, $payment_dto->trade_order_id );
+            if ( ! empty( $completion['busy'] ) || ! ( $completion['order'] instanceof \WC_Order ) ) {
+                YSLogger::warning( 'SHOPLINE status sync deferred: payment completion lock busy', [
+                    'order_id' => $order->get_id(),
+                    'status'   => $status,
+                ] );
+                return;
+            }
+
+            $fresh = $completion['order'];
+            if ( ! empty( $completion['completed'] ) ) {
+                $custom_paid_status = get_option( 'ys_shopline_order_status_paid', '' );
+                if ( $custom_paid_status && $custom_paid_status !== $fresh->get_status() ) {
+                    $fresh->update_status( $custom_paid_status, __( '依商家設定更新訂單狀態。', 'ys-shopline-via-woocommerce' ) );
+                }
+            }
+            if ( ! empty( $payment_dto->payment_method ) ) {
+                $fresh->update_meta_data( YSOrderMeta::PAYMENT_METHOD, $payment_dto->payment_method );
+            }
+            $fresh->update_meta_data( YSOrderMeta::TRADE_ORDER_ID, $payment_dto->trade_order_id );
+            $fresh->update_meta_data( YSOrderMeta::PAYMENT_STATUS, $status );
+            $fresh->update_meta_data( YSOrderMeta::PAYMENT_DETAIL, YSOrderMeta::sanitize_payment_detail( $payment_dto->to_array() ) );
+            $fresh->add_order_note(
+                sprintf(
+                    /* translators: 1: payment status 2: payment method */
+                    __( 'Synced SHOPLINE payment status: %1$s (%2$s).', 'ys-shopline-via-woocommerce' ),
+                    $status,
+                    $payment_dto->get_payment_method_display()
+                )
+            );
+            $fresh->save();
+            return;
+        }
+
         if ( YSTradeStatus::is_in_flight( $status )
             && 'ys_shopline_atm' !== $order->get_payment_method()
             && YSPaymentConfirmation::enter_from_order(
@@ -642,14 +688,7 @@ final class YSStatusManager {
         $wc_status = self::STATUS_MAP[ $status ] ?? null;
 
         if ( null !== $wc_status && $order->get_status() !== $wc_status ) {
-            if ( 'processing' === $wc_status && ! $order->is_paid() ) {
-                $order->payment_complete( $payment_dto->trade_order_id );
-                // 套用商家自訂的付款成功訂單狀態
-                $custom_paid_status = get_option( 'ys_shopline_order_status_paid', '' );
-                if ( $custom_paid_status && $custom_paid_status !== $order->get_status() ) {
-                    $order->update_status( $custom_paid_status, __( '依商家設定更新訂單狀態。', 'ys-shopline-via-woocommerce' ) );
-                }
-            } elseif ( 'on-hold' === $wc_status ) {
+            if ( 'on-hold' === $wc_status ) {
                 $order->update_status( 'on-hold' );
             } elseif ( 'refunded' === $wc_status ) {
                 $order->update_status( 'refunded' );
@@ -666,6 +705,66 @@ final class YSStatusManager {
                 $payment_dto->get_payment_method_display()
             )
         );
+    }
+
+    /**
+     * Synchronize a query result without reversing an established payment.
+     *
+     * @param \WC_Order     $order       Order with a durable paid history.
+     * @param YSPaymentDTO $payment_dto Payment DTO.
+     * @param string       $status      Normalized SHOPLINE status.
+     */
+    private function sync_order_with_paid_history( \WC_Order $order, YSPaymentDTO $payment_dto, string $status ): void {
+        if ( 'REFUNDED' === $status ) {
+            if ( ! empty( $payment_dto->payment_method ) ) {
+                $order->update_meta_data( YSOrderMeta::PAYMENT_METHOD, $payment_dto->payment_method );
+            }
+            $order->update_meta_data( YSOrderMeta::TRADE_ORDER_ID, $payment_dto->trade_order_id );
+            $order->update_meta_data( YSOrderMeta::PAYMENT_STATUS, $status );
+            $order->update_meta_data( YSOrderMeta::PAYMENT_DETAIL, YSOrderMeta::sanitize_payment_detail( $payment_dto->to_array() ) );
+            if ( 'refunded' !== $order->get_status() ) {
+                $order->update_status( 'refunded' );
+            }
+            $order->add_order_note( __( 'Synced SHOPLINE payment status: REFUNDED.', 'ys-shopline-via-woocommerce' ) );
+            return;
+        }
+
+        if ( YSTradeStatus::is_paid( $status ) ) {
+            if ( ! empty( $payment_dto->payment_method ) ) {
+                $order->update_meta_data( YSOrderMeta::PAYMENT_METHOD, $payment_dto->payment_method );
+            }
+            $order->update_meta_data( YSOrderMeta::TRADE_ORDER_ID, $payment_dto->trade_order_id );
+            $order->update_meta_data( YSOrderMeta::PAYMENT_STATUS, $status );
+            $order->update_meta_data( YSOrderMeta::PAYMENT_DETAIL, YSOrderMeta::sanitize_payment_detail( $payment_dto->to_array() ) );
+            $order->add_order_note(
+                sprintf(
+                    /* translators: %s: SHOPLINE paid status. */
+                    __( 'SHOPLINE payment remains confirmed (%s); the existing paid order status was retained.', 'ys-shopline-via-woocommerce' ),
+                    $status
+                )
+            );
+            return;
+        }
+
+        YSLogger::warning( 'Ignored late non-paid SHOPLINE status for an order with paid history', [
+            'order_id'      => $order->get_id(),
+            'remote_status' => '' !== $status ? $status : 'UNKNOWN',
+            'wc_status'     => $order->get_status(),
+        ] );
+        $order->add_order_note(
+            sprintf(
+                /* translators: %s: late SHOPLINE status. */
+                __( 'Ignored late SHOPLINE status %s because this order already has a recorded payment.', 'ys-shopline-via-woocommerce' ),
+                '' !== $status ? $status : 'UNKNOWN'
+            )
+        );
+    }
+
+    /**
+     * A paid date survives custom status changes where is_paid() may be false.
+     */
+    private function has_paid_history( \WC_Order $order ): bool {
+        return $order->is_paid() || (bool) $order->get_date_paid();
     }
 
     /**

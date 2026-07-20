@@ -82,7 +82,7 @@ class YSRedirectHandler {
         }
 
         // 如果訂單已付款，不需要處理
-        if ( $order->is_paid() ) {
+        if ( self::has_paid_history( $order ) ) {
             YSLogger::debug( 'Redirect handler: Order already paid', array(
                 'order_id' => $order_id,
             ) );
@@ -182,35 +182,22 @@ class YSRedirectHandler {
         // 注意：SHOPLINE API 回傳 'SUCCEEDED' 而不是 'SUCCESS'
         if ( 'SUCCEEDED' === $status || 'SUCCESS' === $status || 'CAPTURED' === $status ) {
             // 付款成功
-            if ( ! $order->is_paid() ) {
-                // Claim-and-verify prevents simultaneous return requests from both completing the order.
-                $process_id = wp_generate_uuid4();
-                $order->update_meta_data( YSOrderMeta::PAYMENT_COMPLETE_LOCK, $process_id );
-                $order->save_meta_data();
-
-                $fresh = wc_get_order( $order->get_id() );
-                if ( ! $fresh ) {
-                    YSLogger::warning( 'Redirect handler: Payment complete lock could not reload order', array(
+            if ( ! self::has_paid_history( $order ) ) {
+                $completion = YSPaymentConfirmation::complete_payment_once( $order, (string) $trade_order_id );
+                if ( ! empty( $completion['busy'] ) || ! ( $completion['order'] instanceof \WC_Order ) ) {
+                    YSLogger::warning( 'Redirect handler: Payment completion lock busy', array(
+                        'order_id' => $order->get_id(),
+                    ) );
+                    return;
+                }
+                if ( empty( $completion['completed'] ) ) {
+                    YSLogger::info( 'Redirect handler: Payment was completed by another converger', array(
                         'order_id' => $order->get_id(),
                     ) );
                     return;
                 }
 
-                if ( (string) $fresh->get_meta( YSOrderMeta::PAYMENT_COMPLETE_LOCK ) !== $process_id ) {
-                    YSLogger::info( 'Redirect handler: Payment complete lock lost', array(
-                        'order_id' => $order->get_id(),
-                    ) );
-                    return;
-                }
-
-                if ( $fresh->is_paid() ) {
-                    YSLogger::info( 'Redirect handler: Payment complete already completed', array(
-                        'order_id' => $fresh->get_id(),
-                    ) );
-                    return;
-                }
-
-                $fresh->payment_complete( $trade_order_id );
+                $fresh = $completion['order'];
                 // 套用商家自訂的付款成功訂單狀態
                 $custom_paid_status = get_option( 'ys_shopline_order_status_paid', '' );
                 if ( $custom_paid_status && $custom_paid_status !== $fresh->get_status() ) {
@@ -307,6 +294,17 @@ class YSRedirectHandler {
                         : null,
                 )
             );
+        } elseif ( YSTradeStatus::is_customer_pending( $status ) && 'ys_shopline_atm' !== $order->get_payment_method() ) {
+            // The customer has already returned from an exact wallet/card trade,
+            // but SHOPLINE's query result may lag behind the paid webhook. Keep
+            // the order locked in the neutral confirmation state instead of
+            // exposing WooCommerce's ordinary pending/re-payment UI.
+            YSPaymentConfirmation::enter_from_order(
+                $order,
+                $status,
+                $response,
+                'redirect_customer_pending'
+            );
         } elseif ( YSTradeStatus::is_terminal_safe( $status ) ) {
             if ( method_exists( $order, 'get_date_paid' ) && $order->get_date_paid() ) {
                 $order->add_order_note(
@@ -350,7 +348,7 @@ class YSRedirectHandler {
                 'redirect_unknown'
             );
         }
-        // 其他狀態（CREATED, PROCESSING）暫不處理，等待 Webhook 或用戶重試
+        // ATM and any deliberately excluded state continue through their existing display flow.
 
         // 補抓 ATM 虛擬帳號資訊
         if ( 'ys_shopline_atm' === $order->get_payment_method() && ! $order->get_meta( YSOrderMeta::VA_ACCOUNT ) ) {
@@ -749,6 +747,14 @@ class YSRedirectHandler {
         ) );
 
         return null;
+    }
+
+    /**
+     * A paid date remains authoritative after custom order-status changes.
+     */
+    private static function has_paid_history( \WC_Order $order ): bool {
+        return $order->is_paid()
+            || ( method_exists( $order, 'get_date_paid' ) && (bool) $order->get_date_paid() );
     }
 
     /**

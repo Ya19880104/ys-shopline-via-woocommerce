@@ -247,6 +247,24 @@ eq('subscription+token → forceSave：switchVisible=false / defaultSwitch=true�
 opt = SC.buildSdkOptions(CFG.ys_shopline_atm, SRV({ customerToken: 'tok-1' }));
 eq('ATM（即使誤帶 token）→ no paymentInstrument', false, 'paymentInstrument' in opt);
 
+for (const gatewayId of [
+	'ys_shopline_atm',
+	'ys_shopline_jkopay',
+	'ys_shopline_applepay',
+	'ys_shopline_linepay',
+	'ys_shopline_bnpl'
+]) {
+	opt = SC.buildSdkOptions(CFG[gatewayId], SRV({
+		customerToken: 'stale-token',
+		sdkOptions: {
+			customerToken: 'filter-token',
+			paymentInstrument: { bindCard: { enable: true } }
+		}
+	}));
+	eq(gatewayId + ' strips stale customerToken after sdkOptions merge', false, 'customerToken' in opt);
+	eq(gatewayId + ' strips stale paymentInstrument after sdkOptions merge', false, 'paymentInstrument' in opt);
+}
+
 opt = SC.buildSdkOptions(CFG.ys_shopline_credit_subscription, SRV({ customerToken: 'tok-1', amount: 0, bindOnlyMode: true }));
 eq('bindOnlyMode amount 0 → 10100（回歸）', 10100, opt.amount);
 

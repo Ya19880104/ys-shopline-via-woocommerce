@@ -265,46 +265,6 @@ final class YSWebhookHandler {
     // ==========================================
 
     /**
-     * Claim the payment completion lock and return a fresh order object.
-     *
-     * @param \WC_Order $order   Order object.
-     * @param string    $context Webhook context for logs.
-     * @return \WC_Order|null Fresh order if this request owns completion.
-     */
-    private function claim_payment_complete_lock( \WC_Order $order, string $context ): ?\WC_Order {
-        $process_id = wp_generate_uuid4();
-        $order->update_meta_data( YSOrderMeta::PAYMENT_COMPLETE_LOCK, $process_id );
-        $order->save_meta_data();
-
-        $fresh = wc_get_order( $order->get_id() );
-        if ( ! $fresh ) {
-            YSLogger::warning( 'Webhook: Payment complete lock could not reload order', array(
-                'order_id' => $order->get_id(),
-                'context'  => $context,
-            ) );
-            return null;
-        }
-
-        if ( (string) $fresh->get_meta( YSOrderMeta::PAYMENT_COMPLETE_LOCK ) !== $process_id ) {
-            YSLogger::info( 'Webhook: Payment complete lock lost', array(
-                'order_id' => $order->get_id(),
-                'context'  => $context,
-            ) );
-            return null;
-        }
-
-        if ( $fresh->is_paid() ) {
-            YSLogger::info( 'Webhook: Payment complete already completed', array(
-                'order_id' => $fresh->get_id(),
-                'context'  => $context,
-            ) );
-            return null;
-        }
-
-        return $fresh;
-    }
-
-    /**
      * 處理付款成功
      */
     private function handle_trade_succeeded( array $data ): void {
@@ -337,19 +297,27 @@ final class YSWebhookHandler {
         }
 
         // 檢查是否已付款
-        if ( $order->is_paid() ) {
+        if ( $this->has_paid_history( $order ) ) {
             YSLogger::info( 'Webhook: 訂單已付款，跳過處理', array( 'order_id' => $order->get_id() ) );
             return;
         }
 
-        // 完成付款流程
-        $fresh = $this->claim_payment_complete_lock( $order, 'trade.succeeded' );
-        if ( ! $fresh ) {
+        $completion = YSPaymentConfirmation::complete_payment_once( $order, (string) $trade_order_id );
+        if ( ! empty( $completion['busy'] ) || ! ( $completion['order'] instanceof \WC_Order ) ) {
+            YSLogger::warning( 'Webhook: Payment completion lock busy', array(
+                'order_id' => $order->get_id(),
+                'context'  => 'trade.succeeded',
+            ) );
             return;
         }
-
-        $order = $fresh;
-        $order->payment_complete( $trade_order_id );
+        if ( empty( $completion['completed'] ) ) {
+            YSLogger::info( 'Webhook: Payment was completed by another converger', array(
+                'order_id' => $order->get_id(),
+                'context'  => 'trade.succeeded',
+            ) );
+            return;
+        }
+        $order = $completion['order'];
 
         // v3.5.11: 清除 PROCESSING/AUTHORIZED 中間態 meta
         // 訂閱續扣 / hitrust 3DS 中間態 → webhook 來確認後解除「等待 capture」狀態
@@ -510,14 +478,12 @@ final class YSWebhookHandler {
             return;
         }
 
-        if ( ! $order->is_paid() ) {
-            $fresh = $this->claim_payment_complete_lock( $order, 'trade.captured' );
-            if ( ! $fresh ) {
+        if ( ! $this->has_paid_history( $order ) ) {
+            $completion = YSPaymentConfirmation::complete_payment_once( $order, (string) $trade_order_id );
+            if ( ! empty( $completion['busy'] ) || ! ( $completion['order'] instanceof \WC_Order ) ) {
                 return;
             }
-
-            $order = $fresh;
-            $order->payment_complete( $trade_order_id );
+            $order = $completion['order'];
         }
 
         if ( 'yes' === $order->get_meta( YSOrderMeta::PAYMENT_AUTHORIZED_PENDING ) ) {
@@ -1477,7 +1443,7 @@ final class YSWebhookHandler {
      * A paid date survives later manual status changes, unlike is_paid().
      */
     private function has_paid_history( \WC_Order $order ): bool {
-        return (bool) $order->get_date_paid();
+        return $order->is_paid() || (bool) $order->get_date_paid();
     }
 
     /**

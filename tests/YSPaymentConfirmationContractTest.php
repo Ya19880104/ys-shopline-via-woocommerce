@@ -85,12 +85,17 @@ final class YS_Confirmation_Test_Order extends WC_Order {
             return false;
         }
         $this->paid = true;
+        $this->date_paid = '2026-07-20 10:53:00';
         $this->payment_complete_count++;
         $this->status = 'processing';
         return true;
     }
 
     public function save(): void {
+        $this->save_count++;
+    }
+
+    public function save_meta_data(): void {
         $this->save_count++;
     }
 }
@@ -172,6 +177,25 @@ function ys_run_payment_confirmation_contract(): void {
         array( 'pending', 'failed', YSPaymentConfirmation::STATUS_KEY )
     );
     YS_Assert::eq( 'confirmation status is never payable', false, in_array( YSPaymentConfirmation::STATUS_KEY, $payable, true ) );
+
+    $completion = new YS_Confirmation_Test_Order();
+    $GLOBALS['ys_test_order'] = $completion;
+    $GLOBALS['wpdb'] = new wpdb();
+    $first_completion = YSPaymentConfirmation::complete_payment_once( $completion, 'trade-complete-once' );
+    $second_completion = YSPaymentConfirmation::complete_payment_once( $completion, 'trade-complete-once' );
+    YS_Assert::eq( 'shared completion lock completes the first paid event', true, $first_completion['completed'] ?? false );
+    YS_Assert::eq( 'shared completion lock treats the next event as already paid', false, $second_completion['completed'] ?? true );
+    YS_Assert::eq( 'shared completion lock calls payment_complete exactly once', 1, $completion->payment_complete_count );
+
+    $custom_paid_completion = new YS_Confirmation_Test_Order();
+    $custom_paid_completion->status = 'shipped';
+    $custom_paid_completion->paid = false;
+    $custom_paid_completion->date_paid = '2026-07-20 10:53:00';
+    $GLOBALS['ys_test_order'] = $custom_paid_completion;
+    $custom_result = YSPaymentConfirmation::complete_payment_once( $custom_paid_completion, 'trade-custom-paid' );
+    YS_Assert::eq( 'shared completion lock honors date-paid custom status', false, $custom_result['completed'] ?? true );
+    YS_Assert::eq( 'date-paid custom status never replays payment_complete', 0, $custom_paid_completion->payment_complete_count );
+    $GLOBALS['wpdb'] = null;
     $order_with_active_meta = new YS_Confirmation_Test_Order();
     $order_with_active_meta->meta[ YSOrderMeta::CONFIRMATION_DATA ] = ys_confirmation_attempt();
     $active_payable = YSPaymentConfirmation::exclude_from_payable_statuses( array( 'pending', 'failed' ), $order_with_active_meta );

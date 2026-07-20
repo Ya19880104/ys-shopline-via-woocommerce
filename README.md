@@ -4,7 +4,7 @@
 
 ## 版本資訊
 
-- **目前版本**：3.6.1
+- **目前版本**：3.6.2
 - **PHP 需求**：>= 8.0
 - **WordPress 需求**：>= 6.0
 - **WooCommerce 需求**：7.0 - 10.4
@@ -65,6 +65,17 @@ https://your-domain.com/wp-json/ys-shopline/v1/webhook
 ---
 
 ## 變更紀錄
+
+### 3.6.2 - 2026-07-20
+
+**修正錢包回站短暫顯示「等待付款」與跨 gateway customer ID 洩漏。**
+
+- LINE Pay／Apple Pay 等非 ATM 付款完成導轉回商店後，若第一輪 SHOPLINE 查詢仍為 `CREATED`／`CUSTOMER_ACTION`，訂單改進入 `wc-ys-confirming`，感謝頁顯示中立的「付款確認中」並鎖定重付；paid webhook／排程查詢仍以 exact attempt 收斂，付款完成後自動轉為已付款狀態。初次 create 的 nextAction、顧客取消後既有 prior-trade resolver 與 ATM 離線待繳流程不變。
+- 修正共用 `Regular` fallback 未檢查 gateway 能力：會員只要有本地信用卡 token，就會讓 LINE Pay／Apple Pay／街口／ATM／中租請求誤帶 `paymentCustomerId`。現在 `customerToken`、customer identity 建立／查詢、綁卡／快捷路由及 `paymentCustomerId` 僅限信用卡、信用卡分期與信用卡訂閱；非卡 gateway 即使收到舊快取、第三方 filter 或異常 mode，也會在前後端最終輸出邊界固定回一般付款。
+- 對精確 `1005 + Customer not found` 增加安全自癒：只失效該請求實際使用且仍相符的 user customer mapping 與 instruments cache，避免晚到請求刪除並行重建的新 ID；customer-token 階段會重建一次並重取 token，create-trade 階段只清理後安全退回重試，**不自動建立第二筆交易**。其他 `1005` 不清資料，WC tokens 與訂閱 meta 保留供稽核。
+- 付款完成入口改共用 order-scoped completion lock，涵蓋 webhook、回站查詢、人工／排程同步、立即成功與訂閱續扣；以 `date_paid` 作為不可逆 paid history，避免晚到 `PROCESSING` 把 ATM 等已完成訂單降回 `on-hold`，也避免查詢與 webhook 交錯時重跑 WooCommerce 付款完成 hooks。完整退款仍可正常轉入 `refunded`。
+- LINE Pay／Apple Pay 的第一個自動補查維持 120 秒；這是原付款 attempt 的確認窗，不是 ATM 專屬鎖。確認中會在建立交易前一致阻擋全部替代付款方式（含 ATM），僅在 exact paid／terminal／customer-action 收斂後恢復既有安全切換流程。
+- 新增回站生命週期、五種非卡 gateway 四種 mode、信用卡相容路徑、stale customer 重建、generic `1005` 負向與並行替換保護等可重跑契約。
 
 ### 3.6.1 - 2026-07-19
 

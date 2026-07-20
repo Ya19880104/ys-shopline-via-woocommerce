@@ -62,6 +62,17 @@ if ( ! class_exists( 'WC_Order' ) ) {
 	class WC_Order {}
 }
 
+if ( ! class_exists( 'WC_Payment_Tokens' ) ) {
+	final class WC_Payment_Tokens {
+		/** @var array<int, array<string, array<int, mixed>>> */
+		public static array $customer_tokens = array();
+
+		public static function get_customer_tokens( int $user_id, string $gateway_id = '' ): array {
+			return self::$customer_tokens[ $user_id ][ $gateway_id ] ?? array();
+		}
+	}
+}
+
 if ( ! class_exists( 'WC_Logger' ) ) {
 	class WC_Logger {
 		public function log( string $level, string $message, array $context = array() ): void {
@@ -113,6 +124,44 @@ if ( ! function_exists( 'get_option' ) ) {
 		return array_key_exists( $name, $GLOBALS['ys_test_options'] )
 			? $GLOBALS['ys_test_options'][ $name ]
 			: $default;
+	}
+}
+
+$GLOBALS['ys_test_user_meta'] = array();
+$GLOBALS['ys_test_users']     = array();
+
+if ( ! function_exists( 'get_user_meta' ) ) {
+	function get_user_meta( int $user_id, string $key = '', bool $single = false ) {
+		if ( '' === $key ) {
+			return $GLOBALS['ys_test_user_meta'][ $user_id ] ?? array();
+		}
+		return $GLOBALS['ys_test_user_meta'][ $user_id ][ $key ] ?? ( $single ? '' : array() );
+	}
+}
+
+if ( ! function_exists( 'update_user_meta' ) ) {
+	function update_user_meta( int $user_id, string $key, $value ) {
+		$GLOBALS['ys_test_user_meta'][ $user_id ][ $key ] = $value;
+		return true;
+	}
+}
+
+if ( ! function_exists( 'delete_user_meta' ) ) {
+	function delete_user_meta( int $user_id, string $key, $value = null ): bool {
+		if ( ! array_key_exists( $key, $GLOBALS['ys_test_user_meta'][ $user_id ] ?? array() ) ) {
+			return false;
+		}
+		if ( null !== $value && $GLOBALS['ys_test_user_meta'][ $user_id ][ $key ] !== $value ) {
+			return false;
+		}
+		unset( $GLOBALS['ys_test_user_meta'][ $user_id ][ $key ] );
+		return true;
+	}
+}
+
+if ( ! function_exists( 'get_userdata' ) ) {
+	function get_userdata( int $user_id ) {
+		return $GLOBALS['ys_test_users'][ $user_id ] ?? false;
 	}
 }
 
@@ -265,8 +314,13 @@ if ( ! function_exists( 'get_woocommerce_currency' ) ) {
 	}
 }
 
+$GLOBALS['ys_test_filters'] = array();
+
 if ( ! function_exists( 'apply_filters' ) ) {
 	function apply_filters( string $tag, $value, ...$args ) {
+		foreach ( $GLOBALS['ys_test_filters'][ $tag ] ?? array() as $callback ) {
+			$value = $callback( $value, ...$args );
+		}
 		return $value;
 	}
 }
@@ -404,7 +458,9 @@ require_once $ys_src . '/Utils/YSApiError.php';
 require_once $ys_src . '/Utils/YSLogger.php';
 require_once $ys_src . '/Api/YSApi.php';
 require_once $ys_src . '/Utils/YSOrderMeta.php';
+require_once $ys_src . '/DTOs/YSPaymentDTO.php';
 require_once $ys_src . '/DTOs/YSSessionDTO.php';
+require_once $ys_src . '/Customer/YSCustomer.php';
 require_once $ys_src . '/Handlers/YSRedirectHandler.php';
 require_once $ys_src . '/Gateways/YSGatewayBase.php';
 require_once $ys_src . '/Gateways/YSCreditSubscription.php';

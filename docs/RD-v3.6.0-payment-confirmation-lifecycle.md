@@ -87,7 +87,7 @@ The customer sees neutral wording. The administrator sees the reason:
 | `AUTHORIZED` | authorized | enter `ys-confirming` |
 | `PROCESSING`, `PENDING` | in flight | enter `ys-confirming` |
 | transport error, missing trade ID, malformed/unknown response | indeterminate | enter `ys-confirming`, retain exact envelope |
-| `CREATED`, `CUSTOMER_ACTION` | customer pending | remain `pending`; existing cancel/requery/abandon flow remains authoritative |
+| `CREATED`, `CUSTOMER_ACTION` | customer pending | initial create and prior-trade resolution remain `pending`; a valid return-page query enters `ys-confirming` to avoid exposing stale repayment UI while paid convergence is still racing |
 | `FAILED`, `EXPIRED`, `CANCELLED`, `CANCELED` | terminal | immediate browser failure stays `failed`; asynchronous terminal from the active confirming attempt returns to `pending` |
 | unknown future status | indeterminate | fail closed in `ys-confirming` |
 
@@ -208,7 +208,7 @@ Order notes and confirmation metadata include reason, remote status, reference, 
 - Existing `resolve_prior_trade()` behavior for Apple Pay/LINE Pay customer cancellation remains unchanged.
 - Existing indeterminate exact-reference webhook guards remain authoritative.
 - Confirmation convergence is attempt-scoped, not merely order-scoped. A delayed webhook for `X_1` must never unlock active attempt `X_2`, even when both belong to the same WooCommerce order. The stale event remains a no-op and is handled by its own paid/abandoned-history path, scheduled reconciliation, or manual review; safety takes precedence over cross-generation convenience.
-- Reopening `pending` after an exact `CUSTOMER_ACTION` does not bypass `resolve_prior_trade()`. If the adopted trade cannot be queried, the resolver keeps the trade and fails closed without creating a new reference.
+- Reopening `pending` after an exact `CUSTOMER_ACTION` does not bypass `resolve_prior_trade()`. If the adopted trade cannot be queried, the resolver keeps the trade and fails closed without creating a new reference. Since v3.6.2, a browser return that still queries as customer-pending first uses `ys-confirming`; a later exact customer-pending convergence may still hand the trade back to this resolver.
 - Existing abandoned-trade paid guard remains authoritative.
 - ATM account reuse remains unchanged.
 - Subscription recurring charge behavior remains byte-for-byte unchanged unless shared confirmation metadata cleanup is required.
@@ -216,7 +216,7 @@ Order notes and confirmation metadata include reason, remote status, reference, 
 ## 8. Acceptance Criteria
 
 1. `AUTHORIZED`, `PROCESSING`, `PENDING`, and create/query unknown enter `ys-confirming`.
-2. `CREATED` and `CUSTOMER_ACTION` do not enter `ys-confirming`.
+2. Initial create and prior-trade resolution keep `CREATED`/`CUSTOMER_ACTION` outside confirmation; a valid payment return may enter `ys-confirming` until exact paid/customer-pending/terminal convergence decides the next state.
 3. Confirming orders cannot be repaid, fulfilled, or treated as paid.
 4. Paid webhook/query completes the order exactly once.
 5. Exact terminal webhook/query returns an unpaid confirming order to `pending`, releases stock, and sends one email per reference.
