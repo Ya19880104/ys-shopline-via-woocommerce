@@ -70,11 +70,12 @@ https://your-domain.com/wp-json/ys-shopline/v1/webhook
 
 **恢復 SHOPLINE Payment 舊版獨立後台入口，並保留電商工具箱整合。**
 
-- bundled Hub Client 升級至 `2.0.3`：中央註冊的 `ys-toolbox` 統一顯示為「電商工具箱」（`dashicons-store`、位置 56），並沿用共用的 HTTPS-only Hub URL override（`YS_CART_HUB_URL`／`ys_cart_hub_url`，無效值回退正式站）。
-- 恢復 v2.4.4 以前的獨立頂層入口 `admin.php?page=ys_shopline_payment`（`SHOPLINE 金流`），同時保留 v2.4.5 起的電商工具箱子選單 `admin.php?page=ys-shopline-payment`。
+- bundled Hub Client 升級至 `2.0.4`：中央註冊的 `ys-toolbox` 統一顯示為「電商工具箱」（`dashicons-store`、位置 56），晚期排序會固定將「系統資訊」「聯絡我們」放在最後，並沿用共用的 HTTPS-only Hub URL override（`YS_CART_HUB_URL`／`ys_cart_hub_url`，無效值回退正式站）。
+- 恢復 v2.4.4 以前的獨立頂層入口 `admin.php?page=ys_shopline_payment`（`SHOPLINE 金流`），並移至 WooCommerce 區段後、`電商工具箱` 上方；同時保留 v2.4.5 起的電商工具箱子選單 `admin.php?page=ys-shopline-payment`。
 - 共用 `ys-toolbox` 已由同站舊版 Hub Client 先註冊時，仍將其「YS Plugin」顯示名稱與頁面標題校正回「電商工具箱」；不改 slug、callback 或既有子選單。
 - 兩個 endpoint 共用同一個設定頁 callback、`manage_options` 權限與 option group；不複製設定、不改設定鍵，也不影響付款流程。
 - 舊版頂層 endpoint 重新載入原有 color picker 管理員資產，並新增可重跑管理員選單契約防止後續整合再次移除相容入口。
+- 設定頁既有粉紫品牌配色與版面維持不變；本版只調整入口位置及共用工具箱排序。
 
 ### 3.6.2 - 2026-07-20
 

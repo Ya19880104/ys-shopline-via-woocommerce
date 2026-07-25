@@ -102,7 +102,7 @@ final class YSPluginHubClient {
 
         if ( ! $toolbox_exists ) {
             // 頂層選單：首頁直接顯示市集。
-            // v2.0.3：名稱/圖示/位置統一為「電商工具箱」（開發準則 §4），
+            // v2.0.4：名稱/圖示/位置統一為「電商工具箱」（開發準則 §4），
             // 與各外掛自建的 ys-toolbox 完全一致 — 無論誰先註冊結果相同。
             add_menu_page(
                 esc_html__( '電商工具箱', 'ys-plugin-hub-client' ),
@@ -125,23 +125,7 @@ final class YSPluginHubClient {
             array( YSMarketplacePage::class, 'render' )
         );
 
-        // 系統資訊子選單
-        add_submenu_page(
-            'ys-toolbox',
-            esc_html__( '系統資訊', 'ys-plugin-hub-client' ),
-            esc_html__( '系統資訊', 'ys-plugin-hub-client' ),
-            'manage_options',
-            'ys-hub-logs',
-            array( $this, 'render_logs_page' )
-        );
-
-        // 聯絡我們（外部連結，新開視窗）
-        global $submenu;
-        $submenu['ys-toolbox'][] = array(
-            '<span id="ys-contact-link">' . esc_html__( '聯絡我們', 'ys-plugin-hub-client' ) . ' <span class="dashicons dashicons-external" style="font-size:12px;width:12px;height:12px;vertical-align:text-top;"></span></span>',
-            'manage_options',
-            'https://yangsheep.com.tw/contact-us/',
-        );
+        // 系統資訊與聯絡我們由晚期 normalizer 註冊並固定在最後。
     }
 
     /**

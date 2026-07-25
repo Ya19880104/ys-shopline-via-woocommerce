@@ -65,7 +65,7 @@ dev-checkout 的真實 WooCommerce/HPOS 整合探針另以 `wp eval-file tests/i
   - LINE Pay／Apple Pay／街口／ATM／中租在 new/new_save/saved/缺 mode 下皆固定 `Regular` 且不帶 `paymentCustomerId`；一般信用卡相容路徑保留。
   - wallet SDK 與付款 payload 組裝都不得查詢或建立 card customer identity；SDK `sdkOptions` 與 PHP `ys_shopline_payment_data` filter 執行後仍須重新套用能力邊界。精確 stale ID 可重建一次，generic `1005` 與晚到舊 ID 不得清除目前 mapping；create 被拒只送一次，不自動重建第二筆交易。
 - **管理員設定入口**（[`YSAdminMenuContractTest.php`](YSAdminMenuContractTest.php)）
-  - 舊版獨立頂層 endpoint `ys_shopline_payment` 與電商工具箱子選單 `ys-shopline-payment` 必須同時註冊、共用設定 callback 與 `manage_options` 權限；Hub Client 2.0.3 必須中央註冊 `電商工具箱`，外掛端仍須將舊 Hub Client 先註冊的 `YS Plugin` 校正為 `電商工具箱`。legacy hook 必須載入既有管理員資產，無關頁面不得載入。
+  - 舊版獨立頂層 endpoint `ys_shopline_payment` 與電商工具箱子選單 `ys-shopline-payment` 必須同時註冊、共用設定 callback 與 `manage_options` 權限；Hub Client 2.0.4 必須中央註冊 `電商工具箱`，並將系統資訊／聯絡我們固定在最後。legacy hook 必須載入既有管理員資產，無關頁面不得載入。
 - **Production 回歸哨兵**（[`regression-scan.php`](regression-scan.php)）
   - 鎖定 mount health、存卡能力、tri-state、prior-trade、indeterminate、庫存、分期／訂閱、strict selector、paid-history、confirmation lock、safety-net、order-pay 與通知等付款關鍵機制；亦檢查 pre-create guard 仍位於 reference 生成之前，並阻止已撤回的 v3.5.38 註解回流。
 

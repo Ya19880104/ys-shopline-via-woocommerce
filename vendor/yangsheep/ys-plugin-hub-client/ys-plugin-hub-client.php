@@ -3,7 +3,7 @@
  * Plugin Name: YS Plugin Hub Client
  * Plugin URI:  https://yangsheep.com.tw
  * Description: YANGSHEEP DESIGN 外掛市集客戶端 — 連接 Hub 取得更新和市集資訊。
- * Version:     2.0.3
+ * Version:     2.0.4
  * Author:      YANGSHEEP DESIGN
  * Author URI:  https://yangsheep.com.tw
  * License:     GPL-2.0-or-later
@@ -19,6 +19,22 @@ if ( ! defined( 'ABSPATH' ) ) {
     exit;
 }
 
+/*
+ * This compatibility layer must run even when an older vendored client loaded
+ * first. It only normalizes the shared WordPress admin menu; it does not boot a
+ * second updater client.
+ */
+$ys_hub_client_menu_normalizer = __DIR__ . '/src/Admin/YSToolboxMenuNormalizer.php';
+if (
+    ! class_exists( '\YangSheep\PluginHubClient\Admin\YSToolboxMenuNormalizer', false )
+    && file_exists( $ys_hub_client_menu_normalizer )
+) {
+    require_once $ys_hub_client_menu_normalizer;
+}
+if ( class_exists( '\YangSheep\PluginHubClient\Admin\YSToolboxMenuNormalizer', false ) ) {
+    \YangSheep\PluginHubClient\Admin\YSToolboxMenuNormalizer::register();
+}
+
 /* ──────────────────────────────────────────────
  * 防止重複載入（必須在常數定義之前！）
  * 當多個 YS 外掛的 vendor/ 都包含此檔案時，只載入第一個。
@@ -30,14 +46,14 @@ if ( defined( 'YS_HUB_CLIENT_VERSION' ) || did_action( 'ys_hub_client_loaded' ) 
 /* ──────────────────────────────────────────────
  * 常數定義（放在防重複之後，確保只定義一次）
  * ────────────────────────────────────────────── */
-define( 'YS_HUB_CLIENT_VERSION', '2.0.3' );
+define( 'YS_HUB_CLIENT_VERSION', '2.0.4' );
 define( 'YS_HUB_CLIENT_FILE', __FILE__ );
 define( 'YS_HUB_CLIENT_DIR', plugin_dir_path( __FILE__ ) );
 define( 'YS_HUB_CLIENT_URL', plugin_dir_url( __FILE__ ) );
 define( 'YS_HUB_CLIENT_BASENAME', plugin_basename( __FILE__ ) );
 
 /**
- * Hub 伺服器 URL（寫死，不可變更）
+ * Hub 伺服器 URL。正式環境預設使用主站；開發站可透過既有設定覆寫。
  */
 $ys_hub_client_default_hub_url = 'https://yangsheep.com.tw';
 $ys_hub_client_hub_url         = defined( 'YS_CART_HUB_URL' )

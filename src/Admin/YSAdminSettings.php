@@ -70,7 +70,7 @@ class YSAdminSettings {
 			'ys_shopline_payment',
 			array( $this, 'render_settings_page' ),
 			'dashicons-money-alt',
-			58
+			55.90
 		);
 
 		// 檢查「電商工具箱」頂層選單是否已存在

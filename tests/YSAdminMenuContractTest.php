@@ -26,6 +26,7 @@ function ys_run_admin_menu_contract(): void {
 	YS_Assert::eq( 'legacy standalone endpoint keeps underscore slug', 'ys_shopline_payment', $top_level['menu_slug'] ?? '' );
 	YS_Assert::eq( 'legacy standalone endpoint uses SHOPLINE label', 'SHOPLINE 金流', $top_level['menu_title'] ?? '' );
 	YS_Assert::eq( 'legacy standalone endpoint requires manage_options', 'manage_options', $top_level['capability'] ?? '' );
+	YS_Assert::eq( 'legacy standalone endpoint is placed immediately above the toolbox', 55.90, $top_level['position'] ?? null );
 
 	$toolbox_top = array_values(
 		array_filter(

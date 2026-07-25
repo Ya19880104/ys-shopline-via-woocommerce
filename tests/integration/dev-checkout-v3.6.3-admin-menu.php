@@ -62,7 +62,7 @@ $legacy_hook = get_plugin_page_hookname( 'ys_shopline_payment', '' );
 $toolbox_hook = get_plugin_page_hookname( 'ys-shopline-payment', 'ys-toolbox' );
 
 $check( 'runtime version is 3.6.3', defined( 'YS_SHOPLINE_VERSION' ) && '3.6.3' === YS_SHOPLINE_VERSION );
-$check( 'loaded Hub Client is 2.0.3', defined( 'YS_HUB_CLIENT_VERSION' ) && '2.0.3' === YS_HUB_CLIENT_VERSION );
+$check( 'loaded Hub Client is 2.0.4', defined( 'YS_HUB_CLIENT_VERSION' ) && '2.0.4' === YS_HUB_CLIENT_VERSION );
 $check( 'loaded Hub URL remains HTTPS', defined( 'YS_HUB_CLIENT_HUB_URL' ) && str_starts_with( YS_HUB_CLIENT_HUB_URL, 'https://' ) );
 $check( 'legacy top-level endpoint is registered once', 1 === count( $top_level ) );
 $check( 'legacy top-level endpoint uses SHOPLINE label', 'SHOPLINE 金流' === ( $top_level[0][0] ?? '' ) );
