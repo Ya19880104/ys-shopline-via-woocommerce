@@ -3,7 +3,7 @@
  * Plugin Name: YS Plugin Hub Client
  * Plugin URI:  https://yangsheep.com.tw
  * Description: YANGSHEEP DESIGN 外掛市集客戶端 — 連接 Hub 取得更新和市集資訊。
- * Version:     2.0.2
+ * Version:     2.0.3
  * Author:      YANGSHEEP DESIGN
  * Author URI:  https://yangsheep.com.tw
  * License:     GPL-2.0-or-later
@@ -30,7 +30,7 @@ if ( defined( 'YS_HUB_CLIENT_VERSION' ) || did_action( 'ys_hub_client_loaded' ) 
 /* ──────────────────────────────────────────────
  * 常數定義（放在防重複之後，確保只定義一次）
  * ────────────────────────────────────────────── */
-define( 'YS_HUB_CLIENT_VERSION', '2.0.2' );
+define( 'YS_HUB_CLIENT_VERSION', '2.0.3' );
 define( 'YS_HUB_CLIENT_FILE', __FILE__ );
 define( 'YS_HUB_CLIENT_DIR', plugin_dir_path( __FILE__ ) );
 define( 'YS_HUB_CLIENT_URL', plugin_dir_url( __FILE__ ) );
@@ -39,7 +39,17 @@ define( 'YS_HUB_CLIENT_BASENAME', plugin_basename( __FILE__ ) );
 /**
  * Hub 伺服器 URL（寫死，不可變更）
  */
-define( 'YS_HUB_CLIENT_HUB_URL', 'https://yangsheep.com.tw' );
+$ys_hub_client_default_hub_url = 'https://yangsheep.com.tw';
+$ys_hub_client_hub_url         = defined( 'YS_CART_HUB_URL' )
+    ? (string) YS_CART_HUB_URL
+    : (string) get_option( 'ys_cart_hub_url', $ys_hub_client_default_hub_url );
+$ys_hub_client_hub_url         = rtrim( trim( $ys_hub_client_hub_url ), '/' );
+
+if ( '' === $ys_hub_client_hub_url || 1 !== preg_match( '#^https://#i', $ys_hub_client_hub_url ) ) {
+    $ys_hub_client_hub_url = $ys_hub_client_default_hub_url;
+}
+
+define( 'YS_HUB_CLIENT_HUB_URL', $ys_hub_client_hub_url );
 
 /* ──────────────────────────────────────────────
  * Fallback PSR-4 Autoloader

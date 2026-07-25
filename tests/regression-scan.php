@@ -46,6 +46,9 @@ function ys_run_regression_scan(): void {
 	$customer     = $read( 'src/Customer/YSCustomer.php' );
 	$status       = $read( 'src/Handlers/YSStatusManager.php' );
 	$webhook      = $read( 'src/Handlers/YSWebhookHandler.php' );
+	$admin        = $read( 'src/Admin/YSAdminSettings.php' );
+	$hub_menu     = $read( 'vendor/yangsheep/ys-plugin-hub-client/src/YSPluginHubClient.php' );
+	$hub_loader   = $read( 'vendor/yangsheep/ys-plugin-hub-client/ys-plugin-hub-client.php' );
 	$display      = $read( 'src/Frontend/YSOrderDisplay.php' );
 	$dto          = $read( 'src/DTOs/YSSessionDTO.php' );
 	$trade_status = $read( 'src/Utils/YSTradeStatus.php' );
@@ -100,6 +103,10 @@ function ys_run_regression_scan(): void {
 	YS_Assert::is_true( 'final stage retains durable review marker', $has( $confirmation, 'mark_for_review' ) && $has( $confirmation, 'CONFIRMATION_REVIEW' ) );
 	YS_Assert::is_true( 'final review sends event-scoped admin alert', $has( $confirmation, 'send_manual_review_notification' ) && $has( $confirmation, 'manual_review:' ) );
 	YS_Assert::is_true( 'order-pay uses standard pre-payment notice hook', $has( $display, 'woocommerce_pay_order_before_payment' ) );
+	YS_Assert::is_true( 'legacy standalone admin endpoint remains registered', $has( $admin, "'ys_shopline_payment'" ) && $has( $admin, "'toplevel_page_ys_shopline_payment'" ) );
+	YS_Assert::is_true( 'toolbox admin endpoint remains registered', $has( $admin, "'ys-toolbox'" ) && $has( $admin, "'ys-shopline-payment'" ) );
+	YS_Assert::is_true( 'bundled Hub Client 2.0.3 registers 電商工具箱', $has( $hub_loader, "YS_HUB_CLIENT_VERSION', '2.0.3'" ) && $has( $hub_menu, "esc_html__( '電商工具箱'" ) && $has( $hub_menu, "'dashicons-store'" ) && ! $has( $hub_menu, "esc_html__( 'YS Plugin'" ) );
+	YS_Assert::is_true( 'bundled Hub URL override remains HTTPS-only with production fallback', $has( $hub_loader, "defined( 'YS_CART_HUB_URL' )" ) && $has( $hub_loader, "get_option( 'ys_cart_hub_url'" ) && $has( $hub_loader, "#^https://#i" ) && $has( $hub_loader, '$ys_hub_client_default_hub_url' ) );
 
 	YS_Assert::is_true( 'confirmation attempt meta key remains defined', $has( $meta, 'CONFIRMATION_DATA' ) && $has( $meta, 'PAYMENT_ATTEMPT_DATA' ) );
 	YS_Assert::is_true( 'main plugin initializes confirmation lifecycle', $has( $main, 'YSPaymentConfirmation::init' ) );

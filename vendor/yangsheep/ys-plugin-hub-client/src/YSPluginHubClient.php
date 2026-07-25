@@ -101,15 +101,17 @@ final class YSPluginHubClient {
         }
 
         if ( ! $toolbox_exists ) {
-            // 頂層選單：首頁直接顯示市集
+            // 頂層選單：首頁直接顯示市集。
+            // v2.0.3：名稱/圖示/位置統一為「電商工具箱」（開發準則 §4），
+            // 與各外掛自建的 ys-toolbox 完全一致 — 無論誰先註冊結果相同。
             add_menu_page(
-                esc_html__( 'YS Plugin', 'ys-plugin-hub-client' ),
-                esc_html__( 'YS Plugin', 'ys-plugin-hub-client' ),
+                esc_html__( '電商工具箱', 'ys-plugin-hub-client' ),
+                esc_html__( '電商工具箱', 'ys-plugin-hub-client' ),
                 'manage_options',
                 'ys-toolbox',
                 array( YSMarketplacePage::class, 'render' ),
-                'dashicons-admin-plugins',
-                59
+                'dashicons-store',
+                56
             );
         }
 

@@ -189,10 +189,56 @@ $GLOBALS['ys_test_notices'] = array();
 $GLOBALS['ys_test_actions'] = array();
 $GLOBALS['ys_test_query_vars'] = array();
 $GLOBALS['ys_test_logs'] = array();
+$GLOBALS['ys_test_admin_menu_pages'] = array();
+$GLOBALS['ys_test_admin_submenu_pages'] = array();
+$GLOBALS['ys_test_enqueued_styles'] = array();
+$GLOBALS['ys_test_enqueued_scripts'] = array();
 
 if ( ! function_exists( 'add_action' ) ) {
 	function add_action( string $hook, $callback, int $priority = 10, int $accepted_args = 1 ): void {
 		$GLOBALS['ys_test_actions'][] = compact( 'hook', 'callback', 'priority', 'accepted_args' );
+	}
+}
+
+if ( ! function_exists( 'add_menu_page' ) ) {
+	function add_menu_page( $page_title, $menu_title, $capability, $menu_slug, $callback = '', $icon_url = '', $position = null ): string {
+		$GLOBALS['ys_test_admin_menu_pages'][] = compact(
+			'page_title',
+			'menu_title',
+			'capability',
+			'menu_slug',
+			'callback',
+			'icon_url',
+			'position'
+		);
+		return 'toplevel_page_' . $menu_slug;
+	}
+}
+
+if ( ! function_exists( 'add_submenu_page' ) ) {
+	function add_submenu_page( $parent_slug, $page_title, $menu_title, $capability, $menu_slug, $callback = '', $position = null ): string {
+		$GLOBALS['ys_test_admin_submenu_pages'][] = compact(
+			'parent_slug',
+			'page_title',
+			'menu_title',
+			'capability',
+			'menu_slug',
+			'callback',
+			'position'
+		);
+		return $parent_slug . '_page_' . $menu_slug;
+	}
+}
+
+if ( ! function_exists( 'wp_enqueue_style' ) ) {
+	function wp_enqueue_style( string $handle ): void {
+		$GLOBALS['ys_test_enqueued_styles'][] = $handle;
+	}
+}
+
+if ( ! function_exists( 'wp_enqueue_script' ) ) {
+	function wp_enqueue_script( string $handle ): void {
+		$GLOBALS['ys_test_enqueued_scripts'][] = $handle;
 	}
 }
 
@@ -470,6 +516,7 @@ require_once $ys_src . '/Handlers/YSStatusManager.php';
 require_once $ys_src . '/Handlers/YSPaymentConfirmation.php';
 require_once $ys_src . '/Handlers/YSWebhookHandler.php';
 require_once $ys_src . '/Admin/YSOrderPaymentAdmin.php';
+require_once $ys_src . '/Admin/YSAdminSettings.php';
 require_once $ys_src . '/Frontend/YSOrderDisplay.php';
 
 /**

@@ -57,17 +57,31 @@ class YSAdminSettings {
 	}
 
 	/**
-	 * Add admin menu under 電商工具箱.
+	 * Add the legacy standalone menu and the 電商工具箱 submenu.
 	 */
 	public function add_admin_menu() {
 		global $menu;
 
+		// 保留 v2.4.4 以前的獨立入口；與工具箱子選單共用同一設定頁。
+		add_menu_page(
+			__( 'SHOPLINE Payment 設定', 'ys-shopline-via-woocommerce' ),
+			__( 'SHOPLINE 金流', 'ys-shopline-via-woocommerce' ),
+			'manage_options',
+			'ys_shopline_payment',
+			array( $this, 'render_settings_page' ),
+			'dashicons-money-alt',
+			58
+		);
+
 		// 檢查「電商工具箱」頂層選單是否已存在
 		$toolbox_exists = false;
 		if ( is_array( $menu ) ) {
-			foreach ( $menu as $item ) {
+			foreach ( $menu as $menu_key => $item ) {
 				if ( isset( $item[2] ) && 'ys-toolbox' === $item[2] ) {
 					$toolbox_exists = true;
+					// Hub Client 可能先以「YS Plugin」註冊同一 slug；統一成既有產品名稱。
+					$menu[ $menu_key ][0] = __( '電商工具箱', 'ys-shopline-via-woocommerce' );
+					$menu[ $menu_key ][3] = __( '電商工具箱', 'ys-shopline-via-woocommerce' );
 					break;
 				}
 			}
@@ -401,7 +415,8 @@ class YSAdminSettings {
 	 */
 	public function enqueue_scripts( $hook ) {
 		if ( false === strpos( $hook, 'ys-toolbox' )
-			&& false === strpos( $hook, 'ys-shopline-payment' ) ) {
+			&& false === strpos( $hook, 'ys-shopline-payment' )
+			&& 'toplevel_page_ys_shopline_payment' !== $hook ) {
 			return;
 		}
 
