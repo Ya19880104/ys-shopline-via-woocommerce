@@ -4,7 +4,7 @@
 
 ## 版本資訊
 
-- **目前版本**：3.6.3
+- **目前版本**：3.6.4
 - **PHP 需求**：>= 8.0
 - **WordPress 需求**：>= 6.0
 - **WooCommerce 需求**：7.0 - 10.4
@@ -65,6 +65,14 @@ https://your-domain.com/wp-json/ys-shopline/v1/webhook
 ---
 
 ## 變更紀錄
+
+### 3.6.4 - 2026-07-27
+
+**修正 vendor Hub Client 重複宣告 HPOS 造成 WooCommerce error log 污染。**
+
+- bundled Hub Client 升級至 `2.0.5`，移除 library 內以 vendor `__FILE__` 呼叫 `FeaturesUtil::declare_compatibility()` 的無效宣告，避免 WooCommerce 將非外掛主檔判定為 `Invalid plugin file`。
+- HPOS 相容性仍由 SHOPLINE 主外掛以 `YS_SHOPLINE_PLUGIN_FILE` 正確宣告，付款、訂單與 HPOS 功能語意不變。
+- 保留 Hub Client 的資料表 activation hook 與 `plugins_loaded` schema fallback；本次不改資料庫初始化流程。
 
 ### 3.6.3 - 2026-07-25
 

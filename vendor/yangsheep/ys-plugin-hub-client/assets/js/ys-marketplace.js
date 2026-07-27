@@ -1,6 +1,6 @@
 /**
  * YS Plugin Hub Client - 市集頁面前端邏輯
- * v2.0.4
+ * v2.0.5
  *
  * 所有操作走 AJAX，禁止 form POST。
  */

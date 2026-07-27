@@ -12,7 +12,7 @@ php tests/regression-scan.php              # 付款關鍵機制靜態哨兵（�
 node tests/js/checkout-contract.test.js    # 前端契約（真實 JS 檔載入驗證）
 ```
 
-dev-checkout 的真實 WooCommerce/HPOS 整合探針另以 `wp eval-file tests/integration/dev-checkout-v3.6.2.php` 與 `wp eval-file tests/integration/dev-checkout-v3.6.2-paid-ordering.php` 執行；其 SHOPLINE query/create 由 `pre_http_request` 固定回應或阻擋，不建立真交易，並在 `finally` 清除 fixture。再以環境變數傳入 fixture ID 執行對應 probe，跨 request 確認零殘留。
+dev-checkout 的真實 WooCommerce/HPOS 整合探針另以 `wp eval-file tests/integration/dev-checkout-v3.6.2.php`、`wp eval-file tests/integration/dev-checkout-v3.6.2-paid-ordering.php` 與 `wp --skip-plugins=yangsheep-checkout-optimizer,ys-paynow-shipping,ys-raq-addons,ys-webp-tools eval-file tests/integration/dev-checkout-v3.6.4-hpos.php` 執行；其 SHOPLINE query/create 由 `pre_http_request` 固定回應或阻擋，不建立真交易，並在 `finally` 清除 fixture。再以環境變數傳入 fixture ID 執行對應 probe，跨 request 確認零殘留。v3.6.4 探針不建立 fixture，直接驗證 vendor Hub 路徑不是 WordPress 外掛 ID、SLP 主檔仍正確宣告 HPOS，並確認 dev-checkout 的 HPOS 保持啟用。
 
 - 全通過 → 印出 `RESULT: N PASS / 0 FAIL`、exit code `0`
 - 任一失敗 → 印出 `FAIL | ...`、exit code `1`
@@ -65,7 +65,9 @@ dev-checkout 的真實 WooCommerce/HPOS 整合探針另以 `wp eval-file tests/i
   - LINE Pay／Apple Pay／街口／ATM／中租在 new/new_save/saved/缺 mode 下皆固定 `Regular` 且不帶 `paymentCustomerId`；一般信用卡相容路徑保留。
   - wallet SDK 與付款 payload 組裝都不得查詢或建立 card customer identity；SDK `sdkOptions` 與 PHP `ys_shopline_payment_data` filter 執行後仍須重新套用能力邊界。精確 stale ID 可重建一次，generic `1005` 與晚到舊 ID 不得清除目前 mapping；create 被拒只送一次，不自動重建第二筆交易。
 - **管理員設定入口**（[`YSAdminMenuContractTest.php`](YSAdminMenuContractTest.php)）
-  - 舊版獨立頂層 endpoint `ys_shopline_payment` 與電商工具箱子選單 `ys-shopline-payment` 必須同時註冊、共用設定 callback 與 `manage_options` 權限；Hub Client 2.0.4 必須中央註冊 `電商工具箱`，並將系統資訊／聯絡我們固定在最後。legacy hook 必須載入既有管理員資產，無關頁面不得載入。
+  - 舊版獨立頂層 endpoint `ys_shopline_payment` 與電商工具箱子選單 `ys-shopline-payment` 必須同時註冊、共用設定 callback 與 `manage_options` 權限；Hub Client 2.0.5 必須中央註冊 `電商工具箱`，並將系統資訊／聯絡我們固定在最後。legacy hook 必須載入既有管理員資產，無關頁面不得載入。
+- **Hub Client HPOS ownership**（[`YSPluginHubHposContractTest.php`](YSPluginHubHposContractTest.php)）
+  - vendor library 不得以自身 `__FILE__` 宣告 WooCommerce feature compatibility；HPOS 宣告必須由 SLP 主檔以 `YS_SHOPLINE_PLUGIN_FILE` 擁有，避免 `Invalid plugin file` error log。
 - **Production 回歸哨兵**（[`regression-scan.php`](regression-scan.php)）
   - 鎖定 mount health、存卡能力、tri-state、prior-trade、indeterminate、庫存、分期／訂閱、strict selector、paid-history、confirmation lock、safety-net、order-pay 與通知等付款關鍵機制；亦檢查 pre-create guard 仍位於 reference 生成之前，並阻止已撤回的 v3.5.38 註解回流。
 
