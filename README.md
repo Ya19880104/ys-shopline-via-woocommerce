@@ -4,7 +4,7 @@
 
 ## 版本資訊
 
-- **目前版本**：3.6.4
+- **目前版本**：3.6.5
 - **PHP 需求**：>= 8.0
 - **WordPress 需求**：>= 6.0
 - **WooCommerce 需求**：7.0 - 10.4
@@ -65,6 +65,15 @@ https://your-domain.com/wp-json/ys-shopline/v1/webhook
 ---
 
 ## 變更紀錄
+
+### 3.6.5 - 2026-08-09
+
+**修正 3DS 非同步確認完成後，首購訂閱仍停在 pending。**
+
+- WooCommerce Subscriptions 原生只把 `pending`／`on-hold`／`failed` 轉入付款完成狀態視為首次付款；母訂單經 `ys-confirming → processing/completed` 時因此未啟用關聯訂閱。現在透過 WCS 6.9+ 提供的 `wcs_is_subscription_order_completed` 相容 filter，僅在舊狀態為 `ys-confirming`、新狀態是 WooCommerce 付款完成狀態且父訂單已有 `date_paid` 時，交回 WCS 原生啟用流程。
+- 不把 `ys-confirming` 加入 `woocommerce_valid_order_statuses_for_payment`，確認期間仍禁止重新付款；也不直接呼叫訂閱 `payment_complete()`，保留 WCS 對 ended、cancelled、active 與續扣排程的原生保護。
+- `enter_confirmation()` 原有 renewal 排除維持不變，因此修正只涵蓋首購／母訂單，不改續扣交易流程。WooCommerce 將訂單人工改為 `processing` 本來就會寫入 `date_paid` 並視為已收款，本版維持該原生語意。
+- 新增 standalone 契約與 dev-checkout 真實 WCS/HPOS 探針，覆蓋舊行為重現、非同步啟用、下一次續扣排程、重送冪等、非付款目的狀態與管理員 processing 語意。
 
 ### 3.6.4 - 2026-07-27
 

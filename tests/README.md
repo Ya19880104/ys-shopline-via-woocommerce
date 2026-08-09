@@ -12,7 +12,7 @@ php tests/regression-scan.php              # 付款關鍵機制靜態哨兵（�
 node tests/js/checkout-contract.test.js    # 前端契約（真實 JS 檔載入驗證）
 ```
 
-dev-checkout 的真實 WooCommerce/HPOS 整合探針另以 `wp eval-file tests/integration/dev-checkout-v3.6.2.php`、`wp eval-file tests/integration/dev-checkout-v3.6.2-paid-ordering.php` 與 `wp --skip-plugins=yangsheep-checkout-optimizer,ys-paynow-shipping,ys-raq-addons,ys-webp-tools eval-file tests/integration/dev-checkout-v3.6.4-hpos.php` 執行；其 SHOPLINE query/create 由 `pre_http_request` 固定回應或阻擋，不建立真交易，並在 `finally` 清除 fixture。再以環境變數傳入 fixture ID 執行對應 probe，跨 request 確認零殘留。v3.6.4 探針不建立 fixture，直接驗證 vendor Hub 路徑不是 WordPress 外掛 ID、SLP 主檔仍正確宣告 HPOS，並確認 dev-checkout 的 HPOS 保持啟用。
+dev-checkout 的真實 WooCommerce/HPOS 整合探針另以 `wp eval-file tests/integration/dev-checkout-v3.6.2.php`、`wp eval-file tests/integration/dev-checkout-v3.6.2-paid-ordering.php`、`wp --skip-plugins=yangsheep-checkout-optimizer,ys-paynow-shipping,ys-raq-addons,ys-webp-tools eval-file tests/integration/dev-checkout-v3.6.4-hpos.php` 與 `wp eval-file tests/integration/dev-checkout-v3.6.5-wcs-activation.php` 執行；其 SHOPLINE query/create 由 `pre_http_request` 固定回應或阻擋，不建立真交易，並在 `finally` 清除 fixture。再以環境變數傳入 fixture ID 執行對應 probe，跨 request 確認零殘留。v3.6.4 探針不建立 fixture，直接驗證 vendor Hub 路徑不是 WordPress 外掛 ID、SLP 主檔仍正確宣告 HPOS，並確認 dev-checkout 的 HPOS 保持啟用。v3.6.5 探針使用真實 WooCommerce Subscriptions 母訂單／訂閱物件，暫時移除相容 filter 重現舊缺口後立即恢復，驗證 `ys-confirming` 收款啟用、續扣排程與冪等，最後刪除全部 fixture。
 
 - 全通過 → 印出 `RESULT: N PASS / 0 FAIL`、exit code `0`
 - 任一失敗 → 印出 `FAIL | ...`、exit code `1`
@@ -36,6 +36,8 @@ dev-checkout 的真實 WooCommerce/HPOS 整合探針另以 `wp eval-file tests/i
   - Apple Pay 建立交易不可用空的純 server paySession 模擬：`referenceMerchant.StoreWebsite` 由瀏覽器 SHOPLINE SDK paySession 提供；`'{}'` 必然被 SHOPLINE 拒絕，只能用真實瀏覽器／裝置覆蓋 create 段，不得把此測試限制誤判成產品回歸。
 - **訂閱續扣**（[`YSSubscriptionRenewalContractTest.php`](YSSubscriptionRenewalContractTest.php)）
   - timeout 與 `1001`／`4003` unknown 不 fallback；`4450`／`4900` 明確拒絕才換卡；同卡不重試；既存交易 pre-create guard；`90011_` reference-prefix 反例；跨期 meta 排除；續扣成功與 webhook／狀態同步共用 order-scoped completion lock，重送不得重跑付款完成 hooks。
+- **首購訂閱啟用**（[`YSSubscriptionActivationContractTest.php`](YSSubscriptionActivationContractTest.php)）
+  - WCS 原生完成判斷不得被覆寫；只有已有 `date_paid` 的 `ys-confirming → processing/completed/自訂付款完成狀態` 可補認列為首次付款。未付款、其他來源狀態與非付款目的狀態維持 false；續扣不進 confirmation 的既有契約維持不變。
 - **庫存扣減**（[`YSStockReductionContractTest.php`](YSStockReductionContractTest.php)）
   - 信用卡 nextAction 與 ATM 必須使用 `wc_maybe_reduce_stock_levels()`，且不得直接呼叫 `wc_reduce_stock_levels()`，確保 WooCommerce 同步維護訂單層庫存旗標。
 - **分期 SDK config**（[`YSInstallmentSdkConfigContractTest.php`](YSInstallmentSdkConfigContractTest.php)）

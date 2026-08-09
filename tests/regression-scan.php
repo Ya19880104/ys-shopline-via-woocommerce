@@ -92,6 +92,7 @@ function ys_run_regression_scan(): void {
 	YS_Assert::is_true( 'hourly safety net includes confirming orders', $has( $status, "YSPaymentConfirmation::STATUS_KEY" ) && $has( $status, '2 * DAY_IN_SECONDS' ) );
 
 	YS_Assert::is_true( 'confirmation custom status remains registered', $has( $confirmation, "public const STATUS_KEY  = 'ys-confirming'" ) );
+	YS_Assert::is_true( 'WCS recognizes paid transitions from confirmation', $has( $confirmation, 'wcs_is_subscription_order_completed' ) && $has( $confirmation, 'treat_confirming_transition_as_completed' ) );
 	YS_Assert::is_true( 'customer-pending browser return enters neutral confirmation', $has( $redirect, 'redirect_customer_pending' ) && $has( $redirect, 'YSTradeStatus::is_customer_pending' ) );
 	YS_Assert::is_true( 'confirmation lock remains order-scoped', $has( $confirmation, 'with_confirmation_lock' ) && $has( $confirmation, 'GET_LOCK' ) );
 	YS_Assert::is_true( 'strict webhook attempt matching remains centralized', $has( $confirmation, 'matching_webhook_attempt' ) );

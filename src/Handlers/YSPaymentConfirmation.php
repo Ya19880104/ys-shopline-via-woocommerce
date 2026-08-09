@@ -35,6 +35,7 @@ final class YSPaymentConfirmation {
         add_filter( 'wc_order_statuses', array( self::class, 'add_order_status' ) );
         add_filter( 'woocommerce_valid_order_statuses_for_payment', array( self::class, 'exclude_from_payable_statuses' ), 999, 2 );
         add_filter( 'woocommerce_valid_order_statuses_for_payment_complete', array( self::class, 'include_for_payment_complete' ), 10, 2 );
+        add_filter( 'wcs_is_subscription_order_completed', array( self::class, 'treat_confirming_transition_as_completed' ), 10, 5 );
         add_action( self::SCHEDULE_HOOK, array( self::class, 'reconcile' ), 10, 3 );
         add_action( 'woocommerce_payment_complete', array( self::class, 'clear_after_payment_complete' ), 20 );
     }
@@ -112,6 +113,40 @@ final class YSPaymentConfirmation {
             $statuses[] = self::STATUS_KEY;
         }
         return $statuses;
+    }
+
+    /**
+     * Let WCS recognize a paid parent-order transition from confirmation.
+     *
+     * WCS normally activates subscriptions only when the previous order status
+     * is pending, on-hold, or failed. An asynchronous SHOPLINE payment changes
+     * from ys-confirming instead, so WCS needs this narrow compatibility signal.
+     * WooCommerce writes date_paid before firing the processing/completed status
+     * transition, including when an administrator intentionally marks it paid.
+     *
+     * @param bool                 $order_completed  WCS's native decision.
+     * @param string               $new_order_status New status without wc- prefix.
+     * @param string               $old_order_status Old status without wc- prefix.
+     * @param \WC_Subscription[]   $subscriptions    Parent-order subscriptions.
+     * @param \WC_Order            $order            Parent order.
+     * @return bool
+     */
+    public static function treat_confirming_transition_as_completed( $order_completed, $new_order_status, $old_order_status, $subscriptions, $order ): bool {
+        if ( $order_completed || self::STATUS_KEY !== $old_order_status || ! $order instanceof \WC_Order ) {
+            return (bool) $order_completed;
+        }
+
+        $paid_statuses = array(
+            apply_filters( 'woocommerce_payment_complete_order_status', 'processing', $order->get_id(), $order ),
+            'processing',
+            'completed',
+        );
+
+        if ( ! in_array( $new_order_status, $paid_statuses, true ) ) {
+            return false;
+        }
+
+        return (bool) $order->get_date_paid();
     }
 
     public static function confirmation_title(): string {
