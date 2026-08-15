@@ -187,6 +187,7 @@ $GLOBALS['ys_test_order'] = null;
 $GLOBALS['ys_test_orders'] = array();
 $GLOBALS['ys_test_notices'] = array();
 $GLOBALS['ys_test_actions'] = array();
+$GLOBALS['ys_test_filter_registrations'] = array();
 $GLOBALS['ys_test_query_vars'] = array();
 $GLOBALS['ys_test_logs'] = array();
 $GLOBALS['ys_test_admin_menu_pages'] = array();
@@ -197,6 +198,13 @@ $GLOBALS['ys_test_enqueued_scripts'] = array();
 if ( ! function_exists( 'add_action' ) ) {
 	function add_action( string $hook, $callback, int $priority = 10, int $accepted_args = 1 ): void {
 		$GLOBALS['ys_test_actions'][] = compact( 'hook', 'callback', 'priority', 'accepted_args' );
+	}
+}
+
+if ( ! function_exists( 'add_filter' ) ) {
+	function add_filter( string $hook, $callback, int $priority = 10, int $accepted_args = 1 ): void {
+		$GLOBALS['ys_test_filter_registrations'][] = compact( 'hook', 'callback', 'priority', 'accepted_args' );
+		$GLOBALS['ys_test_filters'][ $hook ][] = $callback;
 	}
 }
 
@@ -456,8 +464,16 @@ if ( ! class_exists( 'YS_Test_Cart' ) ) {
 
 if ( ! class_exists( 'YS_Test_Mailer' ) ) {
 	final class YS_Test_Mailer {
+		/** @var array<string, object> */
+		public array $emails = array();
+
 		public function wrap_message( string $heading, string $body ): string {
 			return '<h1>' . $heading . '</h1><p>' . $body . '</p>';
+		}
+
+		/** @return array<string, object> */
+		public function get_emails(): array {
+			return $this->emails;
 		}
 	}
 }
@@ -465,13 +481,15 @@ if ( ! class_exists( 'YS_Test_Mailer' ) ) {
 if ( ! class_exists( 'YS_Test_WC' ) ) {
 	final class YS_Test_WC {
 		public YS_Test_Cart $cart;
+		public YS_Test_Mailer $mailer;
 
 		public function __construct() {
 			$this->cart = new YS_Test_Cart();
+			$this->mailer = new YS_Test_Mailer();
 		}
 
 		public function mailer(): YS_Test_Mailer {
-			return new YS_Test_Mailer();
+			return $this->mailer;
 		}
 	}
 }

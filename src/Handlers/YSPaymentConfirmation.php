@@ -24,8 +24,11 @@ final class YSPaymentConfirmation {
     public const STATUS_KEY  = 'ys-confirming';
     public const POST_STATUS = 'wc-ys-confirming';
     public const SCHEDULE_HOOK = 'ys_shopline_confirm_payment';
+    public const NEW_ORDER_EMAIL_RETRY_HOOK = 'ys_shopline_retry_admin_new_order_email';
 
     private const SCHEDULE_GROUP = 'ys-shopline-payment-confirmation';
+    private const NEW_ORDER_EMAIL_MAX_ATTEMPTS = 3;
+    private const NEW_ORDER_EMAIL_RETRY_DELAY  = 60;
 
     /**
      * Register lifecycle hooks.
@@ -36,8 +39,42 @@ final class YSPaymentConfirmation {
         add_filter( 'woocommerce_valid_order_statuses_for_payment', array( self::class, 'exclude_from_payable_statuses' ), 999, 2 );
         add_filter( 'woocommerce_valid_order_statuses_for_payment_complete', array( self::class, 'include_for_payment_complete' ), 10, 2 );
         add_filter( 'wcs_is_subscription_order_completed', array( self::class, 'treat_confirming_transition_as_completed' ), 10, 5 );
+        add_filter( 'woocommerce_email_actions', array( self::class, 'register_email_actions' ) );
+        add_action( 'woocommerce_order_status_ys-confirming_to_processing_notification', array( self::class, 'maybe_send_admin_new_order_email' ), 10, 2 );
+        add_action( 'woocommerce_order_status_ys-confirming_to_completed_notification', array( self::class, 'maybe_send_admin_new_order_email' ), 10, 2 );
+        add_action( self::NEW_ORDER_EMAIL_RETRY_HOOK, array( self::class, 'retry_admin_new_order_email' ), 10, 2 );
         add_action( self::SCHEDULE_HOOK, array( self::class, 'reconcile' ), 10, 3 );
         add_action( 'woocommerce_payment_complete', array( self::class, 'clear_after_payment_complete' ), 20 );
+    }
+
+    /**
+     * Route paid confirmation transitions through WooCommerce transactional emails.
+     *
+     * @param array<int, string> $actions Transactional email actions.
+     * @return array<int, string>
+     */
+    public static function register_email_actions( array $actions ): array {
+        $actions[] = 'woocommerce_order_status_ys-confirming_to_processing';
+        $actions[] = 'woocommerce_order_status_ys-confirming_to_completed';
+
+        return array_values( array_unique( $actions ) );
+    }
+
+    /**
+     * Send the native WooCommerce new-order email after a paid confirmation transition.
+     *
+     * @param int            $order_id Order ID.
+     * @param \WC_Order|null $order    Transition order object; reloaded inside the lock.
+     */
+    public static function maybe_send_admin_new_order_email( $order_id, $order = null ): void {
+        self::send_admin_new_order_email( absint( $order_id ), 1 );
+    }
+
+    /**
+     * Retry a failed or lock-contended native new-order email.
+     */
+    public static function retry_admin_new_order_email( int $order_id, int $attempt ): void {
+        self::send_admin_new_order_email( absint( $order_id ), max( 1, $attempt ) );
     }
 
     /**
@@ -1169,6 +1206,190 @@ final class YSPaymentConfirmation {
                 array( 'order_id' => $order->get_id(), 'reference' => $reference )
             );
         }
+    }
+
+    /**
+     * Serialize and send one native admin new-order email.
+     */
+    private static function send_admin_new_order_email( int $order_id, int $attempt ): void {
+        if ( $order_id <= 0 ) {
+            return;
+        }
+
+        global $wpdb;
+
+        $send = static function () use ( $order_id, $attempt ): void {
+            $order = wc_get_order( $order_id );
+            if ( ! $order instanceof \WC_Order ) {
+                return;
+            }
+
+            if ( ! method_exists( $order, 'get_date_paid' ) || ! $order->get_date_paid() ) {
+                YSLogger::warning( 'Admin new-order email skipped: confirmation transition is not paid', array( 'order_id' => $order_id ) );
+                return;
+            }
+
+            if ( 0 !== strpos( (string) $order->get_payment_method(), 'ys_shopline' ) ) {
+                return;
+            }
+
+            $remote_status = strtoupper( trim( (string) $order->get_meta( YSOrderMeta::PAYMENT_STATUS ) ) );
+            if ( ! self::has_shopline_paid_evidence( $order ) ) {
+                YSLogger::warning(
+                    'Admin new-order email skipped: SHOPLINE payment is not confirmed paid',
+                    array( 'order_id' => $order_id, 'payment_status' => $remote_status )
+                );
+                return;
+            }
+
+            if ( self::new_order_email_was_sent( $order ) ) {
+                return;
+            }
+
+            $mailer = WC()->mailer();
+            $emails = is_object( $mailer ) && method_exists( $mailer, 'get_emails' )
+                ? $mailer->get_emails()
+                : array();
+            $email  = is_array( $emails ) ? ( $emails['WC_Email_New_Order'] ?? null ) : null;
+
+            if ( ! is_object( $email ) || ! method_exists( $email, 'trigger' ) ) {
+                YSLogger::warning( 'Admin new-order email unavailable', array( 'order_id' => $order_id, 'attempt' => $attempt ) );
+                self::schedule_new_order_email_retry( $order, $attempt );
+                return;
+            }
+
+            try {
+                $email->trigger( $order_id, $order );
+            } catch ( \Throwable $e ) {
+                YSLogger::warning(
+                    'Admin new-order email trigger failed',
+                    array(
+                        'order_id' => $order_id,
+                        'attempt'  => $attempt,
+                        'error'    => $e->getMessage(),
+                    )
+                );
+                self::schedule_new_order_email_retry( $order, $attempt );
+                return;
+            }
+
+            $fresh = wc_get_order( $order_id );
+            if ( $fresh instanceof \WC_Order && self::new_order_email_was_sent( $fresh ) ) {
+                YSLogger::info( 'Admin new-order email sent after payment confirmation', array( 'order_id' => $order_id ) );
+                return;
+            }
+
+            // Trigger first so order-aware enabled/recipient filters see this order.
+            // A disabled or recipient-less native email is configuration, not a delivery failure.
+            if ( method_exists( $email, 'is_enabled' ) && ! $email->is_enabled() ) {
+                return;
+            }
+            if ( method_exists( $email, 'get_recipient' ) && '' === trim( (string) $email->get_recipient() ) ) {
+                return;
+            }
+
+            self::schedule_new_order_email_retry( $order, $attempt );
+        };
+
+        if ( ! $wpdb instanceof \wpdb ) {
+            $send();
+            return;
+        }
+
+        $lock_name = 'ys_slp_new_mail_' . $order_id;
+        $acquired  = $wpdb->get_var( $wpdb->prepare( 'SELECT GET_LOCK(%s, %d)', $lock_name, 2 ) );
+        if ( '1' !== (string) $acquired ) {
+            $order = wc_get_order( $order_id );
+            if ( $order instanceof \WC_Order ) {
+                self::schedule_new_order_email_retry( $order, $attempt );
+            }
+            return;
+        }
+
+        try {
+            $send();
+        } finally {
+            $wpdb->get_var( $wpdb->prepare( 'SELECT RELEASE_LOCK(%s)', $lock_name ) );
+        }
+    }
+
+    /**
+     * Check WooCommerce's HPOS-compatible persistent new-order email flag.
+     */
+    private static function new_order_email_was_sent( \WC_Order $order ): bool {
+        if ( method_exists( $order, 'get_new_order_email_sent' ) ) {
+            return (bool) $order->get_new_order_email_sent();
+        }
+
+        return 'true' === (string) $order->get_meta( '_new_order_email_sent' );
+    }
+
+    /**
+     * Require durable SHOPLINE paid evidence, not WooCommerce's automatic paid date alone.
+     */
+    private static function has_shopline_paid_evidence( \WC_Order $order ): bool {
+        $status = strtoupper( trim( (string) $order->get_meta( YSOrderMeta::PAYMENT_STATUS ) ) );
+        if ( YSTradeStatus::is_paid( $status ) ) {
+            return true;
+        }
+
+        $history = $order->get_meta( YSOrderMeta::CONFIRMATION_HISTORY );
+        if ( ! is_array( $history ) ) {
+            return false;
+        }
+
+        foreach ( array_reverse( $history ) as $entry ) {
+            if ( is_array( $entry )
+                && YSTradeStatus::is_paid( strtoupper( trim( (string) ( $entry['remote_status'] ?? '' ) ) ) ) ) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Schedule a bounded retry without backfilling disabled email configurations.
+     */
+    private static function schedule_new_order_email_retry( \WC_Order $order, int $attempt ): void {
+        if ( self::new_order_email_was_sent( $order ) ) {
+            return;
+        }
+
+        if ( $attempt >= self::NEW_ORDER_EMAIL_MAX_ATTEMPTS ) {
+            $order->add_order_note(
+                __( 'SHOPLINE 付款已完成，但 WooCommerce 商家新訂單通知連續三次未能送出；請檢查郵件紀錄並視需要手動重寄。', 'ys-shopline-via-woocommerce' )
+            );
+            $order->save();
+            YSLogger::warning( 'Admin new-order email retries exhausted', array( 'order_id' => $order->get_id() ) );
+            return;
+        }
+
+        $next_attempt = $attempt + 1;
+        $args         = array( $order->get_id(), $next_attempt );
+
+        if ( function_exists( 'as_has_scheduled_action' )
+            && as_has_scheduled_action( self::NEW_ORDER_EMAIL_RETRY_HOOK, $args, self::SCHEDULE_GROUP ) ) {
+            return;
+        }
+
+        if ( function_exists( 'as_schedule_single_action' ) ) {
+            $action_id = as_schedule_single_action(
+                time() + self::NEW_ORDER_EMAIL_RETRY_DELAY,
+                self::NEW_ORDER_EMAIL_RETRY_HOOK,
+                $args,
+                self::SCHEDULE_GROUP,
+                true
+            );
+            if ( $action_id ) {
+                return;
+            }
+        }
+
+        YSLogger::warning(
+            'Admin new-order email retry could not be scheduled',
+            array( 'order_id' => $order->get_id(), 'attempt' => $next_attempt )
+        );
     }
 
     /**
