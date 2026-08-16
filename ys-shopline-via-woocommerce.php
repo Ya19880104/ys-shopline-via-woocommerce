@@ -3,7 +3,7 @@
  * Plugin Name: YS Shopline via WooCommerce
  * Plugin URI: https://yangsheep.com.tw
  * Description: Support Shopline Payments for WooCommerce, including HPOS and Subscriptions. Supports Credit Card, ATM, JKOPay, Apple Pay, LINE Pay, and Chailease BNPL.
- * Version:           3.6.6
+ * Version:           3.6.7
  * Author: YangSheep
  * Author URI: https://yangsheep.com.tw
  * Text Domain: ys-shopline-via-woocommerce
@@ -17,7 +17,7 @@
 defined( 'ABSPATH' ) || exit;
 
 // Define plugin constants
-define( 'YS_SHOPLINE_VERSION', '3.6.6' );
+define( 'YS_SHOPLINE_VERSION', '3.6.7' );
 // v3.5.14: 資料庫綱要版本（用於 plugins_loaded 一次性 migration），與 plugin 版本解耦。
 define( 'YS_SHOPLINE_DB_VERSION', '3.5.14' );
 define( 'YS_SHOPLINE_PLUGIN_FILE', __FILE__ );
@@ -49,8 +49,10 @@ register_deactivation_hook( __FILE__, function () {
     wp_clear_scheduled_hook( 'ys_shopline_sync_pending_orders' );
     wp_clear_scheduled_hook( 'ys_shopline_bindcard_log_cleanup' ); // 舊版遺留
     wp_clear_scheduled_hook( 'ys_shopline_confirm_payment' );
+    wp_clear_scheduled_hook( 'ys_shopline_reconcile_refund' );
     if ( function_exists( 'as_unschedule_all_actions' ) ) {
         as_unschedule_all_actions( 'ys_shopline_confirm_payment', array(), 'ys-shopline-payment-confirmation' );
+        as_unschedule_all_actions( 'ys_shopline_reconcile_refund', array(), 'ys-shopline-refund-reconciliation' );
     }
 } );
 
@@ -77,6 +79,7 @@ use YangSheep\ShoplinePayment\Handlers\YSAddPaymentMethodHandler;
 use YangSheep\ShoplinePayment\Handlers\YSWebhookHandler;
 use YangSheep\ShoplinePayment\Handlers\YSStatusManager;
 use YangSheep\ShoplinePayment\Handlers\YSPaymentConfirmation;
+use YangSheep\ShoplinePayment\Handlers\YSRefundReconciliation;
 // v3.5.2: YSBlocksSupport 已停用（見 init()），保留類別但不 use/init
 // use YangSheep\ShoplinePayment\Blocks\YSBlocksSupport;
 
@@ -365,6 +368,9 @@ final class YSShoplinePayment {
 
         // Initialize the attempt-aware payment-confirmation lifecycle.
         YSPaymentConfirmation::init();
+
+        // Initialize the exact-once asynchronous refund lifecycle.
+        YSRefundReconciliation::init();
 
         // Initialize redirect handler (付款完成後的跳轉查詢)
         YSRedirectHandler::init();

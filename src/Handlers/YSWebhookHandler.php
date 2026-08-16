@@ -875,7 +875,6 @@ final class YSWebhookHandler {
      * 處理退款成功
      */
     private function handle_refund_succeeded( array $data ): void {
-        $refund_order_id = $data['refundOrderId'] ?? $data['refundId'] ?? '';
         $trade_order_id  = $data['tradeOrderId'] ?? '';
 
         if ( ! $trade_order_id ) {
@@ -888,13 +887,7 @@ final class YSWebhookHandler {
             return;
         }
 
-        $order->add_order_note(
-            sprintf(
-                /* translators: %s: Refund order ID */
-                __( 'Shopline refund confirmed via webhook. Refund ID: %s', 'ys-shopline-via-woocommerce' ),
-                $refund_order_id
-            )
-        );
+        YSRefundReconciliation::handle_webhook( $order, $data, 'trade.refund.succeeded' );
     }
 
     /**
@@ -913,13 +906,7 @@ final class YSWebhookHandler {
             return;
         }
 
-        $error_message = $data['errorMessage'] ?? __( 'Refund failed', 'ys-shopline-via-woocommerce' );
-
-        $order->add_order_note(
-            __( 'Shopline refund failed: ', 'ys-shopline-via-woocommerce' ) . $error_message
-        );
-
-        YSLogger::error( 'Refund failed for order: ' . $order->get_id(), [ 'error' => $error_message ] );
+        YSRefundReconciliation::handle_webhook( $order, $data, 'trade.refund.failed' );
     }
 
     // ==========================================

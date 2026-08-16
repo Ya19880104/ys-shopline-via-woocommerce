@@ -103,11 +103,22 @@ class YSApi {
     /**
      * Create refund.
      *
-     * @param array $data Refund data.
+     * @param array  $data           Refund data.
+     * @param string $idempotent_key Persistent idempotency key for this refund attempt.
      * @return array|WP_Error
      */
-    public function create_refund( $data ) {
-        return $this->request( '/trade/refund/create', $data );
+    public function create_refund( $data, $idempotent_key = '' ) {
+        return $this->request( '/trade/refund/create', $data, 'POST', $idempotent_key );
+    }
+
+    /**
+     * Query one refund trade by its SHOPLINE refund order ID.
+     *
+     * @param string $refund_order_id SHOPLINE refund order ID.
+     * @return array|WP_Error
+     */
+    public function query_refund( $refund_order_id ) {
+        return $this->request( '/trade/refund/get', array( 'refundOrderId' => $refund_order_id ) );
     }
 
     /**

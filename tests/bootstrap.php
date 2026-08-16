@@ -186,6 +186,8 @@ if ( ! function_exists( 'wc_get_logger' ) ) {
 $GLOBALS['ys_test_order'] = null;
 $GLOBALS['ys_test_orders'] = array();
 $GLOBALS['ys_test_notices'] = array();
+$GLOBALS['ys_test_refund_creations'] = array();
+$GLOBALS['ys_test_refund_creation_result'] = null;
 $GLOBALS['ys_test_actions'] = array();
 $GLOBALS['ys_test_filter_registrations'] = array();
 $GLOBALS['ys_test_query_vars'] = array();
@@ -322,6 +324,63 @@ if ( ! function_exists( 'wc_add_notice' ) ) {
 	}
 }
 
+if ( ! function_exists( 'wc_price' ) ) {
+	function wc_price( $amount ): string {
+		return 'NT$' . number_format( (float) $amount, 2, '.', '' );
+	}
+}
+
+if ( ! class_exists( 'YS_Test_Refund_Object' ) ) {
+	final class YS_Test_Refund_Object {
+		private static int $next_id = 7001;
+		public int $id;
+		public array $meta = array();
+		public int $save_count = 0;
+
+		public function __construct() {
+			$this->id = self::$next_id++;
+		}
+
+		public function get_id(): int {
+			return $this->id;
+		}
+
+		public function get_meta( string $key ) {
+			return $this->meta[ $key ] ?? '';
+		}
+
+		public function update_meta_data( string $key, $value ): void {
+			$this->meta[ $key ] = $value;
+		}
+
+		public function save(): void {
+			$this->save_count++;
+		}
+	}
+}
+
+if ( ! function_exists( 'wc_create_refund' ) ) {
+	function wc_create_refund( array $args = array() ) {
+		$GLOBALS['ys_test_refund_creations'][] = $args;
+		if ( $GLOBALS['ys_test_refund_creation_result'] instanceof Throwable ) {
+			throw $GLOBALS['ys_test_refund_creation_result'];
+		}
+		if ( is_wp_error( $GLOBALS['ys_test_refund_creation_result'] ) ) {
+			return $GLOBALS['ys_test_refund_creation_result'];
+		}
+
+		$refund = new YS_Test_Refund_Object();
+		if ( class_exists( 'YangSheep\\ShoplinePayment\\Handlers\\YSRefundReconciliation' ) ) {
+			\YangSheep\ShoplinePayment\Handlers\YSRefundReconciliation::capture_refund_request( $refund, $args );
+		}
+		$refund->save();
+		if ( isset( $GLOBALS['ys_test_order']->refunds ) && is_array( $GLOBALS['ys_test_order']->refunds ) ) {
+			$GLOBALS['ys_test_order']->refunds[] = $refund;
+		}
+		return $refund;
+	}
+}
+
 $GLOBALS['ys_test_stock_calls'] = array(
 	'direct'   => 0,
 	'maybe'    => 0,
@@ -353,6 +412,12 @@ $GLOBALS['ys_test_user_id'] = 0;
 if ( ! function_exists( 'get_current_user_id' ) ) {
 	function get_current_user_id(): int {
 		return (int) $GLOBALS['ys_test_user_id'];
+	}
+}
+
+if ( ! function_exists( 'wp_get_current_user' ) ) {
+	function wp_get_current_user(): object {
+		return (object) array( 'display_name' => 'Test Admin' );
 	}
 }
 
@@ -411,6 +476,7 @@ if ( ! class_exists( 'YSShoplinePayment' ) ) {
 }
 
 $GLOBALS['ys_test_scheduled_actions'] = array();
+$GLOBALS['ys_test_schedule_result'] = null;
 $GLOBALS['ys_test_is_renewal_order'] = false;
 
 if ( ! function_exists( 'wcs_order_contains_renewal' ) ) {
@@ -432,6 +498,9 @@ if ( ! function_exists( 'as_has_scheduled_action' ) ) {
 
 if ( ! function_exists( 'as_schedule_single_action' ) ) {
 	function as_schedule_single_action( int $timestamp, string $hook, array $args = array(), string $group = '', bool $unique = false, int $priority = 10 ): int {
+		if ( null !== $GLOBALS['ys_test_schedule_result'] ) {
+			return (int) $GLOBALS['ys_test_schedule_result'];
+		}
 		$GLOBALS['ys_test_scheduled_actions'][] = compact( 'timestamp', 'hook', 'args', 'group', 'unique', 'priority' );
 		return count( $GLOBALS['ys_test_scheduled_actions'] );
 	}
@@ -517,11 +586,13 @@ $ys_src = dirname( __DIR__ ) . '/src';
 require_once $ys_src . '/Api/YSApiException.php';
 require_once $ys_src . '/Api/YSApiPartialSuccessException.php';
 require_once $ys_src . '/Utils/YSTradeStatus.php';
+require_once $ys_src . '/Utils/YSRefundStatus.php';
 require_once $ys_src . '/Utils/YSConfirmationPolicy.php';
 require_once $ys_src . '/Utils/YSApiError.php';
 require_once $ys_src . '/Utils/YSLogger.php';
 require_once $ys_src . '/Api/YSApi.php';
 require_once $ys_src . '/Utils/YSOrderMeta.php';
+require_once $ys_src . '/Handlers/YSRefundReconciliation.php';
 require_once $ys_src . '/DTOs/YSPaymentDTO.php';
 require_once $ys_src . '/DTOs/YSSessionDTO.php';
 require_once $ys_src . '/Customer/YSCustomer.php';

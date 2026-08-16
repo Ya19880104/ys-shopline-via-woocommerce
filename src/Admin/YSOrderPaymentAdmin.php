@@ -92,10 +92,11 @@ final class YSOrderPaymentAdmin {
 	private function review_cell_html( \WC_Order $order ): string {
 		$flag = (string) $order->get_meta( YSOrderMeta::MANUAL_REVIEW_FLAG );
 		$confirmation_review = self::has_open_confirmation_review( $order );
-		if ( '' === $flag && ! $confirmation_review ) {
+		$refund_review       = self::has_open_refund_review( $order );
+		if ( '' === $flag && ! $confirmation_review && ! $refund_review ) {
 			return '';
 		}
-		if ( ! $confirmation_review && (int) $order->get_meta( YSOrderMeta::MANUAL_REVIEW_RESOLVED ) > 0 ) {
+		if ( ! $confirmation_review && ! $refund_review && (int) $order->get_meta( YSOrderMeta::MANUAL_REVIEW_RESOLVED ) > 0 ) {
 			return '<span title="' . esc_attr__( 'SHOPLINE 付款審核已結案', 'ys-shopline-via-woocommerce' ) . '">✔️</span>';
 		}
 		return '<span style="color:#d63638;font-weight:bold" title="' . esc_attr__( 'SHOPLINE 付款需人工處理', 'ys-shopline-via-woocommerce' ) . '">🔴</span>';
@@ -110,6 +111,16 @@ final class YSOrderPaymentAdmin {
 	}
 
 	/**
+	 * Whether this order has an unresolved remote/local refund difference.
+	 */
+	public static function has_open_refund_review( \WC_Order $order ): bool {
+		$review = $order->get_meta( YSOrderMeta::REFUND_REVIEW );
+		return is_array( $review )
+			&& '' !== (string) ( $review['type'] ?? '' )
+			&& (int) ( $review['resolved_at'] ?? 0 ) <= 0;
+	}
+
+	/**
 	 * v3.5.36 P2：在訂單「動作」下拉加入「標記 SHOPLINE 人工審核已結案」（僅在有待處理旗標且未結案時）。
 	 *
 	 * @param array           $actions 現有動作。
@@ -120,10 +131,11 @@ final class YSOrderPaymentAdmin {
 		if ( ! $order instanceof \WC_Order ) {
 			return $actions;
 		}
-		$flag     = (string) $order->get_meta( YSOrderMeta::MANUAL_REVIEW_FLAG );
-		$resolved = (int) $order->get_meta( YSOrderMeta::MANUAL_REVIEW_RESOLVED );
-		if ( '' !== $flag && $resolved <= 0 ) {
-			$actions['ys_shopline_resolve_review'] = __( '標記 SHOPLINE 付款審核已結案', 'ys-shopline-via-woocommerce' );
+		$flag          = (string) $order->get_meta( YSOrderMeta::MANUAL_REVIEW_FLAG );
+		$resolved      = (int) $order->get_meta( YSOrderMeta::MANUAL_REVIEW_RESOLVED );
+		$refund_review = self::has_open_refund_review( $order );
+		if ( ( '' !== $flag && $resolved <= 0 ) || $refund_review ) {
+			$actions['ys_shopline_resolve_review'] = __( '標記 SHOPLINE 人工審核已結案', 'ys-shopline-via-woocommerce' );
 		}
 		return $actions;
 	}
@@ -138,10 +150,34 @@ final class YSOrderPaymentAdmin {
 		if ( ! $order instanceof \WC_Order ) {
 			return;
 		}
-		$order->update_meta_data( YSOrderMeta::MANUAL_REVIEW_RESOLVED, time() );
+		$resolved_at = time();
+		$order->update_meta_data( YSOrderMeta::MANUAL_REVIEW_RESOLVED, $resolved_at );
+		$refund_review = $order->get_meta( YSOrderMeta::REFUND_REVIEW );
+		if ( is_array( $refund_review ) && '' !== (string) ( $refund_review['type'] ?? '' ) ) {
+			$refund_review['resolved_at'] = $resolved_at;
+			$refund_review['resolved_by'] = get_current_user_id();
+			$order->update_meta_data( YSOrderMeta::REFUND_REVIEW, $refund_review );
+
+			$attempt = $order->get_meta( YSOrderMeta::REFUND_CONFIRMATION_DATA );
+			if ( is_array( $attempt ) ) {
+				$history = $order->get_meta( YSOrderMeta::REFUND_HISTORY );
+				$history = is_array( $history ) ? $history : array();
+				$history[] = array(
+					'reference'       => (string) ( $attempt['refund_reference'] ?? '' ),
+					'refund_order_id' => (string) ( $attempt['refund_order_id'] ?? '' ),
+					'status'          => (string) ( $attempt['last_status'] ?? '' ),
+					'event'           => 'manual_review_resolved',
+					'source'          => 'admin_order_action',
+					'wc_refund_id'    => 0,
+					'ts'              => $resolved_at,
+				);
+				$order->update_meta_data( YSOrderMeta::REFUND_HISTORY, $history );
+				$order->delete_meta_data( YSOrderMeta::REFUND_CONFIRMATION_DATA );
+			}
+		}
 		$order->add_order_note( sprintf(
 			/* translators: %s: current user display name */
-			__( 'SHOPLINE 付款人工審核已由 %s 標記結案。', 'ys-shopline-via-woocommerce' ),
+			__( 'SHOPLINE 付款／退款人工審核已由 %s 標記結案。', 'ys-shopline-via-woocommerce' ),
 			wp_get_current_user()->display_name ?: 'admin'
 		) );
 		$order->save();
@@ -163,17 +199,36 @@ final class YSOrderPaymentAdmin {
 
 		$flag                = (string) $order->get_meta( YSOrderMeta::MANUAL_REVIEW_FLAG );
 		$confirmation_review = self::has_open_confirmation_review( $order );
-		if ( '' === $flag && ! $confirmation_review ) {
+		$refund_review       = self::has_open_refund_review( $order );
+		if ( '' === $flag && ! $confirmation_review && ! $refund_review ) {
 			return;
 		}
 		// v3.5.36 P2：已結案 → 不再顯示告警橫幅
-		if ( ! $confirmation_review && (int) $order->get_meta( YSOrderMeta::MANUAL_REVIEW_RESOLVED ) > 0 ) {
+		if ( ! $confirmation_review && ! $refund_review && (int) $order->get_meta( YSOrderMeta::MANUAL_REVIEW_RESOLVED ) > 0 ) {
 			return;
 		}
 
 		$messages = array();
 		if ( $confirmation_review ) {
 			$messages[] = __( '本訂單的付款結果在自動查詢期間仍無法確認，系統已持續鎖定重新付款。請先至 SHOPLINE Payments 核對該筆 reference／交易狀態，再決定入帳、取消或重新開放付款；未確認前請勿要求顧客重付。確認結果收斂後，此待辦會自動清除。', 'ys-shopline-via-woocommerce' );
+		}
+		if ( $refund_review ) {
+			$review = $order->get_meta( YSOrderMeta::REFUND_REVIEW );
+			switch ( (string) ( $review['type'] ?? '' ) ) {
+				case 'local_refund_creation_failed':
+					$messages[] = __( 'SHOPLINE 已確認退款成功，但 WooCommerce 退款補登失敗。系統不會再次呼叫遠端退款；請核對 SHOPLINE 後人工補登 WooCommerce 退款。', 'ys-shopline-via-woocommerce' );
+					break;
+				case 'remote_envelope_mismatch':
+					$messages[] = __( 'SHOPLINE 退款回應與本次退款資料不一致，系統已停止自動補登。請核對退款編號、參考編號、金額與幣別，確認前請勿再次退款。', 'ys-shopline-via-woocommerce' );
+					break;
+				case 'reconcile_schedule_failed':
+					$messages[] = __( 'SHOPLINE 退款已送出，但自動確認排程建立失敗。WooCommerce 尚未建立退款；請至 SHOPLINE 後台核對，確認前請勿再次退款。', 'ys-shopline-via-woocommerce' );
+					break;
+				case 'remote_status_unresolved':
+				default:
+					$messages[] = __( 'SHOPLINE 退款在自動查詢期限內仍無法確認，可能已退款但 WooCommerce 尚未入帳。請至 SHOPLINE 後台核對，確認前請勿再次退款。', 'ys-shopline-via-woocommerce' );
+					break;
+			}
 		}
 
 		$manual_review_open = '' !== $flag && (int) $order->get_meta( YSOrderMeta::MANUAL_REVIEW_RESOLVED ) <= 0;
@@ -196,7 +251,7 @@ final class YSOrderPaymentAdmin {
 
 		printf(
 			'<div class="notice notice-error"><p><strong>%s</strong>%s</p></div>',
-			esc_html__( '🔴 SHOPLINE 付款需人工處理：', 'ys-shopline-via-woocommerce' ),
+			esc_html__( '🔴 SHOPLINE 付款／退款需人工處理：', 'ys-shopline-via-woocommerce' ),
 			esc_html( $msg )
 		);
 	}

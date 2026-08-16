@@ -37,6 +37,18 @@ final class YSOrderMeta {
     /** @var string Refund API attempt counter. */
     public const REFUND_ATTEMPT = '_ys_shopline_refund_attempt';
 
+    /** @var string Active asynchronous refund attempt envelope. */
+    public const REFUND_CONFIRMATION_DATA = '_ys_shopline_refund_confirmation_data';
+
+    /** @var string Append-only refund transition history. */
+    public const REFUND_HISTORY = '_ys_shopline_refund_history';
+
+    /** @var string Unresolved refund review data. */
+    public const REFUND_REVIEW = '_ys_shopline_refund_review';
+
+    /** @var string SHOPLINE refund reference stored on WC_Order_Refund. */
+    public const REFUND_REFERENCE = '_ys_shopline_refund_reference';
+
     /** @var string Next Action */
     public const NEXT_ACTION = '_ys_shopline_next_action';
 

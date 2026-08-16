@@ -14,6 +14,10 @@ declare(strict_types=1);
 
 require __DIR__ . '/bootstrap.php';
 require __DIR__ . '/YSTradeStatusContractTest.php';
+require __DIR__ . '/YSRefundStatusContractTest.php';
+require __DIR__ . '/YSRefundApiContractTest.php';
+require __DIR__ . '/YSRefundReconciliationContractTest.php';
+require __DIR__ . '/YSRefundWebhookContractTest.php';
 require __DIR__ . '/YSApiErrorContractTest.php';
 require __DIR__ . '/YSGatewayOutcomeContractTest.php';
 require __DIR__ . '/YSSessionDTOContractTest.php';
@@ -36,6 +40,10 @@ require __DIR__ . '/YSPluginHubHposContractTest.php';
 require __DIR__ . '/regression-scan.php';
 
 ys_run_tradestatus_contract();
+ys_run_refund_status_contract();
+ys_run_refund_api_contract();
+ys_run_refund_reconciliation_contract();
+ys_run_refund_webhook_contract();
 ys_run_api_error_contract();
 ys_run_gateway_outcome_contract();
 ys_run_sessiondto_contract();

@@ -16,6 +16,7 @@ use YangSheep\ShoplinePayment\Utils\YSApiError;
 use YangSheep\ShoplinePayment\Api\YSApi;
 use YangSheep\ShoplinePayment\Handlers\YSRedirectHandler;
 use YangSheep\ShoplinePayment\Handlers\YSPaymentConfirmation;
+use YangSheep\ShoplinePayment\Handlers\YSRefundReconciliation;
 use YangSheep\ShoplinePayment\Customer\YSCustomer;
 use WC_Payment_Gateway;
 use WC_Order;
@@ -2505,115 +2506,24 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
             return new WP_Error( 'invalid_order', __( 'Order not found.', 'ys-shopline-via-woocommerce' ) );
         }
 
-        $trade_order_id = $order->get_meta( YSOrderMeta::TRADE_ORDER_ID );
-
-        if ( empty( $trade_order_id ) ) {
-            return new WP_Error( 'no_trade_id', __( 'Trade order ID not found.', 'ys-shopline-via-woocommerce' ) );
-        }
-
         if ( ! $this->api ) {
             return new WP_Error( 'api_error', __( 'API not configured.', 'ys-shopline-via-woocommerce' ) );
         }
 
-        $refund_reference_order_id = $this->generate_refund_reference_order_id( $order );
+        if ( null === $amount ) {
+            $amount = method_exists( $order, 'get_remaining_refund_amount' )
+                ? $order->get_remaining_refund_amount()
+                : $order->get_total();
+        }
 
-        $refund_data = array(
-            'tradeOrderId'     => $trade_order_id,
-            'referenceOrderId' => $refund_reference_order_id,
-            'amount'           => array(
-                'value'    => \YSShoplinePayment::get_formatted_amount( $amount, $order->get_currency() ),
-                'currency' => $order->get_currency(),
-            ),
+        return YSRefundReconciliation::process(
+            $order,
+            (float) $amount,
+            (string) $reason,
+            $this->api,
+            (string) $this->id,
+            (string) $this->get_payment_method()
         );
-
-        if ( ! empty( $reason ) ) {
-            $refund_data['reason'] = $reason;
-        }
-
-        $response = $this->api->create_refund( $refund_data );
-
-        if ( is_wp_error( $response ) ) {
-            $this->add_refund_failure_note( $order, $amount, $refund_reference_order_id, $response );
-            return $response;
-        }
-
-        // Store refund ID
-        if ( isset( $response['refundOrderId'] ) ) {
-            $order->add_order_note(
-                sprintf(
-                    /* translators: 1: refund amount, 2: refund order ID, 3: referenceOrderId */
-                    __( 'Refunded %1$s via Shopline. Refund ID: %2$s. Refund referenceOrderId: %3$s', 'ys-shopline-via-woocommerce' ),
-                    wc_price( $amount ),
-                    $response['refundOrderId'],
-                    $refund_reference_order_id
-                )
-            );
-        }
-
-        return true;
-    }
-
-    /**
-     * Generate a refund-specific referenceOrderId.
-     *
-     * SHOPLINE treats refund referenceOrderId values as unique even after a
-     * failed refund request. Do not reuse the payment referenceOrderId here.
-     *
-     * @param \WC_Order $order Order object.
-     * @return string
-     */
-    protected function generate_refund_reference_order_id( $order ) {
-        $attempt = absint( $order->get_meta( YSOrderMeta::REFUND_ATTEMPT ) ) + 1;
-
-        $order->update_meta_data( YSOrderMeta::REFUND_ATTEMPT, $attempt );
-        $order->save();
-
-        return sprintf( '%d_refund_%d', $order->get_id(), $attempt );
-    }
-
-    /**
-     * Add an actionable refund failure note for admins.
-     *
-     * @param \WC_Order $order              Order object.
-     * @param float     $amount             Refund amount.
-     * @param string    $reference_order_id Refund referenceOrderId.
-     * @param \WP_Error $error              API error.
-     * @return void
-     */
-    protected function add_refund_failure_note( $order, $amount, $reference_order_id, $error ) {
-        $code    = (string) $error->get_error_code();
-        $message = rtrim( $error->get_error_message(), " \t\n\r\0\x0B.。" );
-        $hint    = $this->get_refund_failure_hint( $code );
-
-        $order->add_order_note(
-            sprintf(
-                /* translators: 1: refund amount, 2: referenceOrderId, 3: error code, 4: error message, 5: hint */
-                __( 'Shopline refund request failed（SHOPLINE 退款送出失敗）。退款金額：%1$s。Refund referenceOrderId：%2$s。SHOPLINE 錯誤：%3$s - %4$s。%5$s', 'ys-shopline-via-woocommerce' ),
-                wc_price( $amount ),
-                $reference_order_id,
-                $code,
-                $message,
-                $hint
-            )
-        );
-    }
-
-    /**
-     * Map known SHOPLINE refund errors to actionable admin hints.
-     *
-     * @param string $code SHOPLINE error code.
-     * @return string
-     */
-    protected function get_refund_failure_hint( $code ) {
-        if ( '1022' === $code ) {
-            return __( 'merchant account balance insufficient：SHOPLINE 商戶帳戶餘額不足。請先補足 SHOPLINE 商戶餘額後再重新退款；下一次退款會使用新的 refund referenceOrderId，不會重用本次失敗的編號。', 'ys-shopline-via-woocommerce' );
-        }
-
-        if ( '1001' === $code ) {
-            return __( 'SHOPLINE 回覆退款 referenceOrderId 重複。請重新送出退款，外掛會產生新的 refund referenceOrderId。', 'ys-shopline-via-woocommerce' );
-        }
-
-        return __( '請查詢 SHOPLINE 交易紀錄，排除上游錯誤後再重新退款；外掛會在下一次送出新的 refund referenceOrderId。', 'ys-shopline-via-woocommerce' );
     }
 
     /**

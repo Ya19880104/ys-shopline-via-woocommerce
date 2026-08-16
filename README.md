@@ -4,7 +4,7 @@
 
 ## 版本資訊
 
-- **目前版本**：3.6.6
+- **目前版本**：3.6.7
 - **PHP 需求**：>= 8.0
 - **WordPress 需求**：>= 6.0
 - **WooCommerce 需求**：7.0 - 10.4
@@ -65,6 +65,17 @@ https://your-domain.com/wp-json/ys-shopline/v1/webhook
 ---
 
 ## 變更紀錄
+
+### 3.6.7 - 2026-08-16
+
+**退款改為以 SHOPLINE 最終狀態收斂，避免 WooCommerce 提前顯示已退款。**
+
+- SHOPLINE 建立退款回 HTTP 200 後不再直接視為完成；新增 `SUCCEEDED／in-flight／failed／unknown` 分類與退款查詢 API，只有明確 `SUCCEEDED` 才保留或補建 WooCommerce 退款。
+- 退款仍在處理或結果未知時，讓 WooCommerce 刪除暫存退款，同時保存金額、原因、品項退款、稅額與回補庫存決策；以固定 reference、idempotency key、訂單鎖與 30 秒／2 分鐘／10 分鐘／1 小時／6 小時排程持續確認。同步階段只做一次立即查詢，不會阻塞後台操作。
+- 排程或 webhook 確認成功後，使用 `refund_payment => false` 按原始快照只補建一次本地退款，不會再次呼叫 SHOPLINE；遠端成功但本地補登失敗時改列人工審核並保留稽核資料。
+- 中租 zingala 銀角零卡的部分退款會在 API 前以中文訊息擋下；信用卡部分退款維持支援。
+- 付款尚未完成結算的訂單改為在 API 前擋下並說明原因（SHOPLINE 對未結算交易只回通用的 `1008 Status error`）；付款最終失敗的訂單會自動回到等待付款，不需要退款。
+- 退款 webhook 與查詢結果必須精確核對退款編號、參考編號、付款交易、金額及幣別。排程失敗、回應不符或逾時未決會在訂單頁與訂單列表顯示紅色人工審核提示，管理員結案時會保留歷程並解除 active attempt。
 
 ### 3.6.6 - 2026-08-15
 

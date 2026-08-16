@@ -42,11 +42,13 @@ function ys_run_regression_scan(): void {
 	$subscription = $read( 'src/Gateways/YSCreditSubscription.php' );
 	$atm          = $read( 'src/Gateways/YSVirtualAccount.php' );
 	$confirmation = $read( 'src/Handlers/YSPaymentConfirmation.php' );
+	$refund       = $read( 'src/Handlers/YSRefundReconciliation.php' );
 	$redirect     = $read( 'src/Handlers/YSRedirectHandler.php' );
 	$customer     = $read( 'src/Customer/YSCustomer.php' );
 	$status       = $read( 'src/Handlers/YSStatusManager.php' );
 	$webhook      = $read( 'src/Handlers/YSWebhookHandler.php' );
 	$admin        = $read( 'src/Admin/YSAdminSettings.php' );
+	$order_payment_admin = $read( 'src/Admin/YSOrderPaymentAdmin.php' );
 	$hub_menu     = $read( 'vendor/yangsheep/ys-plugin-hub-client/src/YSPluginHubClient.php' );
 	$hub_loader   = $read( 'vendor/yangsheep/ys-plugin-hub-client/ys-plugin-hub-client.php' );
 	$display      = $read( 'src/Frontend/YSOrderDisplay.php' );
@@ -84,6 +86,7 @@ function ys_run_regression_scan(): void {
 	YS_Assert::is_true( 'subscription remains forced CardBindPayment', $has( $subscription, "= 'CardBindPayment'" ) );
 	YS_Assert::is_true( 'subscription excludes confirmation state copy', $has( $subscription, 'CONFIRMATION_DATA' ) && $has( $subscription, 'CONFIRMATION_REVIEW' ) );
 	YS_Assert::is_true( 'subscription completion uses shared order lock', $has( $subscription, 'YSPaymentConfirmation::complete_payment_once' ) );
+	YS_Assert::is_true( 'subscription excludes refund lifecycle state copy', $has( $subscription, 'REFUND_CONFIRMATION_DATA' ) && $has( $subscription, 'REFUND_REVIEW' ) );
 
 	YS_Assert::is_true( 'trade selector remains centralized', $has( $trade_status, 'select_representative_trade_id' ) );
 	YS_Assert::is_true( 'session DTO uses centralized trade selector', $has( $dto, 'YSTradeStatus::select_representative_trade_id' ) );
@@ -111,6 +114,14 @@ function ys_run_regression_scan(): void {
 
 	YS_Assert::is_true( 'confirmation attempt meta key remains defined', $has( $meta, 'CONFIRMATION_DATA' ) && $has( $meta, 'PAYMENT_ATTEMPT_DATA' ) );
 	YS_Assert::is_true( 'main plugin initializes confirmation lifecycle', $has( $main, 'YSPaymentConfirmation::init' ) );
+	YS_Assert::is_true( 'main plugin initializes refund lifecycle', $has( $main, 'YSRefundReconciliation::init' ) );
+	YS_Assert::is_true( 'runtime version is 3.6.7', $has( $main, "Version:           3.6.7" ) && $has( $main, "YS_SHOPLINE_VERSION', '3.6.7'" ) );
+	YS_Assert::is_true( 'plugin deactivation clears refund reconciliation jobs', $has( $main, "wp_clear_scheduled_hook( 'ys_shopline_reconcile_refund'" ) && $has( $main, "as_unschedule_all_actions( 'ys_shopline_reconcile_refund'" ) );
+	YS_Assert::is_true( 'gateway delegates refunds to lifecycle service', $has( $gateway, 'YSRefundReconciliation::process' ) );
+	YS_Assert::is_true( 'refund create remains idempotent and queryable', $has( $api, 'function create_refund' ) && $has( $api, 'function query_refund' ) && $has( $api, "'/trade/refund/get'" ) );
+	YS_Assert::is_true( 'async refund reconstruction never calls remote gateway', $has( $refund, "'refund_payment' => false" ) );
+	YS_Assert::is_true( 'refund webhook convergence requires exact envelope', $has( $refund, 'webhook_matches_attempt' ) && $has( $webhook, 'YSRefundReconciliation::handle_webhook' ) );
+	YS_Assert::is_true( 'refund review is visible in the existing admin review queue', $has( $order_payment_admin, 'has_open_refund_review' ) && $has( $order_payment_admin, 'REFUND_REVIEW' ) );
 	YS_Assert::is_true( 'order-pay consumes tri-state outcome explicitly', $has( $main, "if ( 'rejected' === \$outcome )" ) && $has( $main, "elseif ( 'unknown' === \$outcome" ) );
 	YS_Assert::is_true( 'v3.5.38 customerToken-only assumption comment is gone', ! $has( $js, '顯示既有卡只需 customerToken' ) );
 	YS_Assert::is_true( 'installment is no longer documented as unable to bind new cards', ! $has( $js, '分期支援既有卡但不綁新卡' ) );

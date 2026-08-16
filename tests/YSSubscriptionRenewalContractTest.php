@@ -311,6 +311,9 @@ function ys_run_subscription_renewal_contract(): void {
 	YS_Assert::is_true( 'renewal copy excludes confirmation history', str_contains( $sql, YSOrderMeta::CONFIRMATION_HISTORY ) );
 	YS_Assert::is_true( 'renewal copy excludes confirmation mail map', str_contains( $sql, YSOrderMeta::CONFIRMATION_MAIL_SENT ) );
 	YS_Assert::is_true( 'renewal copy excludes confirmation review marker', str_contains( $sql, YSOrderMeta::CONFIRMATION_REVIEW ) );
+	YS_Assert::is_true( 'renewal copy excludes active refund attempt', str_contains( $sql, YSOrderMeta::REFUND_CONFIRMATION_DATA ) );
+	YS_Assert::is_true( 'renewal copy excludes refund history', str_contains( $sql, YSOrderMeta::REFUND_HISTORY ) );
+	YS_Assert::is_true( 'renewal copy excludes refund review marker', str_contains( $sql, YSOrderMeta::REFUND_REVIEW ) );
 	YS_Assert::eq( 'renewal copy keeps subscription instrument ID', false, str_contains( $sql, YSOrderMeta::PAYMENT_INSTRUMENT_ID ) );
 
 	echo "== Subscription renewal: payment completion convergence ==\n";
