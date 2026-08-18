@@ -294,6 +294,12 @@ final class YSStatusManager {
      * Periodic safety-net sync for recent pending/on-hold/confirming orders.
      */
     public function sync_pending_orders(): void {
+        // v3.6.8：退款在途單先收（安全網）。退款訂單多半已是 processing／completed，
+        // 不在下方付款掃描的狀態集內；若 Action Scheduler 失效或事件遺失，
+        // 沒有這層兜底就會永遠停在「退款確認中」。付款端本來就有排程＋每小時雙保險，
+        // 退款端補齊同一設計。
+        $this->reconcile_pending_refunds();
+
         $orders = wc_get_orders( [
             'status'         => [ 'pending', 'on-hold', YSPaymentConfirmation::STATUS_KEY ],
             'date_created'   => '>' . gmdate( 'Y-m-d H:i:s', time() - ( 2 * DAY_IN_SECONDS ) ),
@@ -310,6 +316,52 @@ final class YSStatusManager {
                 $this->sync_payment_status( $order );
             } catch ( \Throwable $e ) {
                 YSLogger::error( 'Scheduled SHOPLINE sync failed: ' . $e->getMessage(), [
+                    'order_id' => $order->get_id(),
+                ] );
+            }
+        }
+    }
+
+    /**
+     * 每小時安全網：收斂仍在確認中的退款。
+     *
+     * 退款在途的訂單狀態通常是 processing／completed，不在付款掃描的狀態集內，
+     * 因此改以「有 active refund attempt 的 meta」為條件挑單。這是 Action Scheduler
+     * 失效／事件遺失時的兜底，實際收斂仍交給 YSRefundReconciliation（含訂單鎖、
+     * exact envelope 核對與 stage 推進），此處不自行判斷退款狀態。
+     */
+    private function reconcile_pending_refunds(): void {
+        $orders = wc_get_orders( [
+            'limit'          => 30,
+            'payment_method' => self::SHOPLINE_GATEWAY_IDS,
+            'date_created'   => '>' . gmdate( 'Y-m-d H:i:s', time() - ( 7 * DAY_IN_SECONDS ) ),
+            'meta_query'     => [
+                [
+                    'key'     => YSOrderMeta::REFUND_CONFIRMATION_DATA,
+                    'compare' => 'EXISTS',
+                ],
+            ],
+            'return'         => 'objects',
+        ] );
+
+        foreach ( $orders as $order ) {
+            if ( ! $order instanceof \WC_Order ) {
+                continue;
+            }
+
+            $attempt = $order->get_meta( YSOrderMeta::REFUND_CONFIRMATION_DATA );
+            if ( ! is_array( $attempt ) || empty( $attempt['refund_reference'] ) ) {
+                continue;
+            }
+
+            try {
+                YSRefundReconciliation::reconcile(
+                    $order->get_id(),
+                    (string) $attempt['refund_reference'],
+                    (int) ( $attempt['stage'] ?? 0 )
+                );
+            } catch ( \Throwable $e ) {
+                YSLogger::error( 'Hourly SHOPLINE refund reconciliation failed: ' . $e->getMessage(), [
                     'order_id' => $order->get_id(),
                 ] );
             }

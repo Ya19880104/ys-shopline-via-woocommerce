@@ -351,6 +351,46 @@ function ys_run_refund_reconciliation_contract(): void {
 	YS_Assert::eq( 'gateway delegation performs exactly one immediate query', 1, $gateway_api->query_calls );
 	YS_Assert::eq( 'gateway delegation persists active attempt', true, is_array( $gateway_order->get_meta( YSOrderMeta::REFUND_CONFIRMATION_DATA ) ) );
 
+	echo "== Refund reconciliation: manual recheck (admin button) ==\n";
+
+	// 手動重查在途 → 不得推進 stage、不得改動排程（否則商家按一次就吃掉一個自動確認階段）
+	$manual = ys_refund_test_order();
+	ys_refund_capture();
+	$manual_api = new YS_Refund_Test_Api( $manual );
+	$manual_api->query_responses = array( ys_refund_response( 'PROCESSING' ), ys_refund_response( 'PROCESSING' ) );
+	YSRefundReconciliation::process( $manual, 100.0, 'Manual', $manual_api, 'ys_shopline_bnpl', 'ChaileaseBNPL' );
+	$stage_before     = (int) ( $manual->get_meta( YSOrderMeta::REFUND_CONFIRMATION_DATA )['stage'] ?? -1 );
+	$scheduled_before = count( $GLOBALS['ys_test_scheduled_actions'] );
+	\YSShoplinePayment::$test_api = $manual_api;
+	$manual_result = YSRefundReconciliation::manual_recheck( 9201 );
+	$stage_after   = (int) ( $manual->get_meta( YSOrderMeta::REFUND_CONFIRMATION_DATA )['stage'] ?? -1 );
+	YS_Assert::eq( 'manual recheck reports still pending', 'pending', $manual_result['state'] ?? '' );
+	YS_Assert::eq( 'manual recheck does not advance the scheduled stage', $stage_before, $stage_after );
+	YS_Assert::eq( 'manual recheck does not add extra scheduled jobs', $scheduled_before, count( $GLOBALS['ys_test_scheduled_actions'] ) );
+	YS_Assert::eq( 'manual recheck keeps the active attempt', true, ! empty( $manual->get_meta( YSOrderMeta::REFUND_CONFIRMATION_DATA ) ) );
+
+	// 手動重查取得 SUCCEEDED → 立即補建本地退款並清除 attempt
+	$manual_ok = ys_refund_test_order();
+	ys_refund_capture();
+	$manual_ok_api = new YS_Refund_Test_Api( $manual_ok );
+	$manual_ok_api->query_responses = array( ys_refund_response( 'PROCESSING' ), ys_refund_response( 'SUCCEEDED' ) );
+	YSRefundReconciliation::process( $manual_ok, 100.0, 'Manual ok', $manual_ok_api, 'ys_shopline_bnpl', 'ChaileaseBNPL' );
+	$GLOBALS['ys_test_refund_creations'] = array();
+	\YSShoplinePayment::$test_api = $manual_ok_api;
+	$manual_ok_result = YSRefundReconciliation::manual_recheck( 9201 );
+	YS_Assert::eq( 'manual recheck converges on confirmed success', 'succeeded', $manual_ok_result['state'] ?? '' );
+	YS_Assert::eq( 'manual recheck creates exactly one local refund', 1, count( $GLOBALS['ys_test_refund_creations'] ) );
+	YS_Assert::eq( 'manual recheck local refund skips the gateway', false, $GLOBALS['ys_test_refund_creations'][0]['refund_payment'] ?? true );
+	YS_Assert::eq( 'manual recheck clears the active attempt', '', $manual_ok->get_meta( YSOrderMeta::REFUND_CONFIRMATION_DATA ) );
+
+	// 無在途退款時按按鈕 → 不打遠端
+	$manual_none     = ys_refund_test_order();
+	$manual_none_api = new YS_Refund_Test_Api( $manual_none );
+	\YSShoplinePayment::$test_api = $manual_none_api;
+	$manual_none_result = YSRefundReconciliation::manual_recheck( 9201 );
+	YS_Assert::eq( 'manual recheck without an attempt reports none', 'none', $manual_none_result['state'] ?? '' );
+	YS_Assert::eq( 'manual recheck without an attempt makes zero API calls', 0, $manual_none_api->query_calls + $manual_none_api->create_calls );
+
 	echo "== Refund reconciliation: scheduled exact-once reconstruction ==\n";
 
 	$async = ys_refund_test_order();
@@ -474,7 +514,7 @@ function ys_run_refund_reconciliation_contract(): void {
 	YSRefundReconciliation::reconcile( 9201, (string) $bounded_attempt['refund_reference'], 0 );
 	$stage_one = $bounded->get_meta( YSOrderMeta::REFUND_CONFIRMATION_DATA );
 	YS_Assert::eq( 'first scheduled in-flight query advances to stage one', 1, $stage_one['stage'] ?? -1 );
-	YS_Assert::eq( 'stage one uses cumulative two-minute target', 120, ( $GLOBALS['ys_test_scheduled_actions'][1]['timestamp'] ?? 0 ) - (int) $stage_one['started_at'] );
+	YS_Assert::eq( 'stage one uses cumulative one-minute target', 60, ( $GLOBALS['ys_test_scheduled_actions'][1]['timestamp'] ?? 0 ) - (int) $stage_one['started_at'] );
 
 	YSRefundReconciliation::reconcile( 9201, (string) $bounded_attempt['refund_reference'], 0 );
 	YS_Assert::eq( 'stale scheduled stage performs no query', $queries_before_stage + 1, $bounded_api->query_calls );
@@ -483,10 +523,13 @@ function ys_run_refund_reconciliation_contract(): void {
 	YSRefundReconciliation::reconcile( 9201, (string) $bounded_attempt['refund_reference'], 2 );
 	YSRefundReconciliation::reconcile( 9201, (string) $bounded_attempt['refund_reference'], 3 );
 	YSRefundReconciliation::reconcile( 9201, (string) $bounded_attempt['refund_reference'], 4 );
+	YSRefundReconciliation::reconcile( 9201, (string) $bounded_attempt['refund_reference'], 5 );
+	YSRefundReconciliation::reconcile( 9201, (string) $bounded_attempt['refund_reference'], 6 );
 	$bounded_review = $bounded->get_meta( YSOrderMeta::REFUND_REVIEW );
 	YS_Assert::eq( 'final unresolved stage raises fail-closed review', 'remote_status_unresolved', $bounded_review['type'] ?? '' );
-	// 節奏 30s/2m/10m/1h/6h：末點與付款端卡類觀察窗一致，給足通路收斂空間才進人工。
-	YS_Assert::eq( 'five cumulative reconciliation jobs are scheduled', 5, count( $GLOBALS['ys_test_scheduled_actions'] ) );
+	// 節奏 30s/1m/3m/5m/10m/1h/6h：前段密集讓多數退款在商家還在後台時就收斂，
+	// 末點 6h 與付款端卡類觀察窗一致，給足通路收斂空間才進人工。
+	YS_Assert::eq( 'seven cumulative reconciliation jobs are scheduled', 7, count( $GLOBALS['ys_test_scheduled_actions'] ) );
 
 	echo "== Refund reconciliation: confirmed API rejection ==\n";
 

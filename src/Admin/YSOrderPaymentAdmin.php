@@ -38,6 +38,46 @@ final class YSOrderPaymentAdmin {
 		add_action( 'manage_woocommerce_page_wc-orders_custom_column', array( $instance, 'render_review_list_column_hpos' ), 10, 2 );
 		add_filter( 'manage_edit-shop_order_columns', array( $instance, 'add_review_list_column' ) );
 		add_action( 'manage_shop_order_posts_custom_column', array( $instance, 'render_review_list_column_legacy' ), 10, 2 );
+		// v3.6.8：退款在途時提供「立即查詢退款結果」按鈕（AJAX），免得商家只能乾等排程。
+		add_action( 'wp_ajax_ys_shopline_refund_recheck', array( $instance, 'ajax_refund_recheck' ) );
+	}
+
+	/**
+	 * 手動重查退款結果（AJAX）。
+	 *
+	 * 權限採 WooCommerce 訂單編輯權限；nonce 綁定訂單 ID，避免跨單重放。
+	 * 實際收斂交給 YSRefundReconciliation::manual_recheck()（含訂單鎖，
+	 * 在途時不推進排程 stage）。
+	 */
+	public function ajax_refund_recheck(): void {
+		$order_id = isset( $_POST['order_id'] ) ? absint( wp_unslash( $_POST['order_id'] ) ) : 0;
+
+		if ( ! $order_id || ! current_user_can( 'edit_shop_orders' ) ) {
+			wp_send_json_error( array(
+				'message' => __( '權限不足，無法查詢此訂單的退款結果。', 'ys-shopline-via-woocommerce' ),
+			), 403 );
+		}
+
+		check_ajax_referer( 'ys_shopline_refund_recheck_' . $order_id, 'nonce' );
+
+		$result = \YangSheep\ShoplinePayment\Handlers\YSRefundReconciliation::manual_recheck( $order_id );
+
+		wp_send_json_success( array(
+			'state'        => (string) ( $result['state'] ?? 'pending' ),
+			'message'      => (string) ( $result['message'] ?? '' ),
+			'order_status' => (string) ( $result['order_status'] ?? '' ),
+			// 已收斂（成功／失敗／轉人工）時請前端重新載入，讓訂單狀態、
+			// 退款單與金額一次反映到 WooCommerce 原生 UI。
+			'reload'       => in_array( (string) ( $result['state'] ?? '' ), array( 'succeeded', 'failed', 'review' ), true ),
+		) );
+	}
+
+	/**
+	 * 是否有進行中的 SHOPLINE 退款（供按鈕顯示條件）。
+	 */
+	public static function has_active_refund_attempt( \WC_Order $order ): bool {
+		$attempt = $order->get_meta( YSOrderMeta::REFUND_CONFIRMATION_DATA );
+		return is_array( $attempt ) && ! empty( $attempt['refund_reference'] );
 	}
 
 	/**
@@ -402,6 +442,75 @@ final class YSOrderPaymentAdmin {
 				<?php endforeach; ?>
 			</tbody>
 		</table>
+		<?php
+		$this->render_refund_recheck_button( $order );
+	}
+
+	/**
+	 * 退款在途時，於付款資訊區塊顯示「立即查詢退款結果」按鈕。
+	 *
+	 * 排程本來就會自動確認（30 秒／1／3／5／10 分鐘／1／6 小時），此按鈕只是讓商家
+	 * 不必乾等；收斂成功／失敗後重新載入頁面，讓訂單狀態與退款單反映到原生 UI。
+	 *
+	 * @param \WC_Order|mixed $order 訂單物件。
+	 */
+	private function render_refund_recheck_button( $order ): void {
+		if ( ! $order instanceof \WC_Order || ! self::has_active_refund_attempt( $order ) ) {
+			return;
+		}
+
+		$attempt   = $order->get_meta( YSOrderMeta::REFUND_CONFIRMATION_DATA );
+		$reference = is_array( $attempt ) ? (string) ( $attempt['refund_reference'] ?? '' ) : '';
+		$status    = is_array( $attempt ) ? (string) ( $attempt['last_status'] ?? '' ) : '';
+		$order_id  = $order->get_id();
+		?>
+		<div class="ys-shopline-refund-recheck" style="margin-top:12px;padding:10px;border:1px solid #dcdcde;border-left:4px solid #dba617;background:#fcf9e8;">
+			<p style="margin:0 0 8px;">
+				<strong><?php esc_html_e( 'SHOPLINE 退款確認中', 'ys-shopline-via-woocommerce' ); ?></strong><br>
+				<?php esc_html_e( '退款請求已送出 API，但尚未收到確認結果。確認成功後才會建立 WooCommerce 退款單並回補庫存。', 'ys-shopline-via-woocommerce' ); ?><br>
+				<?php if ( '' !== $reference ) : ?>
+					<span><?php esc_html_e( '退款參考編號：', 'ys-shopline-via-woocommerce' ); ?><code><?php echo esc_html( $reference ); ?></code></span><br>
+				<?php endif; ?>
+				<?php if ( '' !== $status ) : ?>
+					<span><?php esc_html_e( '最後回報狀態：', 'ys-shopline-via-woocommerce' ); ?><code><?php echo esc_html( $status ); ?></code></span>
+				<?php endif; ?>
+			</p>
+			<button type="button" class="button" id="ys-shopline-refund-recheck-btn"><?php esc_html_e( '立即查詢退款結果', 'ys-shopline-via-woocommerce' ); ?></button>
+			<span id="ys-shopline-refund-recheck-msg" style="margin-left:8px;"></span>
+		</div>
+		<script>
+		( function () {
+			var btn = document.getElementById( 'ys-shopline-refund-recheck-btn' );
+			var msg = document.getElementById( 'ys-shopline-refund-recheck-msg' );
+			if ( ! btn ) { return; }
+			btn.addEventListener( 'click', function () {
+				btn.disabled = true;
+				msg.textContent = <?php echo wp_json_encode( __( '查詢中…', 'ys-shopline-via-woocommerce' ) ); ?>;
+				var body = new URLSearchParams();
+				body.append( 'action', 'ys_shopline_refund_recheck' );
+				body.append( 'order_id', <?php echo (int) $order_id; ?> );
+				body.append( 'nonce', <?php echo wp_json_encode( wp_create_nonce( 'ys_shopline_refund_recheck_' . $order_id ) ); ?> );
+				fetch( <?php echo wp_json_encode( admin_url( 'admin-ajax.php' ) ); ?>, {
+					method: 'POST',
+					credentials: 'same-origin',
+					headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+					body: body.toString()
+				} ).then( function ( r ) { return r.json(); } ).then( function ( res ) {
+					var data = ( res && res.data ) ? res.data : {};
+					msg.textContent = data.message || '';
+					if ( data.reload ) {
+						msg.textContent += <?php echo wp_json_encode( __( '（重新載入中…）', 'ys-shopline-via-woocommerce' ) ); ?>;
+						window.location.reload();
+						return;
+					}
+					btn.disabled = false;
+				} ).catch( function () {
+					msg.textContent = <?php echo wp_json_encode( __( '查詢失敗，請稍後再試。', 'ys-shopline-via-woocommerce' ) ); ?>;
+					btn.disabled = false;
+				} );
+			} );
+		} )();
+		</script>
 		<?php
 	}
 

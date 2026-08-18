@@ -24,13 +24,14 @@ final class YSRefundReconciliation {
 
     /** @var int[] Cumulative delays from the attempt start. */
     /**
-     * 退款查詢節奏（累計秒）：30s／2m／10m／1h／6h。
+     * 退款查詢節奏（累計秒）：30s／1m／3m／5m／10m／1h／6h。
      *
-     * 首點 30s 讓多數退款在第一次排程即收斂（沙盒實測中租約 5 秒完成），且不佔用 admin request；
-     * 末點 6h 與付款端卡類觀察窗一致——SHOPLINE 官方載明退款狀態更新時間依通路而異，
-     * 給足收斂空間後仍不明才進 C9 人工審核，避免過早把「還在處理」誤判成需要人工。
+     * 前段密集（30s–5m）讓絕大多數退款在商家還停留在後台時就收斂——沙盒實測中租約 5 秒完成，
+     * 但通路耗時依 SHOPLINE 官方說明而異，故不以單次量測值當上限；
+     * 末點 6h 與付款端卡類觀察窗一致，給足收斂空間後仍不明才進人工審核，
+     * 避免過早把「還在處理」誤判成需要人工。
      */
-    private const SCHEDULE_DELAYS = array( 30, 120, 600, 3600, 21600 );
+    private const SCHEDULE_DELAYS = array( 30, 60, 180, 300, 600, 3600, 21600 );
 
     /** @var array<int, array<string, mixed>> */
     private static array $request_snapshots = array();
@@ -629,7 +630,7 @@ final class YSRefundReconciliation {
         $order->update_meta_data( YSOrderMeta::REFUND_CONFIRMATION_DATA, $attempt );
         $order->add_order_note(
             sprintf(
-                __( 'SHOPLINE 退款已送出、正在確認中。退款參考編號：%s。確認成功後才會建立 WooCommerce 退款，請勿重複操作。', 'ys-shopline-via-woocommerce' ),
+                __( 'SHOPLINE 退款請求已送出 API，但尚未收到確認結果。退款參考編號：%s。系統會自動排程查詢（30 秒／1／3／5／10 分鐘／1／6 小時），也可在「訂單付款資訊」按「立即查詢退款結果」。確認成功後才會建立 WooCommerce 退款單並回補庫存，請勿重複操作。', 'ys-shopline-via-woocommerce' ),
                 (string) $attempt['refund_reference']
             )
         );
@@ -932,6 +933,95 @@ final class YSRefundReconciliation {
             'ts'              => time(),
         );
         $order->update_meta_data( YSOrderMeta::REFUND_HISTORY, $history );
+    }
+
+    /**
+     * 手動重查一次退款結果（後台按鈕用）。
+     *
+     * 與排程 reconcile() 的差別：**在途時不推進 stage**——避免商家按一次就吃掉一個排程
+     * 階段、縮短自動確認的總時窗。只有明確 SUCCEEDED／FAILED 才收斂。
+     *
+     * @param int $order_id 訂單 ID。
+     * @return array{state:string,message:string,order_status:string}
+     */
+    public static function manual_recheck( int $order_id ): array {
+        $result = self::with_lock(
+            $order_id,
+            static function () use ( $order_id ): array {
+                $order = wc_get_order( $order_id );
+                if ( ! $order instanceof \WC_Order ) {
+                    return array( 'state' => 'error', 'message' => __( '找不到訂單。', 'ys-shopline-via-woocommerce' ) );
+                }
+
+                $attempt = $order->get_meta( YSOrderMeta::REFUND_CONFIRMATION_DATA );
+                if ( ! is_array( $attempt ) || empty( $attempt['refund_reference'] ) ) {
+                    return array( 'state' => 'none', 'message' => __( '此訂單目前沒有進行中的 SHOPLINE 退款。', 'ys-shopline-via-woocommerce' ) );
+                }
+
+                // 先前已確認成功但本地補建失敗 → 直接重試補建，不再打遠端（避免重複退款）。
+                if ( YSRefundStatus::is_succeeded( (string) ( $attempt['last_status'] ?? '' ) ) ) {
+                    self::create_local_refund( $order, $attempt, 'manual_recheck' );
+                    return array( 'state' => 'succeeded', 'message' => __( 'SHOPLINE 已確認退款成功，已建立 WooCommerce 退款單。', 'ys-shopline-via-woocommerce' ) );
+                }
+
+                $api = \YSShoplinePayment::get_api();
+                if ( ! $api ) {
+                    return array( 'state' => 'pending', 'message' => __( 'SHOPLINE API 目前無法使用，排程會自動再試。', 'ys-shopline-via-woocommerce' ) );
+                }
+
+                $refund_order_id = (string) ( $attempt['refund_order_id'] ?? '' );
+                if ( '' === $refund_order_id ) {
+                    return array( 'state' => 'pending', 'message' => __( '尚未取得 SHOPLINE 退款編號，排程會持續確認。', 'ys-shopline-via-woocommerce' ) );
+                }
+
+                $response = $api->query_refund( $refund_order_id );
+                if ( is_wp_error( $response ) || ! is_array( $response ) ) {
+                    return array( 'state' => 'pending', 'message' => __( '查詢未取得明確結果，排程會持續確認。', 'ys-shopline-via-woocommerce' ) );
+                }
+                if ( ! self::response_matches_attempt( $attempt, $response ) ) {
+                    self::mark_remote_envelope_mismatch( $order, $attempt, $response, 'manual_recheck' );
+                    return array( 'state' => 'review', 'message' => __( 'SHOPLINE 回應與本次退款不符，已轉人工審核。', 'ys-shopline-via-woocommerce' ) );
+                }
+
+                $attempt = self::merge_response( $attempt, $response );
+                $family  = YSRefundStatus::family( (string) $attempt['last_status'] );
+
+                if ( YSRefundStatus::FAMILY_SUCCEEDED === $family ) {
+                    self::persist_attempt( $order, $attempt );
+                    self::create_local_refund( $order, $attempt, 'manual_recheck' );
+                    return array( 'state' => 'succeeded', 'message' => __( 'SHOPLINE 已確認退款成功，已建立 WooCommerce 退款單。', 'ys-shopline-via-woocommerce' ) );
+                }
+                if ( YSRefundStatus::FAMILY_FAILED === $family ) {
+                    self::complete_failed_attempt( $order, $attempt, $response, 'manual_recheck' );
+                    return array( 'state' => 'failed', 'message' => __( 'SHOPLINE 回報本次退款未成功，已解除鎖定，可重新操作退款。', 'ys-shopline-via-woocommerce' ) );
+                }
+
+                // 仍在途：更新最後狀態但不推進 stage、不改動既有排程。
+                self::persist_attempt( $order, $attempt );
+                return array(
+                    'state'   => 'pending',
+                    'message' => sprintf(
+                        /* translators: %s: SHOPLINE refund status */
+                        __( 'SHOPLINE 仍在處理這筆退款（目前狀態：%s），排程會持續確認。', 'ys-shopline-via-woocommerce' ),
+                        (string) $attempt['last_status']
+                    ),
+                );
+            }
+        );
+
+        if ( is_wp_error( $result ) || ! is_array( $result ) ) {
+            return array(
+                'state'        => 'pending',
+                'message'      => __( '另一個程序正在確認此退款，請稍候再試。', 'ys-shopline-via-woocommerce' ),
+                'order_status' => '',
+            );
+        }
+
+        $fresh                  = wc_get_order( $order_id );
+        $result['order_status'] = ( $fresh instanceof \WC_Order && method_exists( $fresh, 'get_status' ) )
+            ? (string) $fresh->get_status()
+            : '';
+        return $result;
     }
 
     /** @return mixed */

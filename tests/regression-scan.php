@@ -115,7 +115,16 @@ function ys_run_regression_scan(): void {
 	YS_Assert::is_true( 'confirmation attempt meta key remains defined', $has( $meta, 'CONFIRMATION_DATA' ) && $has( $meta, 'PAYMENT_ATTEMPT_DATA' ) );
 	YS_Assert::is_true( 'main plugin initializes confirmation lifecycle', $has( $main, 'YSPaymentConfirmation::init' ) );
 	YS_Assert::is_true( 'main plugin initializes refund lifecycle', $has( $main, 'YSRefundReconciliation::init' ) );
-	YS_Assert::is_true( 'runtime version is 3.6.7', $has( $main, "Version:           3.6.7" ) && $has( $main, "YS_SHOPLINE_VERSION', '3.6.7'" ) );
+	// 禁 hard-code 版號：每次 bump 都會假紅。真正要守的不變量是「外掛標頭版本」與
+	// 「YS_SHOPLINE_VERSION 常數」必須一致——兩者漂移會讓 WordPress 顯示的版本與
+	// 程式判斷的版本不同，導致更新流程與相容性判斷出錯。
+	preg_match( '/^\s*\*\s*Version:\s*([0-9][0-9.\-a-zA-Z]*)/m', $main, $header_version );
+	preg_match( "/define\(\s*'YS_SHOPLINE_VERSION',\s*'([^']+)'\s*\)/", $main, $constant_version );
+	$header_v   = $header_version[1] ?? '';
+	$constant_v = $constant_version[1] ?? '';
+	YS_Assert::is_true( 'plugin header declares a version', '' !== $header_v );
+	YS_Assert::is_true( 'YS_SHOPLINE_VERSION constant is defined', '' !== $constant_v );
+	YS_Assert::eq( 'plugin header version matches the runtime constant', $header_v, $constant_v );
 	YS_Assert::is_true( 'plugin deactivation clears refund reconciliation jobs', $has( $main, "wp_clear_scheduled_hook( 'ys_shopline_reconcile_refund'" ) && $has( $main, "as_unschedule_all_actions( 'ys_shopline_reconcile_refund'" ) );
 	YS_Assert::is_true( 'gateway delegates refunds to lifecycle service', $has( $gateway, 'YSRefundReconciliation::process' ) );
 	YS_Assert::is_true( 'refund create remains idempotent and queryable', $has( $api, 'function create_refund' ) && $has( $api, 'function query_refund' ) && $has( $api, "'/trade/refund/get'" ) );
