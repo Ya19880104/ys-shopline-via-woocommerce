@@ -165,8 +165,22 @@ class YSVirtualAccount extends YSGatewayBase {
 		// 傳回 nextAction 給前端，讓 SDK 處理確認流程
 		return array(
 			'result'     => 'success',
+			// v3.6.9：本覆寫版先前漏了下面兩個鍵——base 的 handle_next_action() 一直都有，
+			// 只有 ATM 沒有。這裡是補上既有機制，不是新增機制。
+			//
+			// 🔴 remote_outcome：order-pay 的 ajax_pay_for_order() 以三態分流，
+			// **缺值一律 fail-closed**（`elseif ( 'accepted' !== $outcome )`）。缺這個鍵時，
+			// 顧客從訂單付款頁重試 ATM：交易已在 SHOPLINE 端建立（CREATED＋nextAction），
+			// 前端卻收到「付款結果確認中」的 failure → processNextAction() 不執行 →
+			// **payment.pay() 從不送出 → 虛擬帳號從不產生**。與瀏覽器中斷無關，必定重現。
+			// 2026-08-30 沙盒實測（訂單 12525）即為此路徑；修正後（12526/12527）
+			// pay() 正常送出、SDK 導向收銀台、交易由 CREATED 進入 CUSTOMER_ACTION 並配號。
+			'remote_outcome' => 'accepted',
 			'nextAction' => $response['nextAction'],
 			'returnUrl'  => $this->get_return_url( $order ),
+			// 🔴 failureUrl：SDK 實例被結帳更新換掉時，前端據此導向 pay-for-order 頁重試。
+			// 缺這個鍵時顧客只會看到「請重新整理頁面」，而訂單其實已建立（隱形訂單）。
+			'failureUrl' => $order->get_checkout_payment_url(),
 			'orderId'    => $order->get_id(),
 		);
 	}

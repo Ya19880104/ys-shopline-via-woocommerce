@@ -79,6 +79,9 @@ function ys_run_regression_scan(): void {
 	YS_Assert::is_true( 'credit nextAction uses WC stock bookkeeping', $has( $gateway, 'wc_maybe_reduce_stock_levels( $order->get_id() )' ) );
 	YS_Assert::is_true( 'ATM nextAction uses WC stock bookkeeping', $has( $atm, 'wc_maybe_reduce_stock_levels( $order->get_id() )' ) );
 	YS_Assert::is_true( 'no production direct stock reduction remains', ! $has( $gateway . $atm, 'wc_reduce_stock_levels(' ) );
+	// v3.6.9：order-pay 的 ajax_pay_for_order() 對缺 remote_outcome 一律 fail-closed，
+	// 缺這個鍵時 ATM 從訂單付款頁重試會被判成失敗，payment.pay() 從不送出、號碼從不產生。
+	YS_Assert::is_true( 'ATM nextAction keeps parity with the base envelope', $has( $atm, "'remote_outcome' => 'accepted'" ) && $has( $atm, "'failureUrl' =>" ) );
 
 	YS_Assert::is_true( 'installment keeps optional bind-card SDK support', $has( $installment, "'bindCard'" ) );
 	YS_Assert::is_true( 'saved installment routes to QuickPayment', $has( $gateway, "'QuickPayment'" ) );

@@ -4,7 +4,7 @@
 
 ## 版本資訊
 
-- **目前版本**：3.6.8
+- **目前版本**：3.6.9
 - **PHP 需求**：>= 8.0
 - **WordPress 需求**：>= 6.0
 - **WooCommerce 需求**：7.0 - 10.4
@@ -65,6 +65,19 @@ https://your-domain.com/wp-json/ys-shopline/v1/webhook
 ---
 
 ## 變更紀錄
+
+### 3.6.9 - 2026-08-30
+
+**修正 ATM 從「訂單付款頁」重試時，付款請求不會送出、顧客拿不到虛擬帳號。**
+
+SHOPLINE 回報：虛擬帳號這個付款方式，沒有執行 `payment.pay()`，因此金流端未請求付款、未配號。
+
+根因：訂單付款頁的處理依 `remote_outcome` 分流，**缺值一律保守擋下**。`YSGatewayBase` 的 `handle_next_action()` 一直都回傳這個鍵，只有 ATM 的覆寫版沒有。於是顧客從訂單付款頁重試 ATM 時，交易明明已在 SHOPLINE 端建立，前端卻收到「付款結果確認中」的失敗，SDK 的付款程序從不執行、虛擬帳號從不產生，再試又被既存交易保護擋住。此路徑與瀏覽器中斷無關，必定重現。
+
+- ATM 的 `nextAction` 回應補回 `remote_outcome` 與 `failureUrl` 兩個鍵，與 `YSGatewayBase` 一致。**這是補上既有機制的缺漏，不新增任何機制**；訂單狀態流程、通知信、庫存與既有的重複付款保護皆不變動。
+- 沙盒實測：修正前交易停在 `CREATED`、無虛擬帳號；修正後 SDK 正常導向收銀台，交易進入 `CUSTOMER_ACTION` 並完成配號。
+
+> 補充實測紀錄：曾評估以 `confirm.autoConfirm = true` 讓 SHOPLINE 伺服器端直接配號、擺脫瀏覽器依賴。沙盒實測結果為**參數被靜默忽略**（送出 `true`，交易查詢回傳 `autoConfirm` 為 `false`、狀態仍 `CREATED`、無虛擬帳號），故未採用。同批實測反向證實虛擬帳號確實由 `payment.pay()` 觸發。
 
 ### 3.6.8 - 2026-08-16
 
