@@ -410,7 +410,7 @@ final class YSOrderPaymentAdmin {
 	}
 
 	/**
-	 * Render order payment details with only method, status, and ID.
+	 * Render the payment summary, including installment terms when selected.
 	 *
 	 * @param \WC_Order|\WC_Subscription $order        Order object.
 	 * @param bool                       $show_heading Whether to render an inline heading.
@@ -825,9 +825,26 @@ final class YSOrderPaymentAdmin {
 		$detail = $this->get_payment_detail( $order );
 		$rows   = array(
 			'付款方式' => $this->get_order_payment_method_label( $order, $detail ),
-			'付款狀態' => $this->get_order_payment_status( $order, $detail ),
-			'付款編號' => $this->get_order_payment_identifier( $order, $detail ),
 		);
+
+		// Only read the current gateway's selection; another attempt may have left stale metadata.
+		$installment_keys = array(
+			'ys_shopline_credit_installment' => YSOrderMeta::INSTALLMENT,
+			'ys_shopline_bnpl'               => YSOrderMeta::BNPL_INSTALLMENT,
+		);
+		$gateway = (string) $order->get_payment_method();
+		if ( isset( $installment_keys[ $gateway ] ) ) {
+			$selection = $order->get_meta( $installment_keys[ $gateway ] );
+			$count     = is_int( $selection ) || is_string( $selection )
+				? filter_var( $selection, FILTER_VALIDATE_INT, array( 'options' => array( 'min_range' => 1 ) ) )
+				: false;
+			if ( false !== $count ) {
+				$rows['分期期數'] = sprintf( __( '%d 期', 'ys-shopline-via-woocommerce' ), $count );
+			}
+		}
+
+		$rows['付款狀態'] = $this->get_order_payment_status( $order, $detail );
+		$rows['付款編號'] = $this->get_order_payment_identifier( $order, $detail );
 
 		return array_filter(
 			$rows,

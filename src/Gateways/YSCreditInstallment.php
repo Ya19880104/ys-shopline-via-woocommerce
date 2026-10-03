@@ -278,8 +278,10 @@ class YSCreditInstallment extends YSGatewayBase {
 				),
 			);
 			$order->update_meta_data( YSOrderMeta::INSTALLMENT, $installment );
-			$order->save();
+		} else {
+			$order->delete_meta_data( YSOrderMeta::INSTALLMENT );
 		}
+		$order->save();
 
 		return $data;
 	}
