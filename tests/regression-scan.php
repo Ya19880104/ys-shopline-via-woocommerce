@@ -142,6 +142,13 @@ function ys_run_regression_scan(): void {
 	$guard_pos = strpos( $gateway, 'YSPaymentConfirmation::get_active_attempt' );
 	$ref_pos   = strpos( $gateway, 'generate_reference_order_id' );
 	YS_Assert::is_true( 'pre-create guard remains before reference generation', false !== $guard_pos && false !== $ref_pos && $guard_pos < $ref_pos );
+
+	// v3.6.11：分期期數必須在建立付款請求前對照店家設定；顧客看得到的付款提示不得讀訂單備註。
+	$validate_pos = strpos( $gateway, '$this->validate_payment_request( $order )' );
+	$prepare_pos  = strpos( $gateway, '$this->prepare_payment_data( $order, $pay_session )' );
+	YS_Assert::is_true( 'gateway request validation runs before the payment payload is built', false !== $validate_pos && false !== $prepare_pos && $validate_pos < $prepare_pos );
+	YS_Assert::is_true( 'installment gateway rejects counts outside the merchant list', $has( $installment, 'function validate_payment_request' ) && $has( $installment, 'ys_shopline_installment_not_offered' ) );
+	YS_Assert::is_true( 'customer-facing order notice never reads order notes', ! $has( $display, 'wc_get_order_notes' ) );
 }
 
 if ( realpath( (string) ( $_SERVER['SCRIPT_FILENAME'] ?? '' ) ) === __FILE__ ) {

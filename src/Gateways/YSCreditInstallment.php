@@ -258,6 +258,63 @@ class YSCreditInstallment extends YSGatewayBase {
 	}
 
 	/**
+	 * 顧客送出的分期期數（0＝沒有選分期或一次付清）。
+	 *
+	 * @return int
+	 */
+	private function get_requested_installment_count() {
+		// phpcs:ignore WordPress.Security.NonceVerification.Missing
+		return isset( $_POST['ys_shopline_installment'] ) ? absint( wp_unslash( $_POST['ys_shopline_installment'] ) ) : 0;
+	}
+
+	/**
+	 * 這筆訂單可以使用的分期期數。
+	 *
+	 * 條件與 get_sdk_config() 提供給前端的一致：店家有勾選期數，且訂單金額達到分期最低金額。
+	 * 0（一次付清）不是分期期數，不列入。
+	 *
+	 * @param \WC_Order $order Order object.
+	 * @return int[]
+	 */
+	private function get_enabled_installment_counts( $order ) {
+		$installments = $this->get_option( 'installments', array() );
+		$min_amount   = (float) $this->get_option( 'min_installment_amount', 3000 );
+
+		if ( empty( $installments ) || ! is_array( $installments ) || (float) $order->get_total() < $min_amount ) {
+			return array();
+		}
+
+		$counts = array();
+		foreach ( $installments as $installment ) {
+			$count = absint( $installment );
+			if ( $count > 0 ) {
+				$counts[] = $count;
+			}
+		}
+
+		return array_values( array_unique( $counts ) );
+	}
+
+	/**
+	 * 分期期數必須是店家啟用、且這筆訂單金額可以使用的期數。
+	 *
+	 * @param \WC_Order $order Order object.
+	 * @return true|\WP_Error
+	 */
+	protected function validate_payment_request( $order ) {
+		$requested = $this->get_requested_installment_count();
+
+		if ( $requested > 0 && ! in_array( $requested, $this->get_enabled_installment_counts( $order ), true ) ) {
+			return new \WP_Error(
+				'ys_shopline_installment_not_offered',
+				__( '所選的分期期數目前無法使用，請重新整理頁面後再選擇一次。', 'ys-shopline-via-woocommerce' )
+			);
+		}
+
+		return true;
+	}
+
+	/**
 	 * Prepare payment data.
 	 *
 	 * @param \WC_Order $order       Order object.
@@ -268,8 +325,12 @@ class YSCreditInstallment extends YSGatewayBase {
 		$data = parent::prepare_payment_data( $order, $pay_session );
 
 		// Add installment data if selected (0 = 一次付清，不帶 installment)
-		// phpcs:ignore WordPress.Security.NonceVerification.Missing
-		$installment = isset( $_POST['ys_shopline_installment'] ) ? absint( $_POST['ys_shopline_installment'] ) : 0;
+		// 只送出店家啟用的期數。process_payment() 已先由 validate_payment_request() 擋下
+		// 不在清單內的請求；這裡是第二道防線，確保那樣的期數不會出現在付款請求裡。
+		$installment = $this->get_requested_installment_count();
+		if ( $installment > 0 && ! in_array( $installment, $this->get_enabled_installment_counts( $order ), true ) ) {
+			$installment = 0;
+		}
 
 		if ( $installment > 0 ) {
 			$data['confirm']['paymentMethodOptions'] = array(

@@ -356,24 +356,10 @@ class YSOrderDisplay {
 	private function render_pending_or_failed_notice( $order ) {
 		$status = $order->get_status();
 
-		// 取得錯誤資訊
+		// 取得錯誤資訊：只顯示外掛自己存在訂單上的訊息。
+		// 訂單備註含店家與其他外掛寫的內部備註，不可拿來顯示給顧客。
 		$error_code = $order->get_meta( YSOrderMeta::ERROR_CODE );
 		$error_msg  = $order->get_meta( YSOrderMeta::ERROR_MESSAGE );
-
-		// 從訂單備註中取得錯誤資訊（如果 meta 中沒有）
-		if ( empty( $error_msg ) && 'failed' === $status ) {
-			$notes = wc_get_order_notes( array(
-				'order_id' => $order->get_id(),
-				'limit'    => 5,
-			) );
-
-			foreach ( $notes as $note ) {
-				if ( strpos( $note->content, '付款失敗' ) !== false || strpos( $note->content, 'failed' ) !== false ) {
-					$error_msg = $note->content;
-					break;
-				}
-			}
-		}
 
 		// 付款連結
 		$pay_url = $order->get_checkout_payment_url();
