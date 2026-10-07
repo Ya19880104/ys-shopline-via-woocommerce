@@ -712,6 +712,19 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
             return array( 'result' => 'failure', 'remote_outcome' => 'rejected' );
         }
 
+        // 閘道專屬的請求驗證（例：分期期數必須在店家啟用的清單內）。在建立交易前擋下；
+        // 這類請求可被重複送出，所以只記 log、不寫訂單備註與付款狀態。
+        $request_error = $this->validate_payment_request( $order );
+        if ( is_wp_error( $request_error ) ) {
+            YSLogger::warning( 'process_payment: request rejected before create_payment_trade', array(
+                'order_id' => $order_id,
+                'gateway'  => $this->id,
+                'code'     => (string) $request_error->get_error_code(),
+            ) );
+            wc_add_notice( $request_error->get_error_message(), 'error' );
+            return array( 'result' => 'failure', 'remote_outcome' => 'rejected' );
+        }
+
         // Prepare payment data
         $payment_data = $this->prepare_payment_data( $order, $pay_session );
         $this->store_payment_attempt_data( $order, $payment_data, is_array( $decoded ) ? $decoded : array() );
@@ -1001,6 +1014,18 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
             'redirect' => $this->get_return_url( $order ),
             'remote_outcome' => 'accepted', // 立即成功（SUCCEEDED/CAPTURED）
         );
+    }
+
+    /**
+     * 閘道專屬的付款請求驗證，在建立交易前執行。
+     *
+     * 回傳 WP_Error 時 process_payment() 顯示該訊息並中止，不呼叫 SHOPLINE。
+     *
+     * @param WC_Order $order Order object.
+     * @return true|\WP_Error
+     */
+    protected function validate_payment_request( $order ) {
+        return true;
     }
 
     /**
