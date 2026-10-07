@@ -245,9 +245,9 @@ try {
     $check('email suppression remains active', true === apply_filters('pre_wp_mail', null, array()));
     $completed = !$failures;
     WP_CLI::log(wp_json_encode(array('pass' => $passes, 'fail' => count($failures), 'intercepted_creates' => count($interceptor->requests), 'http_calls' => $http_calls, 'browser_fixtures' => $kept)));
+    // Guest fixtures use key-protected thank-you and order-pay pages, not My Account.
     foreach ($kept as $label => $id) {
         $order = wc_get_order($id);
-        WP_CLI::log($label . ': ' . $order->get_view_order_url());
         WP_CLI::log($label . '_thankyou: ' . $order->get_checkout_order_received_url());
     }
 } finally {

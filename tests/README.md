@@ -21,7 +21,7 @@ dev-checkout 的真實 WooCommerce/HPOS 整合探針另以 `wp eval-file tests/i
 
 `wp --user=1 eval-file tests/integration/dev-checkout-v3.6.11.php` 僅允許在 dev-checkout、管理員權限且 email 已停用時執行。使用真實 HPOS 訂單與 order-pay AJAX 入口，涵蓋分期期數／格式驗證、已付款與確認中守衛、失敗後付款方式還原、notice 透傳、訂單備註隱私及 HTML escaping。
 
-SHOPLINE create 由 request-local stub 攔截，其他 HTTP 一律阻擋；不建立遠端交易。預設在 `finally` 刪除全部測試訂單。只有通過時設定 `YS_KEEP_FIXTURES=1` 才保留最後兩張前台驗收訂單；完成瀏覽器驗收後，以 `YS_CLEANUP_IDS=id,id` 執行同一腳本，僅刪除帶本探針標記的訂單。付款設定不寫回資料庫，不修改商品、庫存或使用者。
+SHOPLINE create 由 request-local stub 攔截，其他 HTTP 一律阻擋；不建立遠端交易。預設在 `finally` 刪除全部測試訂單。只有通過時設定 `YS_KEEP_FIXTURES=1` 才保留最後兩張訪客訂單，供持訂單 key 的感謝頁／重新付款頁驗收，不用於「我的帳戶」頁；完成瀏覽器驗收後，以 `YS_CLEANUP_IDS=id,id` 執行同一腳本，僅刪除帶本探針標記的訂單。付款設定不寫回資料庫，不修改商品、庫存或使用者。
 
 ## 涵蓋範圍
 
