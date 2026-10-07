@@ -260,11 +260,20 @@ class YSCreditInstallment extends YSGatewayBase {
 	/**
 	 * 顧客送出的分期期數（0＝沒有選分期或一次付清）。
 	 *
-	 * @return int
+	 * @return int|null Non-negative count, or null for malformed input.
 	 */
 	private function get_requested_installment_count() {
 		// phpcs:ignore WordPress.Security.NonceVerification.Missing
-		return isset( $_POST['ys_shopline_installment'] ) ? absint( wp_unslash( $_POST['ys_shopline_installment'] ) ) : 0;
+		if ( ! isset( $_POST['ys_shopline_installment'] ) ) {
+			return 0;
+		}
+		// phpcs:ignore WordPress.Security.NonceVerification.Missing
+		$raw = wp_unslash( $_POST['ys_shopline_installment'] );
+		if ( ! is_string( $raw ) && ! is_int( $raw ) ) {
+			return null;
+		}
+		$count = filter_var( $raw, FILTER_VALIDATE_INT, array( 'options' => array( 'min_range' => 0 ) ) );
+		return false === $count ? null : $count;
 	}
 
 	/**
@@ -304,7 +313,7 @@ class YSCreditInstallment extends YSGatewayBase {
 	protected function validate_payment_request( $order ) {
 		$requested = $this->get_requested_installment_count();
 
-		if ( $requested > 0 && ! in_array( $requested, $this->get_enabled_installment_counts( $order ), true ) ) {
+		if ( null === $requested || ( $requested > 0 && ! in_array( $requested, $this->get_enabled_installment_counts( $order ), true ) ) ) {
 			return new \WP_Error(
 				'ys_shopline_installment_not_offered',
 				__( '所選的分期期數目前無法使用，請重新整理頁面後再選擇一次。', 'ys-shopline-via-woocommerce' )
@@ -328,7 +337,7 @@ class YSCreditInstallment extends YSGatewayBase {
 		// 只送出店家啟用的期數。process_payment() 已先由 validate_payment_request() 擋下
 		// 不在清單內的請求；這裡是第二道防線，確保那樣的期數不會出現在付款請求裡。
 		$installment = $this->get_requested_installment_count();
-		if ( $installment > 0 && ! in_array( $installment, $this->get_enabled_installment_counts( $order ), true ) ) {
+		if ( null === $installment || ( $installment > 0 && ! in_array( $installment, $this->get_enabled_installment_counts( $order ), true ) ) ) {
 			$installment = 0;
 		}
 

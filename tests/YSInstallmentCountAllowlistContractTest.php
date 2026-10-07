@@ -190,10 +190,10 @@ final class YS_Installment_Allowlist_Gateway extends YSCreditInstallment {
  *
  * @param array       $options Gateway options.
  * @param float       $total   Order total.
- * @param string|null $posted  Posted installment count; null = field absent.
+ * @param mixed       $posted  Posted installment count; null = field absent.
  * @return array{0:array,1:YS_Installment_Allowlist_Order,2:YS_Installment_Allowlist_Gateway}
  */
-function ys_installment_allowlist_process( array $options, float $total, ?string $posted ): array {
+function ys_installment_allowlist_process( array $options, float $total, $posted ): array {
 	$previous_session = $_POST['ys_shopline_pay_session'] ?? null;
 	$previous_user    = $GLOBALS['ys_test_user_id'] ?? 0;
 
@@ -317,6 +317,15 @@ function ys_run_installment_count_allowlist_contract(): void {
 		'3'
 	);
 	YS_Assert::eq( 'empty merchant list creates no trade', 0, $gateway->api_stub()->create_calls );
+
+	// Invalid values must not be coerced into an enabled term or a full charge.
+	foreach ( array( '6abc', '6.5', '-6', 'invalid', '', array(), array( '6' ) ) as $posted ) {
+		$label = json_encode( $posted );
+		list( $result, $order, $gateway ) = ys_installment_allowlist_process( $options, 5000.0, $posted );
+		YS_Assert::eq( 'malformed installment ' . $label . ' creates no trade', 0, $gateway->api_stub()->create_calls );
+		YS_Assert::eq( 'malformed installment ' . $label . ' is rejected', 'rejected', $result['remote_outcome'] ?? '' );
+		YS_Assert::eq( 'malformed installment ' . $label . ' preserves payment state', '', $order->get_meta( YSOrderMeta::PAYMENT_STATUS ) );
+	}
 
 	// 第二道防線：即使繞過 process_payment()，付款請求也不得帶未啟用的期數。
 	list( $data, $order ) = ys_installment_allowlist_prepare( $options, 5000.0, '24' );

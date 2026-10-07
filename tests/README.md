@@ -17,6 +17,12 @@ dev-checkout 的真實 WooCommerce/HPOS 整合探針另以 `wp eval-file tests/i
 - 全通過 → 印出 `RESULT: N PASS / 0 FAIL`、exit code `0`
 - 任一失敗 → 印出 `FAIL | ...`、exit code `1`
 
+### PR #2 真實 WooCommerce 驗收
+
+`wp --user=1 eval-file tests/integration/dev-checkout-v3.6.11.php` 僅允許在 dev-checkout、管理員權限且 email 已停用時執行。使用真實 HPOS 訂單與 order-pay AJAX 入口，涵蓋分期期數／格式驗證、已付款與確認中守衛、失敗後付款方式還原、notice 透傳、訂單備註隱私及 HTML escaping。
+
+SHOPLINE create 由 request-local stub 攔截，其他 HTTP 一律阻擋；不建立遠端交易。預設在 `finally` 刪除全部測試訂單。只有通過時設定 `YS_KEEP_FIXTURES=1` 才保留最後兩張前台驗收訂單；完成瀏覽器驗收後，以 `YS_CLEANUP_IDS=id,id` 執行同一腳本，僅刪除帶本探針標記的訂單。付款設定不寫回資料庫，不修改商品、庫存或使用者。
+
 ## 涵蓋範圍
 
 - **`YSTradeStatus`**（[`YSTradeStatusContractTest.php`](YSTradeStatusContractTest.php)）
@@ -72,6 +78,7 @@ dev-checkout 的真實 WooCommerce/HPOS 整合探針另以 `wp eval-file tests/i
   - vendor library 不得以自身 `__FILE__` 宣告 WooCommerce feature compatibility；HPOS 宣告必須由 SLP 主檔以 `YS_SHOPLINE_PLUGIN_FILE` 擁有，避免 `Invalid plugin file` error log。
 - **分期期數清單**（[`YSInstallmentCountAllowlistContractTest.php`](YSInstallmentCountAllowlistContractTest.php)）
   - 執行真實 `YSGatewayBase::process_payment()` 與 `YSCreditInstallment::prepare_payment_data()`：店家啟用的期數照常送出；不在設定內、金額未達分期最低金額或店家清空設定時，請求在建立交易前以 `rejected` 擋下、顯示一則錯誤提示，且不寫訂單的期數與付款狀態。付款請求本身也不得帶未啟用的期數。一次付清不受影響。
+  - 混入文字、小數、負數、空字串與陣列均拒絕，不得隱性轉成其他期數或一次付清。
 - **付款失敗提示**（[`YSFailedOrderNoticeContractTest.php`](YSFailedOrderNoticeContractTest.php)）
   - 感謝頁與訂單頁的提示只顯示訂單上記錄的付款錯誤訊息；沒有記錄時不顯示錯誤明細，且任何情況下都不查詢訂單備註。
 - **Production 回歸哨兵**（[`regression-scan.php`](regression-scan.php)）
