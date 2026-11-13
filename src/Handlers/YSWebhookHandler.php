@@ -374,9 +374,9 @@ final class YSWebhookHandler {
         }
 
         // v3.5.36 P0-A+：對應 indeterminate 訂單失敗＝該不明交易未收款 → exact reference 解除鎖定、允許重試
-        $this->release_indeterminate_terminal( $data, 'FAILED' );
+        $indeterminate_order = $this->release_indeterminate_terminal( $data, 'FAILED' );
 
-        $order = $this->get_order_by_trade_id( $trade_order_id );
+        $order = $indeterminate_order ?? $this->get_order_by_trade_id( $trade_order_id );
 
         if ( ! $order && ! empty( $data['referenceOrderId'] ) ) {
             $order = $this->get_order_by_reference_order_id( (string) $data['referenceOrderId'] );
@@ -388,6 +388,9 @@ final class YSWebhookHandler {
         }
 
         if ( ! $order || $order->is_paid() ) {
+            return;
+        }
+        if ( ! $indeterminate_order && ! $this->matches_current_terminal_attempt( $order, $data, 'FAILED' ) ) {
             return;
         }
         if ( $this->has_paid_history( $order ) ) {
@@ -525,6 +528,10 @@ final class YSWebhookHandler {
             return;
         }
 
+        if ( ! $this->matches_current_terminal_attempt( $order, $data, 'CANCELLED' ) ) {
+            return;
+        }
+
         if ( $this->has_paid_history( $order ) ) {
             $this->note_late_non_paid_event_for_paid_order( $order, 'CANCELLED' );
             return;
@@ -547,9 +554,10 @@ final class YSWebhookHandler {
             return;
         }
 
-        $order->update_status( 'cancelled', __( 'Shopline payment cancelled by customer.', 'ys-shopline-via-woocommerce' ) );
         $order->update_meta_data( YSOrderMeta::PAYMENT_STATUS, 'CANCELLED' );
         $order->update_meta_data( YSOrderMeta::PAYMENT_DETAIL, YSOrderMeta::sanitize_payment_detail( $data ) );
+        // The status-change hook must see the confirmed terminal state, not cancel again.
+        $order->update_status( 'cancelled', __( 'Shopline payment cancelled by customer.', 'ys-shopline-via-woocommerce' ) );
         $order->save();
     }
 
@@ -564,9 +572,9 @@ final class YSWebhookHandler {
         }
 
         // v3.5.36 P0-A+：對應 indeterminate 訂單過期＝該不明交易未收款 → exact reference 解除鎖定、允許重試
-        $this->release_indeterminate_terminal( $data, 'EXPIRED' );
+        $indeterminate_order = $this->release_indeterminate_terminal( $data, 'EXPIRED' );
 
-        $order = $this->get_order_by_trade_id( $trade_order_id );
+        $order = $indeterminate_order ?? $this->get_order_by_trade_id( $trade_order_id );
 
         if ( ! $order && ! empty( $data['referenceOrderId'] ) ) {
             $order = $this->get_order_by_reference_order_id( (string) $data['referenceOrderId'] );
@@ -577,7 +585,7 @@ final class YSWebhookHandler {
             return;
         }
 
-        if ( ! $order ) {
+        if ( ! $order || ( ! $indeterminate_order && ! $this->matches_current_terminal_attempt( $order, $data, 'EXPIRED' ) ) ) {
             return;
         }
 
@@ -1181,15 +1189,23 @@ final class YSWebhookHandler {
      *
      * @param array  $data  Webhook payload。
      * @param string $event 終結事件（FAILED/EXPIRED）。
-     * @return void
+     * @return \WC_Order|null Exact legacy attempt, or null when not matched.
      */
-    private function release_indeterminate_terminal( array $data, string $event ): void {
+    private function release_indeterminate_terminal( array $data, string $event ): ?\WC_Order {
         $order = $this->find_indeterminate_order( $data );
         if ( ! $order ) {
-            return;
+            return null;
+        }
+        // A stale legacy marker must not release or overwrite a newer attempt.
+        $current_trade = (string) $order->get_meta( YSOrderMeta::TRADE_ORDER_ID );
+        $current_reference = (string) $order->get_meta( YSOrderMeta::REFERENCE_ORDER_ID );
+        if ( ( '' !== $current_trade && $current_trade !== ( $data['tradeOrderId'] ?? '' ) )
+            || ( '' !== $current_reference && $current_reference !== ( $data['referenceOrderId'] ?? '' ) ) ) {
+            $this->matches_current_terminal_attempt( $order, $data, $event );
+            return null;
         }
         if ( ! $this->validate_indeterminate_match( $order, $data ) ) {
-            return;
+            return null;
         }
 
         $order->delete_meta_data( YSOrderMeta::INDETERMINATE_REF );
@@ -1207,6 +1223,7 @@ final class YSWebhookHandler {
             'order_id' => $order->get_id(),
             'event'    => $event,
         ) );
+        return $order;
     }
 
     /**
@@ -1280,6 +1297,32 @@ final class YSWebhookHandler {
             return false;
         }
         return true;
+    }
+
+    /**
+     * Reference fallback locates an order, not its current payment attempt.
+     * Keep this separate from paid ATM fallback and exact confirmation convergence.
+     */
+    private function matches_current_terminal_attempt( \WC_Order $order, array $data, string $event ): bool {
+        $trade             = $data['tradeOrderId'] ?? '';
+        $reference         = $data['referenceOrderId'] ?? '';
+        $current_trade     = (string) $order->get_meta( YSOrderMeta::TRADE_ORDER_ID );
+        $current_reference = (string) $order->get_meta( YSOrderMeta::REFERENCE_ORDER_ID );
+
+        if ( is_string( $trade ) && '' !== $trade && $trade === $current_trade
+            && is_string( $reference ) && '' !== $reference && $reference === $current_reference ) {
+            return true;
+        }
+
+        YSLogger::warning( 'Webhook: ignored terminal event for a different or incomplete payment attempt', array(
+            'order_id'          => $order->get_id(),
+            'event'             => $event,
+            'trade_order_id'    => is_string( $trade ) ? $trade : '',
+            'reference'         => is_string( $reference ) ? $reference : '',
+            'current_trade'     => $current_trade,
+            'current_reference' => $current_reference,
+        ) );
+        return false;
     }
 
     private function get_order_for_paid_trade_webhook( array $data ): ?\WC_Order {

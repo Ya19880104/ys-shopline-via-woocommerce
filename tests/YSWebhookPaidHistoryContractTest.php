@@ -34,6 +34,8 @@ function ys_run_webhook_paid_history_contract(): void {
 		$order = new YS_Confirmation_Test_Order();
 		$order->date_paid = '2026-07-17 12:00:00';
 		$order->status = 'pending';
+		$order->meta[ YSOrderMeta::TRADE_ORDER_ID ] = 'trade-confirm-1';
+		$order->meta[ YSOrderMeta::REFERENCE_ORDER_ID ] = '9601_1';
 		$order->meta[ YSOrderMeta::PAYMENT_STATUS ] = 'SUCCEEDED';
 		$GLOBALS['ys_test_orders'] = array( $order );
 
@@ -42,6 +44,7 @@ function ys_run_webhook_paid_history_contract(): void {
 			$method,
 			array(
 				'tradeOrderId' => 'trade-confirm-1',
+				'referenceOrderId' => '9601_1',
 				'status'       => $remote_status,
 				'subStatus'    => 'AUTHORIZED',
 			)
@@ -49,6 +52,7 @@ function ys_run_webhook_paid_history_contract(): void {
 
 		YS_Assert::eq( "late {$remote_status} keeps paid-history order status", 'pending', $order->status );
 		YS_Assert::eq( "late {$remote_status} keeps paid metadata", 'SUCCEEDED', $order->get_meta( YSOrderMeta::PAYMENT_STATUS ) );
+		YS_Assert::eq( "late {$remote_status} reaches the paid-history guard", true, count( $order->notes ) > 0 );
 	}
 
 	echo "== Webhook: paid events remain idempotent for custom paid statuses ==\n";
