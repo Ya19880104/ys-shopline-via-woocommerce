@@ -209,7 +209,10 @@ function ys_run_gateway_outcome_contract(): void {
 	YS_Assert::eq( 'unknown status does not complete payment', false, $order->paid );
 	YS_Assert::eq( 'unknown status enters payment confirmation', 'ys-confirming', $order->status );
 
-	list( $result, $order ) = ys_gateway_process_response( array( 'tradeOrderId' => 'paid-1', 'status' => 'SUCCEEDED' ) );
+	list( $result, $order ) = ys_gateway_process_response( array(
+		'tradeOrderId' => 'paid-1', 'status' => 'SUCCEEDED', 'referenceOrderId' => '9101_1',
+		'paymentMethod' => 'CreditCard', 'amount' => array( 'value' => 1000, 'currency' => 'TWD' ),
+	) );
 	YS_Assert::eq( 'paid array response -> accepted', 'accepted', $result['remote_outcome'] );
 	YS_Assert::eq( 'paid array response completes payment', 'paid-1', $order->transaction_id );
 

@@ -17,6 +17,9 @@ final class YS_Subscription_Test_Order extends WC_Order {
 	public bool $paid = false;
 	public string $date_paid = '';
 	public int $payment_complete_count = 0;
+	public function get_total(): float { return 10.0; }
+	public function get_currency(): string { return 'TWD'; }
+	public function get_payment_method(): string { return 'ys_shopline_credit_subscription'; }
 
 	public function get_id(): int {
 		return 9001;
@@ -319,9 +322,17 @@ function ys_run_subscription_renewal_contract(): void {
 	echo "== Subscription renewal: payment completion convergence ==\n";
 	$GLOBALS['wpdb'] = null;
 	$completion_order = new YS_Subscription_Test_Order();
+	$completion_order->meta[YSOrderMeta::REFERENCE_ORDER_ID] = '9001_1';
+	$completion_order->meta[YSOrderMeta::PAYMENT_ATTEMPT_DATA] = array(
+		'reference' => '9001_1', 'gateway' => 'ys_shopline_credit_subscription',
+		'shopline_method' => 'CreditCard', 'amount' => 1000, 'currency' => 'TWD',
+	);
 	$GLOBALS['ys_test_order'] = $completion_order;
 	$response_gateway = new YS_Subscription_Response_Gateway();
-	$paid_response = array( 'tradeOrderId' => 'renewal-paid-1', 'status' => 'SUCCEEDED' );
+	$paid_response = array( 'tradeOrderId' => 'renewal-paid-1', 'status' => 'SUCCEEDED',
+		'referenceOrderId' => '9001_1', 'paymentMethod' => 'CreditCard',
+		'amount' => array( 'value' => 1000, 'currency' => 'TWD' ),
+	);
 	$response_gateway->handle_for_test( $completion_order, $paid_response );
 	$response_gateway->handle_for_test( $completion_order, $paid_response );
 	YS_Assert::eq( 'recurring response completes payment only once', 1, $completion_order->payment_complete_count );

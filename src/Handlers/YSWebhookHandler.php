@@ -274,9 +274,6 @@ final class YSWebhookHandler {
             return;
         }
 
-        // v3.5.36 P0-A+：收斂 indeterminate（前次不明付款）——以 exact reference＋gateway＋金額幣別
-        // 核對後接管交易（設 TRADE_ORDER_ID、解除封鎖），後續由 get_order_by_trade_id 正常入帳。
-        $this->converge_indeterminate_paid( (string) $trade_order_id, $data );
 
         // v3.5.35 Review P1-2：命中已棄用交易 → 記重複收款警示、不覆寫現行交易 meta
         if ( $this->guard_abandoned_trade_paid( (string) $trade_order_id, $data ) ) {
@@ -296,13 +293,10 @@ final class YSWebhookHandler {
             return;
         }
 
-        // 檢查是否已付款
-        if ( $this->has_paid_history( $order ) ) {
-            YSLogger::info( 'Webhook: 訂單已付款，跳過處理', array( 'order_id' => $order->get_id() ) );
+        $completion = YSPaymentConfirmation::complete_payment_once( $order, (string) $trade_order_id, $data );
+        if ( ! empty( $completion['rejected'] ) ) {
             return;
         }
-
-        $completion = YSPaymentConfirmation::complete_payment_once( $order, (string) $trade_order_id );
         if ( ! empty( $completion['busy'] ) || ! ( $completion['order'] instanceof \WC_Order ) ) {
             YSLogger::warning( 'Webhook: Payment completion lock busy', array(
                 'order_id' => $order->get_id(),
@@ -462,9 +456,6 @@ final class YSWebhookHandler {
             return;
         }
 
-        // v3.5.36 P0-A+：收斂 indeterminate（前次不明付款）→ 接管交易，後續正常入帳。
-        $this->converge_indeterminate_paid( (string) $trade_order_id, $data );
-
         // v3.5.35 Review P1-2：命中已棄用交易 → 記重複收款警示、不覆寫現行交易 meta
         if ( $this->guard_abandoned_trade_paid( (string) $trade_order_id, $data ) ) {
             return;
@@ -482,11 +473,14 @@ final class YSWebhookHandler {
         }
 
         if ( ! $this->has_paid_history( $order ) ) {
-            $completion = YSPaymentConfirmation::complete_payment_once( $order, (string) $trade_order_id );
-            if ( ! empty( $completion['busy'] ) || ! ( $completion['order'] instanceof \WC_Order ) ) {
+            $completion = YSPaymentConfirmation::complete_payment_once( $order, (string) $trade_order_id, $data );
+            if ( ! empty( $completion['rejected'] ) || ! empty( $completion['busy'] ) || ! ( $completion['order'] instanceof \WC_Order ) ) {
                 return;
             }
             $order = $completion['order'];
+        } else {
+            YSPaymentConfirmation::complete_payment_once( $order, (string) $trade_order_id, $data );
+            return;
         }
 
         if ( 'yes' === $order->get_meta( YSOrderMeta::PAYMENT_AUTHORIZED_PENDING ) ) {
@@ -806,44 +800,7 @@ final class YSWebhookHandler {
             return;
         }
 
-        // 綁卡成功後，更新尚未綁定 instrument 的 subscription
-        $this->update_pending_subscriptions_instrument( $user_id, $payment_instrument_id );
-    }
-
-    /**
-     * 更新尚未綁定 instrument ID 的 subscription。
-     *
-     * 在綁卡 Webhook 觸發時，將新的 instrument ID 寫入
-     * 使用本閘道但尚未設定 instrument 的 subscription。
-     *
-     * @param int    $user_id       WordPress user ID.
-     * @param string $instrument_id Shopline payment instrument ID.
-     */
-    private function update_pending_subscriptions_instrument( int $user_id, string $instrument_id ): void {
-        if ( ! function_exists( 'wcs_get_users_subscriptions' ) ) {
-            return;
-        }
-
-        $subscriptions = wcs_get_users_subscriptions( $user_id );
-
-        foreach ( $subscriptions as $subscription ) {
-            if ( 'ys_shopline_credit_subscription' !== $subscription->get_payment_method() ) {
-                continue;
-            }
-
-            // 只更新尚未綁定的 subscription
-            if ( ! empty( $subscription->get_meta( YSOrderMeta::PAYMENT_INSTRUMENT_ID ) ) ) {
-                continue;
-            }
-
-            $subscription->update_meta_data( YSOrderMeta::PAYMENT_INSTRUMENT_ID, $instrument_id );
-            $subscription->save();
-
-            YSLogger::info( 'Webhook: 更新 subscription 的 instrument ID', [
-                'subscription_id' => $subscription->get_id(),
-                'instrument_id'   => $instrument_id,
-            ] );
-        }
+        // Customer-only events cannot identify which subscription requested this card.
     }
 
     /**
@@ -1146,43 +1103,6 @@ final class YSWebhookHandler {
         return in_array( $trade_order_id, $abandoned, true ) ? $order : null;
     }
 
-    /**
-     * v3.5.36 P0-A+：收斂 indeterminate（前次不明付款）訂單的收款 webhook（全金流，不限 ATM）。
-     *
-     * 以 exact referenceOrderId 命中 INDETERMINATE_REF，核對 gateway＋金額＋幣別後接管：
-     * 設 TRADE_ORDER_ID＝本次交易、清除封鎖標記；後續由 get_order_by_trade_id 正常入帳。
-     * 核對不符則不接管（fail-closed），避免張冠李戴。
-     *
-     * @param string $trade_order_id 交易 ID。
-     * @param array  $data           Webhook payload。
-     * @return void
-     */
-    private function converge_indeterminate_paid( string $trade_order_id, array $data ): void {
-        $order = $this->find_indeterminate_order( $data );
-        if ( ! $order ) {
-            return;
-        }
-        if ( ! $this->validate_indeterminate_match( $order, $data ) ) {
-            return;
-        }
-
-        $order->update_meta_data( YSOrderMeta::TRADE_ORDER_ID, $trade_order_id );
-        $order->delete_meta_data( YSOrderMeta::INDETERMINATE_REF );
-        $order->delete_meta_data( YSOrderMeta::INDETERMINATE_DATA );
-        if ( 'INDETERMINATE' === (string) $order->get_meta( YSOrderMeta::PAYMENT_STATUS ) ) {
-            $order->delete_meta_data( YSOrderMeta::PAYMENT_STATUS );
-        }
-        $order->add_order_note( sprintf(
-            /* translators: %s: adopted trade id */
-            __( 'Shopline 金流：webhook 確認前次不明付款已建立並收款（交易 %s），已接管入帳。', 'ys-shopline-via-woocommerce' ),
-            $trade_order_id
-        ) );
-        $order->save();
-        YSLogger::info( 'Webhook: converged indeterminate order via exact reference', array(
-            'order_id'       => $order->get_id(),
-            'trade_order_id' => $trade_order_id,
-        ) );
-    }
 
     /**
      * v3.5.36 P0-A+：indeterminate 訂單的對應交易終結（failed/expired）→ 解除封鎖、允許重試。
@@ -1346,6 +1266,9 @@ final class YSWebhookHandler {
 
         // v3.5.34: fallback 只憑 reference 前綴命中（舊 ATM 入帳情境），
         // 入帳前必須核對歸屬（gateway）與金額/幣別，否則拒絕自動入帳
+        if ( $this->find_indeterminate_order( $data ) && $this->validate_indeterminate_match( $order, $data ) ) {
+            return $order;
+        }
         if ( ! $this->validate_fallback_paid_order( $order, $data, $reference_order_id ) ) {
             return null;
         }

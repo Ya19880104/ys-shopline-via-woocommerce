@@ -108,6 +108,7 @@ class YSCreditSubscription extends YSGatewayBase {
             YSOrderMeta::INDETERMINATE_REF,
             YSOrderMeta::INDETERMINATE_DATA,
             YSOrderMeta::PAYMENT_ATTEMPT_DATA,
+            \YangSheep\ShoplinePayment\Customer\YSSubscriptionBinding::META,
             YSOrderMeta::CONFIRMATION_DATA,
             YSOrderMeta::CONFIRMATION_HISTORY,
             YSOrderMeta::CONFIRMATION_MAIL_SENT,
@@ -287,7 +288,7 @@ class YSCreditSubscription extends YSGatewayBase {
      * v3.4.15 流程：
      *   1. 驗證 → 綁定卡扣款（primary，subscription meta）
      *   2. 若綁定卡扣款失敗且使用者有不同的預設卡 → 以預設卡重試（fallback）
-     *   3. 若 subscription meta 空但使用者有預設卡 → 直接用預設卡
+     *   3. 若 subscription meta 空 → 等待管理員核對，不從會員預設卡推定授權
      *   4. 每次嘗試都寫訂單備註供管理員稽核（綁定/fallback/成功/失敗）
      *
      * @param float     $amount Renewal amount.
@@ -401,29 +402,7 @@ class YSCreditSubscription extends YSGatewayBase {
             return;
         }
 
-        // 3. 沒有綁定卡 → 直接用預設卡
-        if ( $fallback_instrument_id ) {
-            $order->add_order_note( sprintf(
-                __( '訂閱續扣：訂閱未指定卡片，使用使用者預設卡（末 6 碼 %s）', 'ys-shopline-via-woocommerce' ),
-                substr( (string) $fallback_instrument_id, -6 )
-            ) );
-
-            $attempt  = $this->try_recurring_charge( $order, $amount, $customer_id, $fallback_instrument_id );
-            $response = $attempt['response'];
-            $outcome  = YSApiError::classify_create_trade_response( $response );
-
-            if ( 'unknown' === $outcome ) {
-                $this->handle_recurring_unknown( $order, $attempt, $fallback_instrument_id );
-                return;
-            }
-
-            $this->handle_recurring_response( $order, $response );
-            return;
-        }
-
-        // 4. 真的沒有任何可用卡片
-        $this->log( 'No payment instrument found for order #' . $order->get_id(), 'error' );
-        $order->update_status( 'failed', __( 'Subscription payment failed: No saved payment method.', 'ys-shopline-via-woocommerce' ) );
+        $this->put_recurring_on_hold( $order, __( '訂閱未取得可確認歸屬的綁定信用卡，本次未扣款。請核對此訂閱的付款方式；不會自動使用會員預設卡。', 'ys-shopline-via-woocommerce' ) );
     }
 
     /**
@@ -437,6 +416,7 @@ class YSCreditSubscription extends YSGatewayBase {
      */
     protected function try_recurring_charge( $order, $amount, $customer_id, $instrument_id ) {
         $data = $this->build_recurring_payment_data( $order, $amount, $customer_id, $instrument_id );
+        $this->store_payment_attempt_data( $order, $data, array() );
 
         YSLogger::debug( 'Recurring payment request', array(
             'order_id'      => $order->get_id(),
@@ -567,8 +547,10 @@ class YSCreditSubscription extends YSGatewayBase {
             return;
         }
 
-        $order->update_meta_data( YSOrderMeta::TRADE_ORDER_ID, $trade_order_id );
-        $order->update_meta_data( YSOrderMeta::PAYMENT_STATUS, $status ?: 'UNKNOWN' );
+        if ( ! YSTradeStatus::is_paid( $status ) ) {
+            $order->update_meta_data( YSOrderMeta::TRADE_ORDER_ID, $trade_order_id );
+            $order->update_meta_data( YSOrderMeta::PAYMENT_STATUS, $status );
+        }
 
         YSLogger::debug( 'Recurring payment response', array(
             'order_id'       => $order->get_id(),
@@ -578,7 +560,11 @@ class YSCreditSubscription extends YSGatewayBase {
 
         if ( YSTradeStatus::is_paid( $status ) ) {
             $order->save();
-            $completion = YSPaymentConfirmation::complete_payment_once( $order, $trade_order_id );
+            $evidence = \YangSheep\ShoplinePayment\Utils\YSPaymentEvidence::from_create_response( $response, $this->api );
+            $completion = YSPaymentConfirmation::complete_payment_once( $order, $trade_order_id, $evidence );
+            if ( ! empty( $completion['rejected'] ) ) {
+                return;
+            }
             if ( ! empty( $completion['busy'] ) || ! ( $completion['order'] instanceof \WC_Order ) ) {
                 $this->log( 'Subscription payment completion deferred because the order lock is busy: #' . $order->get_id(), 'warning' );
                 return;
@@ -589,6 +575,9 @@ class YSCreditSubscription extends YSGatewayBase {
             }
 
             $order = $completion['order'];
+            $order->update_meta_data( YSOrderMeta::TRADE_ORDER_ID, $trade_order_id );
+            $order->update_meta_data( YSOrderMeta::PAYMENT_STATUS, $status );
+            $order->save();
             $order->add_order_note(
                 sprintf(
                     __( 'Subscription payment completed. Trade ID: %s', 'ys-shopline-via-woocommerce' ),

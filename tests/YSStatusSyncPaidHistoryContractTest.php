@@ -22,6 +22,8 @@ final class YS_Status_Sync_Paid_Order extends WC_Order {
 	public int $save_count = 0;
 
 	public function get_id(): int { return 9639; }
+	public function get_total(): float { return 100; }
+	public function get_currency(): string { return 'TWD'; }
 	public function get_status(): string { return $this->status; }
 	public function get_payment_method(): string { return $this->payment_method; }
 	public function get_date_paid() { return $this->date_paid; }
@@ -59,6 +61,7 @@ function ys_status_sync_dto( string $status, string $method = 'CreditCard' ): YS
 		amount: array( 'value' => 10000, 'currency' => 'TWD' ),
 		raw_data: array(
 			'tradeOrderId' => 'trade-paid-history',
+			'referenceOrderId' => '9639_1',
 			'status' => $status,
 			'paymentMethod' => $method,
 			'amount' => array( 'value' => 10000, 'currency' => 'TWD' ),
@@ -71,6 +74,11 @@ function ys_status_sync_paid_order( string $gateway = 'ys_shopline_credit' ): YS
 	$order->payment_method = $gateway;
 	$order->meta[ YSOrderMeta::TRADE_ORDER_ID ] = 'trade-paid-history';
 	$order->meta[ YSOrderMeta::PAYMENT_STATUS ] = 'SUCCEEDED';
+	$order->meta[ YSOrderMeta::REFERENCE_ORDER_ID ] = '9639_1';
+	$order->meta[ YSOrderMeta::PAYMENT_ATTEMPT_DATA ] = array(
+		'reference' => '9639_1', 'gateway' => $gateway, 'shopline_method' => 'CreditCard',
+		'amount' => 10000, 'currency' => 'TWD',
+	);
 	return $order;
 }
 

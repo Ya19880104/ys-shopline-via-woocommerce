@@ -988,8 +988,12 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
         // create-payment response finishes processing.
         $completion = YSPaymentConfirmation::complete_payment_once(
             $order,
-            isset( $response['tradeOrderId'] ) ? (string) $response['tradeOrderId'] : ''
+            isset( $response['tradeOrderId'] ) ? (string) $response['tradeOrderId'] : '',
+            \YangSheep\ShoplinePayment\Utils\YSPaymentEvidence::from_create_response( $response, $this->api )
         );
+        if ( ! empty( $completion['rejected'] ) ) {
+            return $this->indeterminate_blocked_response();
+        }
         if ( empty( $completion['busy'] ) && $completion['order'] instanceof \WC_Order ) {
             $order = $completion['order'];
             if ( ! empty( $completion['completed'] ) ) {
@@ -1860,6 +1864,9 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
                 'shopline_method' => $method,
                 'amount'          => $amount,
                 'currency'        => $currency,
+                'order_amount'    => (int) \YSShoplinePayment::get_formatted_amount( $order->get_total(), $order->get_currency() ),
+                'order_currency'  => strtoupper( $order->get_currency() ),
+                'payment_behavior' => (string) ( $payment_data['confirm']['paymentBehavior'] ?? '' ),
                 'started_at'      => time(),
             )
         );
@@ -1867,6 +1874,7 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
             $order->update_meta_data( YSOrderMeta::SESSION_ID, $session_id );
         }
         $order->update_meta_data( YSOrderMeta::PAYMENT_METHOD, $method );
+        \YangSheep\ShoplinePayment\Customer\YSSubscriptionBinding::capture( $order, $payment_data, $this->id );
         $order->save();
     }
 
@@ -1952,6 +1960,9 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
      * @return string
      */
     protected function resolve_indeterminate( $order ) {
+        if ( \YangSheep\ShoplinePayment\Utils\YSPaymentEvidence::is_blocked( $order ) ) {
+            return 'blocked';
+        }
         $ref = (string) $order->get_meta( YSOrderMeta::INDETERMINATE_REF );
         if ( '' === $ref ) {
             return 'none';
@@ -2034,24 +2045,18 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
             return 'blocked';
         }
 
-        $order->update_meta_data( YSOrderMeta::TRADE_ORDER_ID, $paid_trade );
-        $order->update_meta_data( YSOrderMeta::PAYMENT_STATUS, $paid_status );
-        $order->add_order_note( sprintf(
-            /* translators: %s: adopted trade order id */
-            __( 'Shopline 金流：Session 查詢確認前次不明付款已完成收款（交易 %s，經 referenceId／金額／幣別／付款方式核對且唯一），已接管入帳。', 'ys-shopline-via-woocommerce' ),
-            $paid_trade
-        ) );
-        $order->save();
-
         // Query-session positive convergence must complete the order itself. Browser
         // checkout can fall through to another status query, but scheduled renewals
         // have no redirect handler and would otherwise remain unpaid or retry later.
-        $completion = YSPaymentConfirmation::complete_payment_once( $order, $paid_trade );
-        if ( ! empty( $completion['busy'] ) || ! ( $completion['order'] instanceof \WC_Order ) ) {
+        $completion = YSPaymentConfirmation::complete_payment_once( $order, $paid_trade, $raw );
+        if ( ! empty( $completion['rejected'] ) || ! empty( $completion['busy'] ) || ! ( $completion['order'] instanceof \WC_Order ) ) {
             return 'blocked';
         }
         $order = $completion['order'];
         if ( ! empty( $completion['completed'] ) ) {
+            $order->update_meta_data( YSOrderMeta::TRADE_ORDER_ID, $paid_trade );
+            $order->update_meta_data( YSOrderMeta::PAYMENT_STATUS, $paid_status );
+            $order->add_order_note( __( 'SHOPLINE Session 查詢及原始付款資料核對完成，已確認收款。', 'ys-shopline-via-woocommerce' ) );
             $custom_paid_status = get_option( 'ys_shopline_order_status_paid', '' );
             if ( $custom_paid_status && $custom_paid_status !== $order->get_status() ) {
                 $order->update_status( $custom_paid_status, __( '依商家設定更新訂單狀態。', 'ys-shopline-via-woocommerce' ) );
@@ -2613,7 +2618,7 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
         if ( 'SUCCEEDED' === $status || 'SUCCESS' === $status || 'CAPTURED' === $status ) {
             // 付款成功
             if ( ! $this->has_paid_history( $order ) ) {
-                $completion = YSPaymentConfirmation::complete_payment_once( $order, (string) $trade_order_id );
+                $completion = YSPaymentConfirmation::complete_payment_once( $order, (string) $trade_order_id, $response );
                 if ( ! empty( $completion['busy'] ) || ! ( $completion['order'] instanceof \WC_Order ) ) {
                     return;
                 }

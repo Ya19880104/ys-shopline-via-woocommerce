@@ -10,6 +10,7 @@ declare(strict_types=1);
 namespace YangSheep\ShoplinePayment\Handlers;
 
 use YangSheep\ShoplinePayment\Utils\YSOrderMeta;
+use YangSheep\ShoplinePayment\Utils\YSPaymentEvidence;
 use YangSheep\ShoplinePayment\Utils\YSConfirmationPolicy;
 use YangSheep\ShoplinePayment\Utils\YSLogger;
 use YangSheep\ShoplinePayment\Utils\YSTradeStatus;
@@ -339,8 +340,9 @@ final class YSPaymentConfirmation {
         if ( YSConfirmationPolicy::FAMILY_PAID !== YSConfirmationPolicy::family( $status ) ) {
             return false;
         }
+        $payload += array( 'status' => $status );
 
-        $attempt = self::matching_webhook_attempt( $order, $payload );
+        $attempt = self::matching_webhook_attempt( $order, $payload, false );
         if ( null === $attempt ) {
             return false;
         }
@@ -348,7 +350,7 @@ final class YSPaymentConfirmation {
         return (bool) self::with_confirmation_lock(
             $order,
             static function ( \WC_Order $fresh ) use ( $payload, $status ): bool {
-                $fresh_attempt = self::matching_webhook_attempt( $fresh, $payload );
+                $fresh_attempt = self::matching_webhook_attempt( $fresh, $payload, false );
                 if ( null === $fresh_attempt ) {
                     return true;
                 }
@@ -486,9 +488,9 @@ final class YSPaymentConfirmation {
      * current status. Serializing and reloading here prevents two stale order
      * objects from replaying payment hooks when webhook and query overlap.
      *
-     * @return array{order:?\WC_Order,completed:bool,busy:bool}
+     * @return array{order:?\WC_Order,completed:bool,busy:bool,rejected?:bool}
      */
-    public static function complete_payment_once( \WC_Order $order, string $trade_order_id ): array {
+    public static function complete_payment_once( \WC_Order $order, string $trade_order_id, array $evidence = array() ): array {
         $busy = array(
             'order'     => null,
             'completed' => false,
@@ -497,8 +499,13 @@ final class YSPaymentConfirmation {
 
         return (array) self::with_confirmation_lock(
             $order,
-            static function ( \WC_Order $fresh ) use ( $trade_order_id ): array {
+            static function ( \WC_Order $fresh ) use ( $trade_order_id, $evidence ): array {
                 if ( self::has_paid_history( $fresh ) ) {
+                    // A richer, later payment response may finish only the exact pending binding.
+                    if ( $fresh->get_meta( \YangSheep\ShoplinePayment\Customer\YSSubscriptionBinding::META )
+                        && '' === YSPaymentEvidence::mismatch( $fresh, $trade_order_id, $evidence ) ) {
+                        \YangSheep\ShoplinePayment\Customer\YSSubscriptionBinding::complete( $fresh, $evidence, $trade_order_id );
+                    }
                     return array(
                         'order'     => $fresh,
                         'completed' => false,
@@ -506,7 +513,14 @@ final class YSPaymentConfirmation {
                     );
                 }
 
+                if ( ! YSPaymentEvidence::accept( $fresh, $trade_order_id, $evidence ) ) {
+                    return array( 'order' => $fresh, 'completed' => false, 'busy' => false, 'rejected' => true );
+                }
+                \YangSheep\ShoplinePayment\Customer\YSSubscriptionBinding::complete( $fresh, $evidence, $trade_order_id );
                 $fresh->payment_complete( $trade_order_id );
+                $fresh->delete_meta_data( YSOrderMeta::INDETERMINATE_REF );
+                $fresh->delete_meta_data( YSOrderMeta::INDETERMINATE_DATA );
+                $fresh->save();
                 return array(
                     'order'     => $fresh,
                     'completed' => true,
@@ -529,7 +543,6 @@ final class YSPaymentConfirmation {
         if ( ! empty( self::get_active_attempt( $order ) ) ) {
             self::clear_active_data( $order );
         }
-        $order->delete_meta_data( YSOrderMeta::PAYMENT_ATTEMPT_DATA );
         $order->save();
     }
 
@@ -826,9 +839,10 @@ final class YSPaymentConfirmation {
      *
      * @param \WC_Order           $order   Order object.
      * @param array<string, mixed> $payload Webhook payload.
+     * @param bool $check_financial False only for paid events, which use YSPaymentEvidence under the lock.
      * @return array<string, mixed>|null
      */
-    private static function matching_webhook_attempt( \WC_Order $order, array $payload ): ?array {
+    private static function matching_webhook_attempt( \WC_Order $order, array $payload, bool $check_financial = true ): ?array {
         $attempt = self::get_active_attempt( $order );
         if ( empty( $attempt ) || self::STATUS_KEY !== $order->get_status() || $order->is_paid() ) {
             return null;
@@ -849,12 +863,12 @@ final class YSPaymentConfirmation {
             || $reference !== (string) ( $attempt['reference'] ?? '' )
             || '' === $trade
             || ( '' !== (string) ( $attempt['trade_order_id'] ?? '' ) && $trade !== (string) $attempt['trade_order_id'] )
-            || '' === $method
+            || ( $check_financial && ( '' === $method
             || $method !== (string) ( $attempt['shopline_method'] ?? '' )
             || $value < 0
             || $value !== (int) ( $attempt['amount'] ?? -1 )
             || '' === $currency
-            || $currency !== (string) ( $attempt['currency'] ?? '' ) ) {
+            || $currency !== (string) ( $attempt['currency'] ?? '' ) ) ) ) {
             YSLogger::warning(
                 'Confirmation webhook envelope mismatch',
                 array(
@@ -889,6 +903,11 @@ final class YSPaymentConfirmation {
         $amount         = is_array( $result->amount ?? null ) ? $result->amount : array();
         $amount_value   = isset( $amount['value'] ) ? (int) $amount['value'] : -1;
         $currency       = strtoupper( trim( (string) ( $amount['currency'] ?? '' ) ) );
+
+        if ( YSTradeStatus::is_paid( $status ) && $trade_order_id === (string) $attempt['trade_order_id'] ) {
+            self::converge_paid( $order, $attempt, $trade_order_id, $status, is_array( $result->raw_data ?? null ) ? $result->raw_data : array() );
+            return;
+        }
 
         if ( '' === $trade_order_id
             || $trade_order_id !== (string) $attempt['trade_order_id']
@@ -1041,6 +1060,10 @@ final class YSPaymentConfirmation {
      * @param array<string, mixed> $raw            Query payload.
      */
     private static function converge_paid( \WC_Order $order, array $attempt, string $trade_order_id, string $status, array $raw ): void {
+        if ( ! YSPaymentEvidence::accept( $order, $trade_order_id, $raw ) ) {
+            return;
+        }
+        \YangSheep\ShoplinePayment\Customer\YSSubscriptionBinding::complete( $order, $raw, $trade_order_id );
         $attempt['trade_order_id'] = $trade_order_id;
         $attempt['remote_status']  = $status;
         self::append_history( $order, $attempt, 'scheduled_query_paid' );
@@ -1401,7 +1424,6 @@ final class YSPaymentConfirmation {
         $order->delete_meta_data( YSOrderMeta::INDETERMINATE_REF );
         $order->delete_meta_data( YSOrderMeta::INDETERMINATE_DATA );
         $order->delete_meta_data( YSOrderMeta::PAYMENT_AUTHORIZED_PENDING );
-        $order->delete_meta_data( YSOrderMeta::PAYMENT_ATTEMPT_DATA );
     }
 
     /**

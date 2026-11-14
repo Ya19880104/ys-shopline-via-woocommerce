@@ -2,6 +2,8 @@
 
 Status: candidate implemented; awaiting independent review and release approval
 
+Historical v3.6.0 design/candidate record. The status above is preserved from that review and is not the release status of current versions.
+
 Baseline: v3.5.39 (`7718b28c3bf3d9b862f17a534ab59ff32c8d3128`)
 
 ## 1. Problem
@@ -35,7 +37,8 @@ Primary references:
 - https://support.shoplineapp.com/hc/zh-tw/articles/57465143948057
 - https://docs.shoplinepayments.com/api/trade/create/
 - https://docs.shoplinepayments.com/api/trade/query/
-- https://docs.shoplinepayments.com/guide/quick/
+- https://docs.shoplinepayments.com/api/event/
+- https://docs.shoplinepayments.com/api/event/model/
 
 ### 2.2 Other mainstream commerce platforms
 

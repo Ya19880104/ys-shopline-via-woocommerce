@@ -274,6 +274,9 @@ final class YSOrderPaymentAdmin {
 		$manual_review_open = '' !== $flag && (int) $order->get_meta( YSOrderMeta::MANUAL_REVIEW_RESOLVED ) <= 0;
 		if ( $manual_review_open ) {
 			switch ( $flag ) {
+			case 'payment_evidence_mismatch':
+				$messages[] = __( '收款資料與原始付款請求或目前訂單不一致，已停止自動入帳與重新付款。請核對交易編號、金額及幣別後處理帳務；請勿要求顧客再次付款。', 'ys-shopline-via-woocommerce' );
+				break;
 			case 'paid_no_current_trade':
 				$messages[] = __( '本訂單目前無現行有效交易，但有一筆「已棄用交易」事後完成收款——顧客實際已付款、訂單卻未入帳。系統不會自動入帳，請人工決定確認入帳或辦理退款。', 'ys-shopline-via-woocommerce' );
 				break;
@@ -285,7 +288,7 @@ final class YSOrderPaymentAdmin {
 				$messages[] = __( '本訂單現行交易已付款，但有一筆「已棄用交易」事後也完成收款——屬重複收款。請對「已棄用交易」辦理退款。', 'ys-shopline-via-woocommerce' );
 				break;
 			}
-			$messages[] = __( '處理棄用交易後，可於「訂單動作」選「標記 SHOPLINE 付款審核已結案」。', 'ys-shopline-via-woocommerce' );
+			$messages[] = __( '核對並處理帳務後，可於「訂單動作」選「標記 SHOPLINE 付款審核已結案」。', 'ys-shopline-via-woocommerce' );
 		}
 		$msg = implode( ' ', $messages );
 

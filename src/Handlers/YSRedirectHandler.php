@@ -181,9 +181,16 @@ class YSRedirectHandler {
         // 根據狀態更新訂單
         // 注意：SHOPLINE API 回傳 'SUCCEEDED' 而不是 'SUCCESS'
         if ( 'SUCCEEDED' === $status || 'SUCCESS' === $status || 'CAPTURED' === $status ) {
+            if ( self::has_paid_history( $order ) ) {
+                YSPaymentConfirmation::complete_payment_once( $order, (string) $trade_order_id, $response );
+                return;
+            }
             // 付款成功
             if ( ! self::has_paid_history( $order ) ) {
-                $completion = YSPaymentConfirmation::complete_payment_once( $order, (string) $trade_order_id );
+                $completion = YSPaymentConfirmation::complete_payment_once( $order, (string) $trade_order_id, $response );
+                if ( ! empty( $completion['rejected'] ) ) {
+                    return;
+                }
                 if ( ! empty( $completion['busy'] ) || ! ( $completion['order'] instanceof \WC_Order ) ) {
                     YSLogger::warning( 'Redirect handler: Payment completion lock busy', array(
                         'order_id' => $order->get_id(),
@@ -257,9 +264,6 @@ class YSRedirectHandler {
                         $payment_customer_id
                     );
 
-                    // 如果此訂單有關聯 subscription，將 instrument_id 寫入 subscription meta
-                    // 放在 sync_payment_token 外面，因為不管 token 是新建還是已存在都要執行
-                    self::update_subscription_instrument( $fresh, $payment_instrument_id );
                 } else {
                     self::maybe_note_bind_card_not_persisted( $fresh, $payment_instrument, $response );
                 }
@@ -526,34 +530,6 @@ class YSRedirectHandler {
         ) );
 
         return true;
-    }
-
-    /**
-     * Update subscription instrument ID from order.
-     *
-     * 在付款成功後，將 instrument_id 寫入關聯的 subscription meta。
-     * 此方法獨立於 sync_payment_token()，因為不管 token 是新建還是已存在都需要執行。
-     *
-     * @param \WC_Order $order                 Order object.
-     * @param string    $payment_instrument_id SHOPLINE payment instrument ID.
-     */
-    private static function update_subscription_instrument( $order, $payment_instrument_id ) {
-        if ( ! function_exists( 'wcs_get_subscriptions_for_order' ) ) {
-            return;
-        }
-
-        $subscriptions = wcs_get_subscriptions_for_order( $order );
-
-        foreach ( $subscriptions as $subscription ) {
-            $existing = $subscription->get_meta( YSOrderMeta::PAYMENT_INSTRUMENT_ID );
-            if ( empty( $existing ) || $existing !== $payment_instrument_id ) {
-                $subscription->update_meta_data( YSOrderMeta::PAYMENT_INSTRUMENT_ID, $payment_instrument_id );
-                $subscription->save();
-                YSLogger::info( "Redirect handler: Updated subscription #{$subscription->get_id()} instrument ID", array(
-                    'instrument_id' => $payment_instrument_id,
-                ) );
-            }
-        }
     }
 
     /**

@@ -7,7 +7,7 @@
 - **目前版本**：3.6.11
 - **PHP 需求**：>= 8.0
 - **WordPress 需求**：>= 6.0
-- **WooCommerce 需求**：7.0 - 10.4
+- **WooCommerce 需求**：最低 7.0；已測試至 10.4（不是最高支援版本限制）
 
 ## 支援的付款方式
 
@@ -37,30 +37,54 @@
 1. 上傳外掛至 `wp-content/plugins/` 目錄
 2. 在 WordPress 後台啟用外掛
 3. 前往 **WooCommerce > 設定 > 付款** 設定各付款方式
-4. 前往 **WooCommerce > 設定 > Shopline Payment** 設定 API 金鑰
+4. 前往 **電商工具箱 > SHOPLINE 金流** 設定共用憑證；沒有工具箱整合時，使用獨立的 **SHOPLINE 金流** 選單。直接網址為 `/wp-admin/admin.php?page=ys-shopline-payment`。
 
 ## 設定說明
 
 ### API 金鑰設定
 
-在 **WooCommerce > 設定 > Shopline Payment** 頁面設定：
+在上述 **SHOPLINE 金流** 設定頁中，分別填寫測試／正式環境憑證：
 
 - **測試模式**：啟用後使用沙盒環境
-- **Merchant ID**：商家 ID
-- **API Key**：API 金鑰
-- **Sign Key**：簽章金鑰
+- **Merchant ID**：該環境的商家識別碼。
+- **API Key**：伺服器端呼叫付款／查詢 API 使用。
+- **Client Key**：前端 SHOPLINE SDK 使用，不能以 API Key 代替。
+- **Webhook Sign Key**：該環境、該 Webhook URL 專屬的通知驗章金鑰，不是 API Key。
+
+請在 [SHOPLINE Payments 後台](https://login.shoplinepayments.com/) 的「設定 > 開發者管理」取得／設定憑證。沙盒與正式憑證不可混用；切換測試模式後，SDK、API 與通知驗章會使用對應環境的欄位。不要把憑證貼在 issue、截圖或公開 log 中。
 
 ### Webhook 設定
 
-在 Shopline 商家後台設定 Webhook URL：
+在 SHOPLINE 商家後台登記設定頁顯示的 HTTPS URL，預設為：
 
 ```
-https://your-domain.com/wp-json/ys-shopline/v1/webhook
+https://your-domain.com/wc-api/ys_shopline_webhook
 ```
+
+`https://your-domain.com/wp-json/ys-shopline/v1/webhook` 也是可用的 REST 入口；WC API 另相容 `ys-shopline-webhook` 別名。三個入口最後使用相同處理器。**選一個登記即可**，不要為同一站重複登記；更換 URL 時，必須在外掛中更新該 URL 對應的 Sign Key。每個 URL 有自己的 Sign Key，詳見 [官方通知設定](https://docs.shoplinepayments.com/api/event/)。
+
+請讓此入口可公開接受 POST，不被登入驗證、維護模式、頁面快取或 WAF 阻擋。使用原始 JSON body 加上 `timestamp`／`sign` headers 做 HMAC-SHA256 驗章，外掛檢查時間差不超過 5 分鐘，主機時鐘須正確。驗章通過不等於訂單已付款，仍需通過交易歸屬與資料核對。外掛未提供全域 event-ID 去重資料庫、IP allowlist 或限流服務，不能把這些寫成既有保證。
+
+處理的通知包括：
+
+- 付款：`trade.succeeded`、`trade.failed`、`trade.expired`、`trade.processing`、`trade.customer_action`、`trade.cancelled`；另相容 `trade.authorized`、`trade.captured` 及手動 capture/cancel 的成功事件。
+- 退款：`trade.refund.succeeded`、`trade.refund.failed`。
+- 卡片：`customer.instrument.binded`、`customer.instrument.updated`、`customer.instrument.unbinded`，以及程式保留的舊版事件別名。
+
+`session.succeeded` 不是本外掛的訂單付款完成入口。事件清單與 payload 請以 [官方通知電文](https://docs.shoplinepayments.com/api/event/model/) 為準；官方預設訂閱全部事件，若需調整清單請聯絡 SHOPLINE 串接窗口。
+
+### 付款、退款與訂閱
+
+> 下述「原始付款資料核對」與「精確訂閱綁卡」修正目前在主線／DEV，尚未隨 3.6.11 Release 發布。設定頁與 Webhook 憑證說明適用現行版本。
+
+- 顧客回到 return URL、API 回 HTTP 200、`AUTHORIZED` 或 `PROCESSING`，都不能單獨當作已付款。必須由可信的付款結果核對交易、完整 reference、付款方式、原始實送金額／幣別與目前訂單後，才完成 WooCommerce 訂單。資料不符或舊資料缺少原始請求時轉人工核對，不要求顧客再付款。
+- 非同步確認與排程依既有付款生命週期處理；真正未完成的流程不會只因經過時間就當作付款失敗。管理員可於訂單與「SLP 審核」查看需處理事項。
+- 退款建立 API 的 HTTP 200 只代表請求結果，仍以退款 `SUCCEEDED` 確認入帳；處理中保留快照，由查詢／通知確認後補建 WooCommerce 退款，不重送退款 API。
+- 會員卡庫與訂閱綁定分開。會員預設卡變更或通用綁卡通知不會替所有待綁訂閱指定卡；只有原始付款請求所記錄的訂閱，才能由相符付款結果補綁。已有綁定卡不被晚到通知覆寫。未能確認綁定的續扣暫停待核對，不直接使用會員預設卡；原本「綁定卡明確拒付後可嘗試不同預設卡」的 fallback 政策維持不變。
 
 ## 開發者資訊
 
-詳細的開發文件請參考 [DEVELOPMENT.md](DEVELOPMENT.md)。
+測試命令與限制請參考 [tests/README.md](tests/README.md)，付款設計背景請參考 [付款確認生命週期](docs/RD-v3.6.0-payment-confirmation-lifecycle.md)。歷史 review 文件記載當時候選版本的判定，不代表目前版本的 Release 狀態。
 
 ---
 

@@ -21,6 +21,14 @@ final class YS_Confirmation_Test_Order extends WC_Order {
     public bool $paid = false;
     public $date_paid = null;
 
+    public function __construct() {
+        $this->meta[YSOrderMeta::REFERENCE_ORDER_ID] = '9601_1';
+        $this->meta[YSOrderMeta::PAYMENT_ATTEMPT_DATA] = array(
+            'reference' => '9601_1', 'gateway' => 'ys_shopline_credit',
+            'shopline_method' => 'CreditCard', 'amount' => 10000, 'currency' => 'TWD',
+        );
+    }
+
     public function get_id(): int {
         return 9601;
     }
@@ -107,7 +115,14 @@ final class YS_Confirmation_Test_Payment_Result {
         public ?string $payment_method,
         public ?array $amount,
         public array $raw_data = array()
-    ) {}
+    ) {
+        if ( empty( $this->raw_data ) ) {
+            $this->raw_data = array(
+                'tradeOrderId' => $trade_order_id, 'referenceOrderId' => '9601_1',
+                'status' => $status, 'paymentMethod' => $payment_method, 'amount' => $amount,
+            );
+        }
+    }
 }
 
 final class YS_Confirmation_Test_Api {
@@ -181,7 +196,10 @@ function ys_run_payment_confirmation_contract(): void {
     $completion = new YS_Confirmation_Test_Order();
     $GLOBALS['ys_test_order'] = $completion;
     $GLOBALS['wpdb'] = new wpdb();
-    $first_completion = YSPaymentConfirmation::complete_payment_once( $completion, 'trade-complete-once' );
+    $first_completion = YSPaymentConfirmation::complete_payment_once( $completion, 'trade-complete-once', array(
+        'tradeOrderId' => 'trade-complete-once', 'referenceOrderId' => '9601_1', 'status' => 'SUCCEEDED',
+        'paymentMethod' => 'CreditCard', 'amount' => array( 'value' => 10000, 'currency' => 'TWD' ),
+    ) );
     $second_completion = YSPaymentConfirmation::complete_payment_once( $completion, 'trade-complete-once' );
     YS_Assert::eq( 'shared completion lock completes the first paid event', true, $first_completion['completed'] ?? false );
     YS_Assert::eq( 'shared completion lock treats the next event as already paid', false, $second_completion['completed'] ?? true );
@@ -256,6 +274,7 @@ function ys_run_payment_confirmation_contract(): void {
 
     $built_order = new YS_Confirmation_Test_Order();
     $built_order->meta[ YSOrderMeta::REFERENCE_ORDER_ID ] = '9601_9';
+    $built_order->meta[ YSOrderMeta::PAYMENT_ATTEMPT_DATA ]['reference'] = '9601_9';
     $built_order->meta[ YSOrderMeta::SESSION_ID ] = 'session-built';
     $built_order->meta[ YSOrderMeta::PAYMENT_METHOD ] = 'CreditCard';
     $built = YSPaymentConfirmation::attempt_from_order(
@@ -507,11 +526,13 @@ function ys_run_payment_confirmation_contract(): void {
     $wrong_payload = $webhook_payload;
     $wrong_payload['payment']['paidAmount']['value'] = 10001;
     YS_Assert::eq(
-        'mismatched paid webhook is rejected',
-        false,
+        'matching identity with mismatched amount is handled for manual review',
+        true,
         YSPaymentConfirmation::handle_paid_webhook( $webhook_wrong, $wrong_payload, 'SUCCEEDED' )
     );
     YS_Assert::eq( 'mismatched paid webhook remains locked', YSPaymentConfirmation::STATUS_KEY, $webhook_wrong->status );
+    YS_Assert::eq( 'mismatched paid webhook never completes payment', 0, $webhook_wrong->payment_complete_count );
+    YS_Assert::eq( 'mismatched paid webhook retains evidence for review', 'payment_evidence_mismatch', $webhook_wrong->get_meta(YSOrderMeta::MANUAL_REVIEW_FLAG) );
 
     $webhook_terminal = new YS_Confirmation_Test_Order();
     $GLOBALS['ys_test_order'] = $webhook_terminal;

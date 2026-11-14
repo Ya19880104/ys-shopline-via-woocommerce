@@ -666,12 +666,18 @@ final class YSStatusManager {
         // the order or replace its paid metadata. Full refund remains the one
         // authoritative post-payment transition handled here.
         if ( $this->has_paid_history( $order ) ) {
+            if ( YSTradeStatus::is_paid( $status ) ) {
+                YSPaymentConfirmation::complete_payment_once( $order, $payment_dto->trade_order_id, $payment_dto->raw_data ?? array() );
+            }
             $this->sync_order_with_paid_history( $order, $payment_dto, $status );
             return;
         }
 
         if ( YSTradeStatus::is_paid( $status ) ) {
-            $completion = YSPaymentConfirmation::complete_payment_once( $order, $payment_dto->trade_order_id );
+            $completion = YSPaymentConfirmation::complete_payment_once( $order, $payment_dto->trade_order_id, $payment_dto->raw_data ?? array() );
+            if ( ! empty( $completion['rejected'] ) ) {
+                return;
+            }
             if ( ! empty( $completion['busy'] ) || ! ( $completion['order'] instanceof \WC_Order ) ) {
                 YSLogger::warning( 'SHOPLINE status sync deferred: payment completion lock busy', [
                     'order_id' => $order->get_id(),
