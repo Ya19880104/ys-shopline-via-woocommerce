@@ -25,6 +25,9 @@ SHOPLINE create 由 request-local stub 攔截，其他 HTTP 一律阻擋；不�
 
 ## 涵蓋範圍
 
+- **付款成功狀態設定**（[`integration/dev-checkout-issue8.php`](integration/dev-checkout-issue8.php)）
+  - 於 dev-checkout 以 `wp --user=1 eval-file` 執行。使用真實 WooCommerce／HPOS、站內 REST 驗章與攔截的查詢結果，比對分期訂單由 webhook、回站、同步先入帳時的最終狀態，以及確認中收斂、續扣、付款日期、庫存和重送冪等。停寄 Email，設定只在測試 request 內覆寫，測試訂單及商品於結束時刪除。
+
 - **`YSTradeStatus`**（[`YSTradeStatusContractTest.php`](YSTradeStatusContractTest.php)）
   - 狀態分類器 `is_terminal_safe` / `is_paid` / `is_customer_pending` / `is_in_flight`（不分大小寫）。
   - `select_representative_trade_id`：terminal-safe 忽略、已收款／顧客處理中／在途 active、多筆 active 回空、distinct tradeOrderId 去重、未知狀態與 **malformed（非陣列／缺 `tradeOrderId`／缺 `status`）一律 fail-closed 回 `''`**。

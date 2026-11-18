@@ -687,12 +687,6 @@ final class YSStatusManager {
             }
 
             $fresh = $completion['order'];
-            if ( ! empty( $completion['completed'] ) ) {
-                $custom_paid_status = get_option( 'ys_shopline_order_status_paid', '' );
-                if ( $custom_paid_status && $custom_paid_status !== $fresh->get_status() ) {
-                    $fresh->update_status( $custom_paid_status, __( '依商家設定更新訂單狀態。', 'ys-shopline-via-woocommerce' ) );
-                }
-            }
             if ( ! empty( $payment_dto->payment_method ) ) {
                 $fresh->update_meta_data( YSOrderMeta::PAYMENT_METHOD, $payment_dto->payment_method );
             }

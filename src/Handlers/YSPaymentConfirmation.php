@@ -517,7 +517,7 @@ final class YSPaymentConfirmation {
                     return array( 'order' => $fresh, 'completed' => false, 'busy' => false, 'rejected' => true );
                 }
                 \YangSheep\ShoplinePayment\Customer\YSSubscriptionBinding::complete( $fresh, $evidence, $trade_order_id );
-                $fresh->payment_complete( $trade_order_id );
+                self::finish_woocommerce_payment( $fresh, $trade_order_id );
                 $fresh->delete_meta_data( YSOrderMeta::INDETERMINATE_REF );
                 $fresh->delete_meta_data( YSOrderMeta::INDETERMINATE_DATA );
                 $fresh->save();
@@ -1077,11 +1077,7 @@ final class YSPaymentConfirmation {
         $order->save();
 
         if ( ! $order->is_paid() ) {
-            $order->payment_complete( $trade_order_id );
-            $custom_paid_status = get_option( 'ys_shopline_order_status_paid', '' );
-            if ( $custom_paid_status && $custom_paid_status !== $order->get_status() ) {
-                $order->update_status( $custom_paid_status, __( '依商家設定更新訂單狀態。', 'ys-shopline-via-woocommerce' ) );
-            }
+            self::finish_woocommerce_payment( $order, $trade_order_id );
         }
         $order->add_order_note( __( 'SHOPLINE 排程查詢確認付款完成。', 'ys-shopline-via-woocommerce' ) );
         $order->save();
@@ -1470,11 +1466,34 @@ final class YSPaymentConfirmation {
             || ( method_exists( $order, 'get_date_paid' ) && (bool) $order->get_date_paid() );
     }
 
+    /** Run WooCommerce's payment hooks before applying the merchant's final status. */
+    private static function finish_woocommerce_payment( \WC_Order $order, string $trade_order_id ): void {
+        if ( false === $order->payment_complete( $trade_order_id ) || ! self::has_paid_history( $order ) ) {
+            return;
+        }
+
+        $target = self::configured_paid_status();
+        if ( '' !== $target && $target !== $order->get_status() ) {
+            $order->update_status( $target, __( '依商家設定更新訂單狀態。', 'ys-shopline-via-woocommerce' ) );
+        }
+    }
+
+    /** Resolve both the settings UI value (wc-*) and older unprefixed values. */
+    private static function configured_paid_status(): string {
+        $status = get_option( 'ys_shopline_order_status_paid', '' );
+        if ( ! is_string( $status ) || '' === $status ) {
+            return '';
+        }
+
+        $key = str_starts_with( $status, 'wc-' ) ? $status : 'wc-' . $status;
+        return self::POST_STATUS !== $key && isset( wc_get_order_statuses()[ $key ] ) ? substr( $key, 3 ) : '';
+    }
+
     /**
      * Repair an inconsistent confirming status without replaying paid hooks.
      */
     private static function restore_paid_history_order( \WC_Order $order ): void {
-        $target = (string) get_option( 'ys_shopline_order_status_paid', '' );
+        $target = self::configured_paid_status();
         if ( '' === $target ) {
             $target = method_exists( $order, 'needs_processing' ) && $order->needs_processing()
                 ? 'processing'

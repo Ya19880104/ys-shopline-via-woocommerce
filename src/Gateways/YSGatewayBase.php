@@ -997,11 +997,6 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
         if ( empty( $completion['busy'] ) && $completion['order'] instanceof \WC_Order ) {
             $order = $completion['order'];
             if ( ! empty( $completion['completed'] ) ) {
-                // 套用商家自訂的付款成功訂單狀態
-                $custom_paid_status = get_option( 'ys_shopline_order_status_paid', '' );
-                if ( $custom_paid_status && $custom_paid_status !== $order->get_status() ) {
-                    $order->update_status( $custom_paid_status, __( '依商家設定更新訂單狀態。', 'ys-shopline-via-woocommerce' ) );
-                }
                 $order->add_order_note( __( 'Shopline payment completed.', 'ys-shopline-via-woocommerce' ) );
             }
         } else {
@@ -2057,10 +2052,6 @@ abstract class YSGatewayBase extends WC_Payment_Gateway {
             $order->update_meta_data( YSOrderMeta::TRADE_ORDER_ID, $paid_trade );
             $order->update_meta_data( YSOrderMeta::PAYMENT_STATUS, $paid_status );
             $order->add_order_note( __( 'SHOPLINE Session 查詢及原始付款資料核對完成，已確認收款。', 'ys-shopline-via-woocommerce' ) );
-            $custom_paid_status = get_option( 'ys_shopline_order_status_paid', '' );
-            if ( $custom_paid_status && $custom_paid_status !== $order->get_status() ) {
-                $order->update_status( $custom_paid_status, __( '依商家設定更新訂單狀態。', 'ys-shopline-via-woocommerce' ) );
-            }
         }
 
         $order->delete_meta_data( YSOrderMeta::INDETERMINATE_REF );

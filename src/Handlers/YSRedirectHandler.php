@@ -205,11 +205,6 @@ class YSRedirectHandler {
                 }
 
                 $fresh = $completion['order'];
-                // 套用商家自訂的付款成功訂單狀態
-                $custom_paid_status = get_option( 'ys_shopline_order_status_paid', '' );
-                if ( $custom_paid_status && $custom_paid_status !== $fresh->get_status() ) {
-                    $fresh->update_status( $custom_paid_status, __( '依商家設定更新訂單狀態。', 'ys-shopline-via-woocommerce' ) );
-                }
                 $fresh->add_order_note(
                     sprintf(
                         /* translators: %s: Trade order ID */

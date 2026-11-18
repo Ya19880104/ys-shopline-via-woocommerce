@@ -10,6 +10,8 @@
 
 namespace YangSheep\ShoplinePayment\Admin;
 
+use YangSheep\ShoplinePayment\Handlers\YSPaymentConfirmation;
+
 defined( 'ABSPATH' ) || exit;
 
 /**
@@ -1197,6 +1199,9 @@ class YSAdminSettings {
 							<?php
 							$current = get_option( 'ys_shopline_order_status_paid', 'wc-processing' );
 							foreach ( $order_statuses as $status => $label ) {
+								if ( YSPaymentConfirmation::POST_STATUS === $status ) {
+									continue;
+								}
 								printf(
 									'<option value="%s" %s>%s</option>',
 									esc_attr( $status ),
